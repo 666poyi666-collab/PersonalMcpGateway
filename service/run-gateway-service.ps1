@@ -11,6 +11,29 @@ function Write-ServiceEvent([string]$Message, [Diagnostics.EventLogEntryType]$Ty
     }
 }
 
+function Invoke-GatewayProcess([string]$Executable, [string]$DataDirectory) {
+    $logDirectory = Join-Path $DataDirectory 'logs'
+    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    $stdoutPath = Join-Path $logDirectory 'gateway-process.out.log'
+    $stderrPath = Join-Path $logDirectory 'gateway-process.err.log'
+    $process = Start-Process -FilePath $Executable -ArgumentList 'serve' -NoNewWindow `
+        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        $tail = @($stdoutPath, $stderrPath) | ForEach-Object {
+            if (Test-Path -LiteralPath $_) {
+                Get-Content -LiteralPath $_ -Tail 40 -ErrorAction SilentlyContinue
+            }
+        }
+        $message = (($tail -join [Environment]::NewLine) `
+            -replace 'sk-[A-Za-z0-9_-]+', 'sk-[REDACTED]' `
+            -replace 'tunnel_[A-Za-z0-9_-]+', 'tunnel_[REDACTED]' `
+            -replace '\b(?:\d{1,3}\.){3}\d{1,3}\b', '[REDACTED_IP]')
+        if ($message.Length -gt 12000) { $message = $message.Substring($message.Length - 12000) }
+        Write-ServiceEvent ("Gateway process output before failure:`n" + $message) Error
+    }
+    return $process.ExitCode
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 try {
     Write-ServiceEvent 'Gateway service script started.' Information
@@ -22,8 +45,8 @@ try {
     $keyPath = Join-Path $dataDir 'watch-token.dpapi'
     if (-not (Test-Path -LiteralPath $keyPath)) {
         Write-ServiceEvent 'Watch credential absent; starting gateway-only mode.' Information
-        & (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') serve
-        $exitCode = $LASTEXITCODE
+        $exitCode = Invoke-GatewayProcess `
+            (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') $dataDir
         if ($exitCode -ne 0) {
             Write-ServiceEvent "Gateway process exited with code $exitCode." Error
         }
@@ -37,8 +60,8 @@ try {
         $encrypted, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
     try {
         $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = [Text.Encoding]::UTF8.GetString($plainBytes)
-        & (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') serve
-        exit $LASTEXITCODE
+        exit (Invoke-GatewayProcess `
+            (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') $dataDir)
     } finally {
         $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = $null
         [Array]::Clear($plainBytes, 0, $plainBytes.Length)
