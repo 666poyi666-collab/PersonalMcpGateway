@@ -115,9 +115,21 @@ try {
 
 Push-Location $InstallDir
 try {
-    & uv sync --locked --no-dev
+    $pythonInstallDir = Join-Path $InstallDir 'python'
+    $previousPythonInstallDir = $env:UV_PYTHON_INSTALL_DIR
+    $env:UV_PYTHON_INSTALL_DIR = $pythonInstallDir
+    & uv python install 3.12 --no-bin --no-registry
+    if ($LASTEXITCODE -ne 0) { throw 'uv python install failed.' }
+    $pythonExe = (& uv python find 3.12 --managed-python | Select-Object -Last 1).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonExe)) {
+        throw 'Could not resolve the installed Python 3.12 runtime.'
+    }
+    & uv sync --locked --no-dev --python $pythonExe
     if ($LASTEXITCODE -ne 0) { throw 'uv sync failed.' }
-} finally { Pop-Location }
+} finally {
+    $env:UV_PYTHON_INSTALL_DIR = $previousPythonInstallDir
+    Pop-Location
+}
 
 if ($null -ne $WatchPairingToken) {
     Protect-Secret $WatchPairingToken (Join-Path $DataDir 'watch-token.dpapi')
