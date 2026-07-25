@@ -23,7 +23,7 @@
     <zipDateFormat>yyyyMMdd</zipDateFormat>
   </log>
   <serviceaccount>
-    <username>NT SERVICE\OpenAISecureMcpTunnel</username>
-    <allowservicelogon>true</allowservicelogon>
+    <domain>NT SERVICE</domain>
+    <user>OpenAISecureMcpTunnel</user>
   </serviceaccount>
 </service>

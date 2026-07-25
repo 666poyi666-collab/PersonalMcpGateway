@@ -23,7 +23,7 @@
     <zipDateFormat>yyyyMMdd</zipDateFormat>
   </log>
   <serviceaccount>
-    <username>NT SERVICE\PoyiPersonalMcpGateway</username>
-    <allowservicelogon>true</allowservicelogon>
+    <domain>NT SERVICE</domain>
+    <user>PoyiPersonalMcpGateway</user>
   </serviceaccount>
 </service>

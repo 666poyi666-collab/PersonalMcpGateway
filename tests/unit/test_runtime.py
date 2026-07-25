@@ -75,7 +75,9 @@ async def test_runtime_success_failure_and_unknown(tmp_path: Path) -> None:
     assert (await runtime.system_status())["gateway"]["state"] == "online"
     await runtime.start()
     await runtime.stop()
+    assert runtime.ready is True
     await runtime.stop()
+    assert runtime.ready is False
 
 
 @pytest.mark.asyncio

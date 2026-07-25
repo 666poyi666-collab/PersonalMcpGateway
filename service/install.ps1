@@ -71,6 +71,23 @@ Get-ChildItem -LiteralPath $resolvedSource -Force | Where-Object {
     $_.Name -notin @('.git', '.venv', '.pytest_cache', 'dist', 'build')
 } | Copy-Item -Destination $InstallDir -Recurse -Force
 
+$gatewayExe = Join-Path $InstallDir 'PoyiPersonalMcpGateway.exe'
+$tunnelExe = Join-Path $InstallDir 'OpenAISecureMcpTunnel.exe'
+foreach ($service in @(
+    @{ Name = 'OpenAISecureMcpTunnel'; Executable = $tunnelExe },
+    @{ Name = 'PoyiPersonalMcpGateway'; Executable = $gatewayExe }
+)) {
+    $installed = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
+    if ($null -ne $installed) {
+        if ($installed.Status -ne 'Stopped') {
+            Stop-Service -Name $service.Name -Force
+            (Get-Service -Name $service.Name).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        }
+        & $service.Executable uninstall
+        if ($LASTEXITCODE -ne 0) { throw "Failed to uninstall service $($service.Name)." }
+    }
+}
+
 $dependencies = Get-Content -Raw -LiteralPath (Join-Path $InstallDir 'service\dependencies.json') |
     ConvertFrom-Json
 $downloadDir = Join-Path $env:TEMP ('personal-mcp-install-' + [Guid]::NewGuid().ToString('N'))
@@ -115,8 +132,6 @@ if (-not [string]::IsNullOrWhiteSpace($TunnelId)) {
     Set-Content -LiteralPath (Join-Path $DataDir 'tunnel-id') -Value $TunnelId -Encoding ASCII
 }
 
-$gatewayExe = Join-Path $InstallDir 'PoyiPersonalMcpGateway.exe'
-$tunnelExe = Join-Path $InstallDir 'OpenAISecureMcpTunnel.exe'
 & $gatewayExe install
 if ($LASTEXITCODE -ne 0) { throw 'Gateway service installation failed.' }
 & $tunnelExe install
