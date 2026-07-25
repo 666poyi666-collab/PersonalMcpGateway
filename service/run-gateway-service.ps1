@@ -7,7 +7,11 @@ if ([string]::IsNullOrWhiteSpace($dataDir)) {
     $dataDir = "$env:ProgramData\Poyi\PersonalMcpGateway"
 }
 $keyPath = Join-Path $dataDir 'watch-token.dpapi'
-if (-not (Test-Path -LiteralPath $keyPath)) { throw 'Watch pairing token is not installed.' }
+if (-not (Test-Path -LiteralPath $keyPath)) {
+    & (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') serve
+    exit $LASTEXITCODE
+}
+
 $encrypted = [Convert]::FromBase64String((Get-Content -Raw -LiteralPath $keyPath).Trim())
 $entropy = [Text.Encoding]::UTF8.GetBytes('Poyi.PersonalMcpGateway.v1')
 $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(

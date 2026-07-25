@@ -100,10 +100,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'uv sync failed.' }
 } finally { Pop-Location }
 
-if ($null -eq $WatchPairingToken) {
-    $WatchPairingToken = Read-Host 'WatchIntervals pairing token' -AsSecureString
+if ($null -ne $WatchPairingToken) {
+    Protect-Secret $WatchPairingToken (Join-Path $DataDir 'watch-token.dpapi')
 }
-Protect-Secret $WatchPairingToken (Join-Path $DataDir 'watch-token.dpapi')
 
 if (-not [string]::IsNullOrWhiteSpace($TunnelId)) {
     if ($TunnelId -notmatch '^tunnel_[A-Za-z0-9_-]+$') { throw 'Invalid TunnelId.' }
