@@ -28,19 +28,26 @@ class GatewayRuntime:
         self.ready = False
         self.calls_total = 0
         self.calls_failed = 0
+        self._lifecycle_lock = asyncio.Lock()
         self._tools: dict[str, ToolDefinition] = {tool.name: tool for tool in registry.tools()}
         self.admin_token = self._load_or_create_local_token("admin-token")
         self.admin_csrf_token = self._load_or_create_local_token("admin-csrf-token")
 
     async def start(self) -> None:
-        await self.database.migrate()
-        await self.database.cleanup()
-        await self.registry.start()
-        self.ready = True
+        async with self._lifecycle_lock:
+            if self.ready:
+                return
+            await self.database.migrate()
+            await self.database.cleanup()
+            await self.registry.start()
+            self.ready = True
 
     async def stop(self) -> None:
-        self.ready = False
-        await self.registry.stop()
+        async with self._lifecycle_lock:
+            if not self.ready:
+                return
+            self.ready = False
+            await self.registry.stop()
 
     async def invoke(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         request_id = str(arguments.get("requestId") or f"req_{uuid.uuid4().hex}")

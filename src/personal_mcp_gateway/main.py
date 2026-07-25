@@ -26,6 +26,7 @@ def build_runtime(settings: Settings | None = None) -> GatewayRuntime:
 
 
 async def serve(runtime: GatewayRuntime) -> None:
+    await runtime.start()
     mcp_app, admin_app, _ = build_apps(runtime)
     mcp_config = uvicorn.Config(
         mcp_app,
@@ -42,7 +43,10 @@ async def serve(runtime: GatewayRuntime) -> None:
     )
     mcp_server = uvicorn.Server(mcp_config)
     admin_server = uvicorn.Server(admin_config)
-    await asyncio.gather(mcp_server.serve(), admin_server.serve())
+    try:
+        await asyncio.gather(mcp_server.serve(), admin_server.serve())
+    finally:
+        await runtime.stop()
 
 
 async def doctor(runtime: GatewayRuntime) -> int:
@@ -75,7 +79,10 @@ def main() -> None:
     configure_logging(settings)
     runtime = build_runtime(settings)
     if args.command == "serve":
-        asyncio.run(serve(runtime))
+        try:
+            asyncio.run(serve(runtime))
+        except KeyboardInterrupt:
+            pass
     elif args.command == "stdio":
         _, _, mcp = build_apps(runtime)
         mcp.run("stdio")

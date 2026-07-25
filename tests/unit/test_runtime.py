@@ -73,6 +73,8 @@ async def test_runtime_success_failure_and_unknown(tmp_path: Path) -> None:
     assert runtime.calls_total == 3 and runtime.calls_failed == 2
     assert len(await runtime.recent_errors(999)) == 2
     assert (await runtime.system_status())["gateway"]["state"] == "online"
+    await runtime.start()
+    await runtime.stop()
     await runtime.stop()
 
 
