@@ -159,10 +159,27 @@ if ($LASTEXITCODE -ne 0) { throw 'Tunnel service installation failed.' }
 
 $gatewaySid = 'NT SERVICE\PoyiPersonalMcpGateway'
 $tunnelSid = 'NT SERVICE\OpenAISecureMcpTunnel'
+$gatewayLogDir = Join-Path $DataDir 'logs'
+$serviceLogDir = Join-Path $DataDir 'service-logs'
+$tunnelLogDir = Join-Path $DataDir 'tunnel-logs'
+New-Item -ItemType Directory -Path $gatewayLogDir, $serviceLogDir, $tunnelLogDir -Force |
+    Out-Null
 & icacls $DataDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
-    "$gatewaySid`:(OI)(CI)M" | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $DataDir 'tunnel-logs') -Force | Out-Null
-& icacls (Join-Path $DataDir 'tunnel-logs') /grant:r "$tunnelSid`:(OI)(CI)M" | Out-Null
+    "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(RX)" | Out-Null
+& icacls $gatewayLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
+    "$gatewaySid`:(OI)(CI)M" /T | Out-Null
+& icacls $serviceLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
+    "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(OI)(CI)M" /T | Out-Null
+& icacls $tunnelLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
+    "$tunnelSid`:(OI)(CI)M" /T | Out-Null
+foreach ($name in @('gateway.db', 'gateway.db-wal', 'gateway.db-shm',
+        'admin-token', 'admin-csrf-token')) {
+    $path = Join-Path $DataDir $name
+    if (Test-Path -LiteralPath $path) {
+        & icacls $path /inheritance:r /grant:r 'BUILTIN\Administrators:F' `
+            "$gatewaySid`:M" | Out-Null
+    }
+}
 & icacls (Join-Path $DataDir 'runtime-key.dpapi') /inheritance:r `
     /grant:r 'BUILTIN\Administrators:F' "$tunnelSid`:R" 2>$null | Out-Null
 & icacls (Join-Path $DataDir 'tunnel-id') /inheritance:r `
