@@ -148,10 +148,21 @@ try {
     $env:PYTHONNOUSERSITE = '1'
     & uv python install 3.12 --no-bin --no-registry
     if ($LASTEXITCODE -ne 0) { throw 'uv python install failed.' }
-    $pythonExe = (& uv python find 3.12 --managed-python | Select-Object -Last 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonExe)) {
+    $pythonRuntimes = @(Get-ChildItem -LiteralPath $pythonInstallDir -Directory |
+        Where-Object { $_.Name -like 'cpython-3.12.*-windows-x86_64-none' } |
+        Sort-Object Name -Descending)
+    if ($pythonRuntimes.Count -lt 1) {
         throw 'Could not resolve the installed Python 3.12 runtime.'
     }
+    $pythonExe = Join-Path $pythonRuntimes[0].FullName 'python.exe'
+    $resolvedPython = [IO.Path]::GetFullPath($pythonExe)
+    $resolvedPythonRoot = [IO.Path]::GetFullPath($pythonInstallDir) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedPython.StartsWith($resolvedPythonRoot,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $resolvedPython)) {
+        throw 'Resolved Python is outside the private runtime directory.'
+    }
+    $pythonExe = $resolvedPython
     $runtimeBuildDir = Join-Path $env:TEMP `
         ('personal-mcp-runtime-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $runtimeBuildDir | Out-Null
