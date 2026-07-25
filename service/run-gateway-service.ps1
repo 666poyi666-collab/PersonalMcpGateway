@@ -16,7 +16,8 @@ function Invoke-GatewayProcess([string]$Executable, [string]$DataDirectory) {
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     $stdoutPath = Join-Path $logDirectory 'gateway-process.out.log'
     $stderrPath = Join-Path $logDirectory 'gateway-process.err.log'
-    $process = Start-Process -FilePath $Executable -ArgumentList 'serve' -NoNewWindow `
+    $process = Start-Process -FilePath $Executable `
+        -ArgumentList @('-m', 'personal_mcp_gateway.main', 'serve') -NoNewWindow `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
     if ($process.ExitCode -ne 0) {
         $tail = @($stdoutPath, $stderrPath) | ForEach-Object {
@@ -46,7 +47,7 @@ try {
     if (-not (Test-Path -LiteralPath $keyPath)) {
         Write-ServiceEvent 'Watch credential absent; starting gateway-only mode.' Information
         $exitCode = Invoke-GatewayProcess `
-            (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') $dataDir
+            (Join-Path $root '.venv\Scripts\python.exe') $dataDir
         if ($exitCode -ne 0) {
             Write-ServiceEvent "Gateway process exited with code $exitCode." Error
         }
@@ -61,7 +62,7 @@ try {
     try {
         $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = [Text.Encoding]::UTF8.GetString($plainBytes)
         exit (Invoke-GatewayProcess `
-            (Join-Path $root '.venv\Scripts\personal-mcp-gateway.exe') $dataDir)
+            (Join-Path $root '.venv\Scripts\python.exe') $dataDir)
     } finally {
         $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = $null
         [Array]::Clear($plainBytes, 0, $plainBytes.Length)
