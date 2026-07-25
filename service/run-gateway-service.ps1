@@ -43,11 +43,23 @@ try {
         $dataDir = "$env:ProgramData\Poyi\PersonalMcpGateway"
     }
     Write-ServiceEvent 'Gateway data directory resolved.' Information
+    $pythonExecutable = Get-ChildItem -LiteralPath (Join-Path $root 'python') `
+        -Filter 'python.exe' -Recurse | Select-Object -First 1 -ExpandProperty FullName
+    if ([string]::IsNullOrWhiteSpace($pythonExecutable)) {
+        throw 'The private Python runtime is missing.'
+    }
+    $sitePackages = Join-Path $root '.venv\Lib\site-packages'
+    $env:PYTHONPATH = @(
+        $sitePackages,
+        (Join-Path $sitePackages 'win32'),
+        (Join-Path $sitePackages 'win32\lib'),
+        (Join-Path $sitePackages 'pythonwin')
+    ) -join ';'
+    $env:PATH = (Join-Path $sitePackages 'pywin32_system32') + ';' + $env:PATH
     $keyPath = Join-Path $dataDir 'watch-token.dpapi'
     if (-not (Test-Path -LiteralPath $keyPath)) {
         Write-ServiceEvent 'Watch credential absent; starting gateway-only mode.' Information
-        $exitCode = Invoke-GatewayProcess `
-            (Join-Path $root '.venv\Scripts\python.exe') $dataDir
+        $exitCode = Invoke-GatewayProcess $pythonExecutable $dataDir
         if ($exitCode -ne 0) {
             Write-ServiceEvent "Gateway process exited with code $exitCode." Error
         }
@@ -61,8 +73,7 @@ try {
         $encrypted, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
     try {
         $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = [Text.Encoding]::UTF8.GetString($plainBytes)
-        exit (Invoke-GatewayProcess `
-            (Join-Path $root '.venv\Scripts\python.exe') $dataDir)
+        exit (Invoke-GatewayProcess $pythonExecutable $dataDir)
     } finally {
         $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = $null
         [Array]::Clear($plainBytes, 0, $plainBytes.Length)
