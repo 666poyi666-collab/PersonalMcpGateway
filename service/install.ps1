@@ -46,15 +46,23 @@ function Protect-Secret([Security.SecureString]$Secret, [string]$Destination) {
 
 function Set-ServiceDataDir([string]$ConfigurationPath, [string]$ResolvedDataDir) {
     [xml]$configuration = Get-Content -Raw -LiteralPath $ConfigurationPath
-    foreach ($node in @($configuration.service.env)) {
-        if ($node.name -eq 'PERSONAL_MCP_DATA_DIR') {
-            $node.value = $ResolvedDataDir
+    foreach ($node in @($configuration.SelectNodes('/service/env'))) {
+        if ($node.GetAttribute('name') -eq 'PERSONAL_MCP_DATA_DIR') {
+            $node.SetAttribute('value', $ResolvedDataDir)
         }
     }
     $logPathNode = $configuration.SelectSingleNode('/service/logpath')
     if ($null -eq $logPathNode) { throw "Missing logpath in $ConfigurationPath" }
     $logPathNode.InnerText = Join-Path $ResolvedDataDir 'service-logs'
     $configuration.Save($ConfigurationPath)
+
+    [xml]$saved = Get-Content -Raw -LiteralPath $ConfigurationPath
+    $dataNode = @($saved.SelectNodes('/service/env')) | Where-Object {
+        $_.GetAttribute('name') -eq 'PERSONAL_MCP_DATA_DIR'
+    } | Select-Object -First 1
+    if ($null -eq $dataNode -or $dataNode.GetAttribute('value') -ne $ResolvedDataDir) {
+        throw "Failed to set PERSONAL_MCP_DATA_DIR in $ConfigurationPath"
+    }
 }
 
 Assert-Administrator
