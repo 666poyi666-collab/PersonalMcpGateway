@@ -96,7 +96,7 @@ def build_admin_app(runtime: GatewayRuntime) -> Starlette:
         if not _authorized(request, runtime.admin_token):
             return JSONResponse({"error": "forbidden"}, status_code=403)
         path = await create_support_bundle(runtime)
-        return FileResponse(path, filename=path.name)
+        return FileResponse(path, filename=path.name, media_type="application/zip")
 
     return Starlette(
         routes=[

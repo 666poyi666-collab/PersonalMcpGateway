@@ -61,11 +61,18 @@ jobs:
           uv run personal-mcp-gateway serve >gateway-smoke.log 2>&1 &
           gateway_pid=$!
           trap 'kill "$gateway_pid" 2>/dev/null || true' EXIT
+          ready=false
           for attempt in {1..60}; do
-            curl --fail --silent http://127.0.0.1:8761/readyz && break
+            if curl --fail --silent http://127.0.0.1:8761/readyz; then
+              ready=true
+              break
+            fi
             sleep 0.5
           done
-          curl --fail --silent http://127.0.0.1:8761/readyz
+          if [[ "$ready" != true ]]; then
+            cat gateway-smoke.log
+            exit 1
+          fi
           npx --yes @modelcontextprotocol/inspector@1.0.0 --cli `
             http://127.0.0.1:8760/mcp --transport http --method tools/list `
             | tee inspector-tools.txt
