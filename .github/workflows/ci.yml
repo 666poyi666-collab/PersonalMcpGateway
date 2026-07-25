@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sync locked environment
+        run: uv sync --all-extras --locked
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Pyright strict
+        run: uv run pyright
+      - name: Tests
+        run: uv run pytest --junitxml=test-results.xml --cov --cov-report=xml --cov-report=html
+      - name: Dependency audit
+        run: uv run pip-audit
+      - name: Build
+        run: uv build
+      - name: Diff check
+        run: git diff --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence
+          path: |
+            test-results.xml
+            coverage.xml
+            htmlcov
+            dist
+
+  inspector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: uv sync --locked
+      - name: MCP Inspector tools/list
+        shell: bash
+        run: |
+          uv run personal-mcp-gateway serve >gateway-smoke.log 2>&1 &
+          gateway_pid=$!
+          trap 'kill "$gateway_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:8761/readyz && break
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8761/readyz
+          npx --yes @modelcontextprotocol/inspector@1.0.0 --cli `
+            http://127.0.0.1:8760/mcp --transport http --method tools/list `
+            | tee inspector-tools.txt
+          grep -q 'watch_set_plan' inspector-tools.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inspector-evidence
+          path: inspector-tools.txt
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --offline "**/*.md"

@@ -1,0 +1,6 @@
+id: journal
+display_name: Journal
+enabled: false
+adapter_version: 1
+priority: 30
+execution_mode: http

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "personal-mcp-gateway"
+version = "0.1.0.dev0"
+description = "A local-first modular MCP gateway for personal applications"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "666poyi666-collab" }]
+dependencies = [
+  "httpx>=0.28,<1",
+  "mcp>=1.27,<2",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "PyYAML>=6.0.2,<7",
+  "starlette>=1.3.1,<2",
+  "uvicorn[standard]>=0.35,<1",
+  "zeroconf>=0.148,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "cyclonedx-bom>=7,<8",
+  "pip-audit>=2.9,<3",
+  "pyright>=1.1.403,<2",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.1,<2",
+  "pytest-cov>=6.2,<7",
+  "respx>=0.22,<1",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+personal-mcp-gateway = "personal_mcp_gateway.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/personal_mcp_gateway"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["personal_mcp_gateway"]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true

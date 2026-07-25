@@ -1,0 +1,6 @@
+id: foxlink
+display_name: Foxlink
+enabled: false
+adapter_version: 1
+priority: 20
+execution_mode: http

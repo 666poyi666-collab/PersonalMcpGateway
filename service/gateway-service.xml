@@ -1,0 +1,29 @@
+<service>
+  <id>PoyiPersonalMcpGateway</id>
+  <name>Poyi Personal MCP Gateway</name>
+  <description>Local modular MCP gateway for personal applications.</description>
+  <executable>powershell.exe</executable>
+  <arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BASE%\service\run-gateway-service.ps1"</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <env name="PERSONAL_MCP_DATA_DIR" value="%PERSONAL_MCP_DATA_DIR%" />
+  <env name="PERSONAL_MCP_MODULES_DIR" value="%BASE%\modules" />
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <stoptimeout>20sec</stoptimeout>
+  <onfailure action="restart" delay="5 sec" />
+  <onfailure action="restart" delay="15 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <logpath>%PERSONAL_MCP_DATA_DIR%\service-logs</logpath>
+  <log mode="roll-by-size-time">
+    <sizeThreshold>10485760</sizeThreshold>
+    <pattern>yyyyMMdd</pattern>
+    <autoRollAtTime>00:00:00</autoRollAtTime>
+    <zipOlderThanNumDays>7</zipOlderThanNumDays>
+    <zipDateFormat>yyyyMMdd</zipDateFormat>
+  </log>
+  <serviceaccount>
+    <username>NT SERVICE\PoyiPersonalMcpGateway</username>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
+</service>
