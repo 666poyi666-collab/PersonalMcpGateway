@@ -132,7 +132,7 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonExe)) {
         throw 'Could not resolve the installed Python 3.12 runtime.'
     }
-    & uv sync --locked --no-dev --python $pythonExe
+    & uv sync --locked --no-dev --no-editable --python $pythonExe
     if ($LASTEXITCODE -ne 0) { throw 'uv sync failed.' }
 } finally {
     $env:UV_PYTHON_INSTALL_DIR = $previousPythonInstallDir
