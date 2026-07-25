@@ -73,8 +73,8 @@ jobs:
             cat gateway-smoke.log
             exit 1
           fi
-          npx --yes @modelcontextprotocol/inspector@1.0.0 --cli `
-            http://127.0.0.1:8760/mcp --transport http --method tools/list `
+          npx --yes @modelcontextprotocol/inspector@1.0.0 --cli \
+            http://127.0.0.1:8760/mcp --transport http --method tools/list \
             | tee inspector-tools.txt
           grep -q 'watch_set_plan' inspector-tools.txt
       - uses: actions/upload-artifact@v4
