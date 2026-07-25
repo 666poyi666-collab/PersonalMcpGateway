@@ -2,11 +2,14 @@
   <id>PoyiPersonalMcpGateway</id>
   <name>Poyi Personal MCP Gateway</name>
   <description>Local modular MCP gateway for personal applications.</description>
-  <executable>powershell.exe</executable>
-  <arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BASE%\service\run-gateway-service.ps1"</arguments>
+  <executable>%PRIVATE_PYTHON%</executable>
+  <arguments>-s -m personal_mcp_gateway.main serve</arguments>
   <workingdirectory>%BASE%</workingdirectory>
   <env name="PERSONAL_MCP_DATA_DIR" value="%PERSONAL_MCP_DATA_DIR%" />
   <env name="PERSONAL_MCP_MODULES_DIR" value="%BASE%\modules" />
+  <env name="PYTHONUTF8" value="1" />
+  <env name="PYTHONUNBUFFERED" value="1" />
+  <env name="PYTHONNOUSERSITE" value="1" />
   <startmode>Automatic</startmode>
   <delayedAutoStart>true</delayedAutoStart>
   <stoptimeout>20sec</stoptimeout>

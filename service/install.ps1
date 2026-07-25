@@ -65,6 +65,24 @@ function Set-ServiceDataDir([string]$ConfigurationPath, [string]$ResolvedDataDir
     }
 }
 
+function Set-GatewayRuntime([string]$ConfigurationPath, [string]$PythonExecutable) {
+    [xml]$configuration = Get-Content -Raw -LiteralPath $ConfigurationPath
+    $executableNode = $configuration.SelectSingleNode('/service/executable')
+    $argumentsNode = $configuration.SelectSingleNode('/service/arguments')
+    if ($null -eq $executableNode -or $null -eq $argumentsNode) {
+        throw "Missing executable or arguments in $ConfigurationPath"
+    }
+    $executableNode.InnerText = $PythonExecutable
+    $argumentsNode.InnerText = '-s -m personal_mcp_gateway.main serve'
+    $configuration.Save($ConfigurationPath)
+
+    [xml]$saved = Get-Content -Raw -LiteralPath $ConfigurationPath
+    if ($saved.service.executable -ne $PythonExecutable -or
+        $saved.service.arguments -ne '-s -m personal_mcp_gateway.main serve') {
+        throw "Failed to set the private Python runtime in $ConfigurationPath"
+    }
+}
+
 Assert-Administrator
 Add-Type -AssemblyName System.Security
 $sourceRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -125,17 +143,42 @@ Push-Location $InstallDir
 try {
     $pythonInstallDir = Join-Path $InstallDir 'python'
     $previousPythonInstallDir = $env:UV_PYTHON_INSTALL_DIR
+    $previousNoUserSite = $env:PYTHONNOUSERSITE
     $env:UV_PYTHON_INSTALL_DIR = $pythonInstallDir
+    $env:PYTHONNOUSERSITE = '1'
     & uv python install 3.12 --no-bin --no-registry
     if ($LASTEXITCODE -ne 0) { throw 'uv python install failed.' }
     $pythonExe = (& uv python find 3.12 --managed-python | Select-Object -Last 1).Trim()
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonExe)) {
         throw 'Could not resolve the installed Python 3.12 runtime.'
     }
-    & uv sync --locked --no-dev --no-editable --python $pythonExe
-    if ($LASTEXITCODE -ne 0) { throw 'uv sync failed.' }
+    $runtimeBuildDir = Join-Path $env:TEMP `
+        ('personal-mcp-runtime-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $runtimeBuildDir | Out-Null
+    try {
+        $requirementsPath = Join-Path $runtimeBuildDir 'requirements.txt'
+        & uv export --locked --no-dev --no-emit-project --format requirements.txt `
+            --output-file $requirementsPath
+        if ($LASTEXITCODE -ne 0) { throw 'uv export failed.' }
+        & uv build --wheel --out-dir $runtimeBuildDir
+        if ($LASTEXITCODE -ne 0) { throw 'uv build failed.' }
+        $wheels = @(Get-ChildItem -LiteralPath $runtimeBuildDir -Filter '*.whl' -File)
+        if ($wheels.Count -ne 1) { throw 'Expected exactly one gateway wheel.' }
+        & uv pip install --python $pythonExe --break-system-packages `
+            --requirement $requirementsPath
+        if ($LASTEXITCODE -ne 0) { throw 'Locked runtime dependency installation failed.' }
+        & uv pip install --python $pythonExe --break-system-packages --no-deps `
+            --reinstall $wheels[0].FullName
+        if ($LASTEXITCODE -ne 0) { throw 'Gateway wheel installation failed.' }
+    } finally {
+        Remove-Item -LiteralPath $runtimeBuildDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    & $pythonExe -c 'import mcp, personal_mcp_gateway, pywintypes, uvicorn, win32crypt'
+    if ($LASTEXITCODE -ne 0) { throw 'Private Python runtime import verification failed.' }
+    Set-GatewayRuntime (Join-Path $InstallDir 'PoyiPersonalMcpGateway.xml') $pythonExe
 } finally {
     $env:UV_PYTHON_INSTALL_DIR = $previousPythonInstallDir
+    $env:PYTHONNOUSERSITE = $previousNoUserSite
     Pop-Location
 }
 
