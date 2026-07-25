@@ -51,7 +51,9 @@ function Set-ServiceDataDir([string]$ConfigurationPath, [string]$ResolvedDataDir
             $node.value = $ResolvedDataDir
         }
     }
-    $configuration.service.logpath = Join-Path $ResolvedDataDir 'service-logs'
+    $logPathNode = $configuration.SelectSingleNode('/service/logpath')
+    if ($null -eq $logPathNode) { throw "Missing logpath in $ConfigurationPath" }
+    $logPathNode.InnerText = Join-Path $ResolvedDataDir 'service-logs'
     $configuration.Save($ConfigurationPath)
 }
 
