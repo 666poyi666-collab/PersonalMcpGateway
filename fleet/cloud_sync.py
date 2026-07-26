@@ -82,10 +82,16 @@ class McpClient:
 
 
 def push(cloud_base: str, key: str, source: str, snapshots: dict[str, str]) -> dict:
-    url = f"{cloud_base.rstrip('/')}/{key}/sync/push"
+    url = f"{cloud_base.rstrip('/')}/sync/push"
     body = json.dumps({"source": source, "snapshots": snapshots}).encode()
     request = urllib.request.Request(
-        url, body, {"Content-Type": "application/json", "User-Agent": UA}
+        url,
+        body,
+        {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode())
@@ -114,7 +120,7 @@ def sync_project(project: dict) -> None:
         print(f"[{name}] nothing to push; skipped: {'; '.join(skipped) or 'all tools failed'}")
         return
     try:
-        result = push(project["cloudBase"], project["accessKey"], "pc-sync", snapshots)
+        result = push(project["cloudBase"], project["syncKey"], "pc-sync", snapshots)
         print(f"[{name}] pushed {result.get('stored')} snapshot(s) at {result.get('syncedAt')}"
               + (f"; skipped {len(skipped)}: {'; '.join(skipped)}" if skipped else ""))
     except (urllib.error.URLError, OSError, ValueError) as exc:

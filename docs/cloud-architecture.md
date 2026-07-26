@@ -23,6 +23,10 @@
 关键约束（诚实语义）：云端 MCP 永远在线 ≠ 设备永远在线。设备离线时工具必须明确返回
 `device_offline` + `lastSyncAt`，绝不假装操作成功；命令要有过期时间与幂等键。
 
+快照上行与 MCP 连接器使用不同凭据：ChatGPT/Claude 只持有 capability-path
+`ACCESS_KEY`，本机代理或设备通过固定 `POST /sync/push` 携带独立 `SYNC_KEY` Bearer。
+不得把 `ACCESS_KEY` 写入 APK；设备直连前还需实现上行凭据的安全下发、轮换和撤销。
+
 ## 分期计划
 
 | 期 | 内容 | 前置 |

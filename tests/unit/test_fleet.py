@@ -43,7 +43,9 @@ def test_attach_services_annotates_probes():
     target = _target(mcp_service="PoyiWatchMcp", tunnel_service="PoyiWatchTunnel")
     probed = [{"mcp": {"ok": False}, "tunnel": {"ok": True}}]
     states = {"PoyiWatchMcp": "stopped", "PoyiWatchTunnel": "running"}
-    result = DashboardMonitor._attach_services([target], probed, states)
+    result = DashboardMonitor._attach_services(  # pyright: ignore[reportPrivateUsage]
+        [target], probed, states
+    )
     assert result[0]["mcp"]["service"] == {"name": "PoyiWatchMcp", "state": "stopped"}
     assert result[0]["tunnel"]["service"] == {"name": "PoyiWatchTunnel", "state": "running"}
 
@@ -51,5 +53,7 @@ def test_attach_services_annotates_probes():
 def test_attach_services_handles_missing_tunnel_probe():
     target = _target(mcp_service="PoyiWatchMcp", tunnel_service="PoyiWatchTunnel")
     probed = [{"mcp": {"ok": True}, "tunnel": None}]
-    result = DashboardMonitor._attach_services([target], probed, {"PoyiWatchMcp": "running"})
+    result = DashboardMonitor._attach_services(  # pyright: ignore[reportPrivateUsage]
+        [target], probed, {"PoyiWatchMcp": "running"}
+    )
     assert result[0]["tunnel"] is None

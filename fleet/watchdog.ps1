@@ -323,7 +323,7 @@ while ($true) {
             $config.cloudSync.PSObject.Properties.Name -contains 'everyPasses') {
             $syncEvery = [Math]::Max(1, [int]$config.cloudSync.everyPasses)
         }
-        if (($script:PassCount % $syncEvery) -eq 1) { Invoke-CloudSync $config }
+        if ((($script:PassCount - 1) % $syncEvery) -eq 0) { Invoke-CloudSync $config }
     } catch {
         Write-Log 'ERROR' ("Watchdog pass failed: {0}" -f $_.Exception.Message)
     }

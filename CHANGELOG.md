@@ -2,6 +2,11 @@
 
 ## 0.1.0-dev
 
+- Split snapshot ingestion from connector access: Watch/Foxlink now accept bounded,
+  allowlisted pushes only at `POST /sync/push` with an independent `SYNC_KEY` Bearer;
+  the MCP capability key can no longer write snapshots. Fix the watchdog cadence
+  expression so `everyPasses: 1` runs every pass, and close REQ-002 after verifying
+  Journal's authenticated LAN-only 8781 boundary in the active firewall and HTTP API.
 - Rebuild both boards around peer project sections: each project gets a full-width
   block in its own art (FocusLink hairline instrument, 拾光 warm paper, 间歇跑 dark
   lime dial with its own dark surface in both themes), the gateway shrinks to a peer
