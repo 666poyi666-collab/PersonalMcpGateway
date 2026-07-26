@@ -230,13 +230,20 @@ New-Item -ItemType Directory -Path $gatewayLogDir, $gatewayServiceLogDir, `
 & icacls $DataDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
     "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(RX)" | Out-Null
 & icacls $gatewayLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
-    "$gatewaySid`:(OI)(CI)M" /T | Out-Null
+    "$gatewaySid`:(OI)(CI)M" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Failed to configure Gateway log directory ACLs.' }
+& icacls $gatewayLogDir /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
+    "$gatewaySid`:(OI)(CI)M" /T /C | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning 'Some historical Gateway log ACLs could not be updated.'
+}
 $gatewayLogPath = Join-Path $gatewayLogDir 'gateway.jsonl'
 if (Test-Path -LiteralPath $gatewayLogPath) {
     & icacls $gatewayLogPath /inheritance:r `
         /grant:r 'BUILTIN\Administrators:F' "$gatewaySid`:M" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to configure Gateway log file ACLs.' }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning 'The historical Gateway log remains stderr-only.'
+    }
 }
 & icacls $serviceLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' |
     Out-Null
