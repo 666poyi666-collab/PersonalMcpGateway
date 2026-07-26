@@ -13,6 +13,11 @@ analytics, or remote resources.
 The same data is available as a native window with a status tray icon. See
 [Desktop board](desktop.md).
 
+The page opens in the light theme by default; the topbar toggle switches to dark and the choice
+persists in the browser. Below the built-in panels sits the extensible widget area (扩展面板) —
+schedules, project freshness, notes, or any local data source, declared in `board-widgets.yaml`
+with no restart. See [Board widgets](board-widgets.md).
+
 ## Add a target
 
 Copy `dashboard/targets.example.yaml` to:

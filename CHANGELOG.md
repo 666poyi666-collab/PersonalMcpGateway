@@ -3,6 +3,13 @@
 ## 0.1.0-dev
 
 - Establish the independent Personal MCP Gateway repository.
+- Add the extensible widget area (扩展面板) to both boards: `board-widgets.yaml` declares cards
+  with built-in `text`, `agenda`, `projects` (read-only git freshness), and loopback-only `remote`
+  types; a broken widget renders as an error card without taking the board down.
+- Default both boards to the light theme with dark one click away; the desktop window paints the
+  saved theme's surface before the page loads so startup never flashes the opposite mode.
+- Rewrite the README opening in plain language (总机房 + 总看板) with a three-step quick start,
+  and add the `docs/board-widgets.md` widget guide.
 - Add a responsive real-time control center for Personal, Watch, Foxlink, Journal, their Secure MCP
   Tunnels, 24-hour activity, recent calls, and redacted errors.
 - Add loopback-only YAML dashboard targets so additional independent MCP projects can be monitored

@@ -79,7 +79,7 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 | Control | Behaviour |
 | --- | --- |
 | Refresh | Bypasses the shared probe cache. |
-| Theme | Switches dark and light. Both are validated against their own surface, not flipped. |
+| Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
 | Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
 | Compact | Shrinks to a narrow status panel that fits beside other work. |
 | Close | Hides to the tray; the poll loop and the tray icon keep running. |
@@ -94,6 +94,10 @@ visible once the window is hidden, so it must not be the least readable one.
 
 A second launch is refused with a message pointing at the tray. The guard is a `Local\` named
 mutex, so a different desktop session gets its own window instead of being locked out.
+
+The board ends with the extensible widget area (扩展面板), shared with the web dashboard:
+schedules, project git freshness, notes, or any loopback data source, declared in
+`board-widgets.yaml` in the gateway data directory. See [Board widgets](board-widgets.md).
 
 ## Remove
 
