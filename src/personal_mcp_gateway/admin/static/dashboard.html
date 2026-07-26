@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light dark">
   <title>Poyi Control Center</title>
   <link rel="stylesheet" href="/admin/assets/dashboard.css">
   <script src="/admin/assets/dashboard.js" defer></script>
@@ -28,6 +28,9 @@
       </a>
       <a class="nav-item" href="#events">
         <span class="nav-icon">!</span><span>事件中心</span>
+      </a>
+      <a class="nav-item" href="#widgets">
+        <span class="nav-icon">＋</span><span>扩展面板</span>
       </a>
     </nav>
     <div class="sidebar-status">
@@ -125,12 +128,21 @@
 
         <section class="panel extension-panel">
           <div class="extension-icon">＋</div>
-          <div><p class="section-kicker">EXTENSIBLE BY DESIGN</p><h2>添加下一个监控目标</h2>
-            <p>在 ProgramData 的 <code>dashboard-targets.yaml</code> 中添加 loopback health 与 ready 地址，刷新后自动出现。</p>
+          <div><p class="section-kicker">EXTENSIBLE BY DESIGN</p><h2>看板可以继续长大</h2>
+            <p>监控目标写进 <code>dashboard-targets.yaml</code>，日程 / 项目进度 / 自定义模块写进
+            <code>board-widgets.yaml</code>，保存后自动出现，无需重启。</p>
           </div>
           <span class="extension-arrow">→</span>
         </section>
       </div>
+
+      <section class="panel widgets-panel" id="widgets">
+        <div class="panel-head compact">
+          <div><p class="section-kicker">BOARD WIDGETS</p><h2>扩展面板</h2></div>
+          <span class="quiet-label">board-widgets.yaml</span>
+        </div>
+        <div class="widget-grid" id="widgetGrid"></div>
+      </section>
       <footer><span>POYI CONTROL CENTER</span><span>数据每 4 秒自动刷新 · <b id="footerState">CONNECTING</b></span></footer>
     </div>
   </main>

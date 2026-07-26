@@ -1,0 +1,37 @@
+# Copy to %ProgramData%\Poyi\PersonalMcpGateway\board-widgets.yaml.
+# Every card appears on the web dashboard and the desktop board within seconds of
+# saving; no restart. Full guide: docs/board-widgets.md.
+widgets:
+  # A static note.
+  - id: memo
+    type: text
+    title: 便签
+    options:
+      body: |
+        把常看的东西放上看板：日程、项目进度、新闻、股票、专注统计。
+        编辑这个文件即可增删卡片。
+
+  # Upcoming entries from agenda.yaml in the same directory. Quote times ("14:30").
+  - id: agenda
+    type: agenda
+    title: 最近日程
+    options:
+      file: agenda.yaml
+      limit: 6
+
+  # Read-only git freshness for your own repositories: branch, last commit, dirty count.
+  - id: projects
+    type: projects
+    title: 项目进度
+    options:
+      repos:
+        - C:\dev\my-first-project
+        - C:\dev\another-project
+
+  # Any local service that answers the small JSON contract in docs/board-widgets.md.
+  # Loopback addresses only; the board never calls out to the network.
+  - id: focus
+    type: remote
+    title: 今日专注
+    options:
+      url: http://127.0.0.1:8790/widget

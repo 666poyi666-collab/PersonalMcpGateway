@@ -37,3 +37,7 @@ class Settings(BaseSettings):
     @property
     def dashboard_targets_path(self) -> Path:
         return self.data_dir / "dashboard-targets.yaml"
+
+    @property
+    def board_widgets_path(self) -> Path:
+        return self.data_dir / "board-widgets.yaml"

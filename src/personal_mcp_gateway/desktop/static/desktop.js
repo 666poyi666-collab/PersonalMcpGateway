@@ -37,6 +37,8 @@ const dom = {
   chartPanel: document.querySelector(".chart-panel"),
   eventList: el("eventList"),
   eventCount: el("eventCount"),
+  widgetGrid: el("widgetGrid"),
+  widgetCount: el("widgetCount"),
   compactList: el("compactList"),
   compactCalls: el("compactCalls"),
   compactRate: el("compactRate"),
@@ -159,6 +161,7 @@ function render(payload) {
   renderProjects(Array.isArray(data.targets) ? data.targets : []);
   renderChart(data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : []);
   renderEvents(data);
+  renderWidgets(Array.isArray(data.widgets) ? data.widgets : []);
 
   dom.sbSync.textContent = `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`;
   dom.sbProbe.textContent = `探测 ${num(data.probeDurationMs)}ms`;
@@ -327,6 +330,80 @@ function renderEvents(data) {
 
   dom.eventCount.textContent = String(rows.length);
   replace(dom.eventList, rows.length ? rows : [make("p", "empty-note", "暂无状态变化或异常")]);
+}
+
+/* ---------- board widgets (扩展面板) ---------- */
+
+function widgetBody(widget) {
+  const body = make("div", "widget-body");
+  if (!widget.ok) {
+    body.append(make("p", "widget-error", widget.error || "模块出错"));
+    return body;
+  }
+  const data = widget.data || {};
+  if (widget.kind === "stat") {
+    const wrap = make("div", "widget-stat");
+    wrap.append(make("strong", null, data.value == null ? "—" : String(data.value)));
+    wrap.append(make("span", null, data.label || ""));
+    if (data.note) wrap.append(make("small", null, data.note));
+    body.append(wrap);
+    return body;
+  }
+  if (widget.kind === "keyvalue") {
+    const rows = make("div", "widget-kv");
+    for (const pair of Array.isArray(data.pairs) ? data.pairs : []) {
+      const row = make("div");
+      row.append(make("span", null, pair.label), make("b", null, pair.value));
+      rows.append(row);
+    }
+    body.append(rows);
+    return body;
+  }
+  if (widget.kind === "list") {
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) {
+      body.append(make("div", "widget-empty", data.empty || "暂无内容"));
+      return body;
+    }
+    const rows = make("div", "widget-rows");
+    for (const item of items) {
+      const row = make("div", "widget-row");
+      if (item.state) {
+        const dot = make("i", "dot");
+        dot.dataset.status = item.state;
+        row.append(dot);
+      }
+      const info = make("div", "widget-row-info");
+      info.append(make("strong", null, item.title || ""));
+      if (item.subtitle) info.append(make("small", null, item.subtitle));
+      row.append(info);
+      if (item.value != null) row.append(make("em", null, String(item.value)));
+      rows.append(row);
+    }
+    body.append(rows);
+    return body;
+  }
+  const text = make("div", "widget-text");
+  for (const line of String(data.body || "").split("\n")) {
+    if (line) text.append(make("p", null, line));
+  }
+  body.append(text);
+  return body;
+}
+
+function renderWidgets(widgets) {
+  dom.widgetCount.textContent = String(widgets.length);
+  const cards = widgets.map((widget) => {
+    const card = make("article", widget.ok ? "widget-card" : "widget-card error");
+    const head = make("div", "widget-head");
+    const heading = make("div");
+    heading.append(make("strong", null, widget.title || widget.id));
+    if (widget.subtitle) heading.append(make("small", null, widget.subtitle));
+    head.append(heading, make("span", "widget-chip", widget.type || ""));
+    card.append(head, widgetBody(widget));
+    return card;
+  });
+  replace(dom.widgetGrid, cards);
 }
 
 /* ---------- view state ---------- */

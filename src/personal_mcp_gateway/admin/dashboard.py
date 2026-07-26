@@ -11,6 +11,7 @@ import httpx
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from personal_mcp_gateway.admin.widgets import WidgetHub
 from personal_mcp_gateway.core.runtime import GatewayRuntime
 
 
@@ -97,6 +98,7 @@ DEFAULT_TARGETS = (
 class DashboardMonitor:
     def __init__(self, runtime: GatewayRuntime) -> None:
         self.runtime = runtime
+        self.widgets = WidgetHub(runtime.settings)
         self._cache: dict[str, Any] | None = None
         self._cached_at = 0.0
         self._cache_lock = asyncio.Lock()
@@ -120,7 +122,9 @@ class DashboardMonitor:
             target_states = await asyncio.gather(
                 *(self._probe_target(client, target) for target in targets)
             )
-        activity, recent = await asyncio.gather(self._activity(), self._recent_invocations())
+        activity, recent, widgets = await asyncio.gather(
+            self._activity(), self._recent_invocations(), self.widgets.snapshot()
+        )
         errors = await self.runtime.recent_errors(8)
         calls_24h = sum(int(bucket["calls"]) for bucket in activity)
         failures_24h = sum(int(bucket["failures"]) for bucket in activity)
@@ -150,6 +154,7 @@ class DashboardMonitor:
                 ),
             },
             "targets": target_states,
+            "widgets": widgets,
             "activity": {"hourly": activity, "recent": recent},
             "errors": errors,
             "events": list(self._status_events),

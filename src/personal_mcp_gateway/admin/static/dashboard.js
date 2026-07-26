@@ -116,6 +116,69 @@
       row.append(dot, copy, time); list.append(row);
     });
   }
+  function widgetBody(widget) {
+    const body = document.createElement("div"); body.className = "widget-body";
+    if (!widget.ok) {
+      const err = document.createElement("p"); err.className = "widget-error"; err.textContent = widget.error || "模块出错";
+      body.append(err); return body;
+    }
+    const data = widget.data || {};
+    if (widget.kind === "stat") {
+      const wrap = document.createElement("div"); wrap.className = "widget-stat";
+      const value = document.createElement("strong"); value.textContent = data.value ?? "—";
+      const label = document.createElement("span"); label.textContent = data.label || "";
+      wrap.append(value, label);
+      if (data.note) { const note = document.createElement("small"); note.textContent = data.note; wrap.append(note); }
+      body.append(wrap);
+    } else if (widget.kind === "keyvalue") {
+      const rows = document.createElement("div"); rows.className = "widget-kv";
+      (data.pairs || []).forEach((pair) => {
+        const row = document.createElement("div");
+        const label = document.createElement("span"); label.textContent = pair.label;
+        const value = document.createElement("b"); value.textContent = pair.value;
+        row.append(label, value); rows.append(row);
+      });
+      body.append(rows);
+    } else if (widget.kind === "list") {
+      const items = data.items || [];
+      if (!items.length) {
+        const empty = document.createElement("div"); empty.className = "widget-empty"; empty.textContent = data.empty || "暂无内容";
+        body.append(empty); return body;
+      }
+      const rows = document.createElement("div"); rows.className = "widget-rows";
+      items.forEach((item) => {
+        const row = document.createElement("div"); row.className = "widget-row";
+        if (item.state) { const dot = document.createElement("i"); dot.className = `w-state ${item.state}`; row.append(dot); }
+        const info = document.createElement("div"); info.className = "widget-row-info";
+        const title = document.createElement("strong"); title.textContent = item.title || ""; info.append(title);
+        if (item.subtitle) { const sub = document.createElement("small"); sub.textContent = item.subtitle; info.append(sub); }
+        row.append(info);
+        if (item.value != null) { const value = document.createElement("em"); value.textContent = item.value; row.append(value); }
+        rows.append(row);
+      });
+      body.append(rows);
+    } else {
+      const text = document.createElement("div"); text.className = "widget-text";
+      String(data.body || "").split("\n").filter(Boolean).forEach((line) => {
+        const paragraph = document.createElement("p"); paragraph.textContent = line; text.append(paragraph);
+      });
+      body.append(text);
+    }
+    return body;
+  }
+  function renderWidgets(widgets) {
+    const grid = $("widgetGrid"); grid.replaceChildren();
+    widgets.forEach((widget) => {
+      const card = document.createElement("article"); card.className = `widget-card${widget.ok ? "" : " error"}`;
+      const head = document.createElement("div"); head.className = "widget-head";
+      const heading = document.createElement("div");
+      const title = document.createElement("strong"); title.textContent = widget.title; heading.append(title);
+      if (widget.subtitle) { const sub = document.createElement("small"); sub.textContent = widget.subtitle; heading.append(sub); }
+      const chip = document.createElement("span"); chip.className = "widget-chip"; chip.textContent = widget.type;
+      head.append(heading, chip);
+      card.append(head, widgetBody(widget)); grid.append(card);
+    });
+  }
   function showToast(message) {
     const toast = $("toast"); toast.textContent = message; toast.classList.add("show");
     clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 5000);
@@ -132,7 +195,7 @@
     text($("versionLabel"), `v${data.gateway.version}`);
     text($("lastUpdated"), `探测 ${data.probeDurationMs}ms · ${new Date(data.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
     text($("chartTotal"), compact(summary.calls24h));
-    renderProjects(data.targets); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []);
+    renderProjects(data.targets); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []); renderWidgets(data.widgets || []);
     $("syncState").classList.remove("offline"); $("syncState").querySelector("b").textContent = "实时连接";
     text($("footerState"), "CONNECTED");
     if (data.configWarning) showToast(data.configWarning);
@@ -160,8 +223,10 @@
     text($("clockDate"), now.toLocaleDateString("zh-CN", { month: "short", day: "numeric", weekday: "short" }));
   }
   function setupTheme() {
+    // Light unless the operator chose dark; anything else (unset, legacy values)
+    // lands on the light default.
     const stored = localStorage.getItem("poyi-dashboard-theme");
-    if (stored === "light") document.body.classList.add("light");
+    if (stored !== "dark") document.body.classList.add("light");
     $("themeToggle").addEventListener("click", () => {
       document.body.classList.toggle("light");
       localStorage.setItem("poyi-dashboard-theme", document.body.classList.contains("light") ? "light" : "dark");
