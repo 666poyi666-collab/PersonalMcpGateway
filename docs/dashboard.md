@@ -5,7 +5,10 @@ four seconds and shows the independently deployed Personal Gateway, Watch MCP, F
 Journal MCP, including each MCP readiness endpoint and Secure MCP Tunnel.
 
 The dashboard also reports 24-hour Gateway tool activity, recent calls, recent redacted errors,
-Gateway uptime, and success rate. It loads no CDN scripts, fonts, analytics, or remote resources.
+Gateway uptime, success rate, and an in-memory timeline when a project degrades, goes offline, or
+recovers. The refresh button bypasses the three-second shared probe cache. The cache prevents
+multiple open dashboard tabs from multiplying health traffic. The page loads no CDN scripts, fonts,
+analytics, or remote resources.
 
 ## Add a target
 

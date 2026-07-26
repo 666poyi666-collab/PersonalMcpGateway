@@ -73,9 +73,9 @@ def build_admin_app(runtime: GatewayRuntime) -> Starlette:
             return FileResponse(STATIC_ROOT / "dashboard.html", media_type="text/html")
         return JSONResponse(value)
 
-    async def dashboard_data(_: Request) -> JSONResponse:
+    async def dashboard_data(request: Request) -> JSONResponse:
         return JSONResponse(
-            await dashboard.snapshot(),
+            await dashboard.snapshot(force=request.query_params.get("force") == "1"),
             headers={"Cache-Control": "no-store"},
         )
 

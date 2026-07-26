@@ -46,6 +46,11 @@ async def test_admin_endpoints_authorization_and_bundle(tmp_path: Path) -> None:
         assert snapshot["summary"]["total"] == 4
         assert snapshot["targets"][0]["id"] == "personal"
         assert len(snapshot["activity"]["hourly"]) == 24
+        assert snapshot["events"] == []
+        cached = (await client.get("/admin/dashboard-data")).json()
+        assert cached["generatedAt"] == snapshot["generatedAt"]
+        forced = (await client.get("/admin/dashboard-data?force=1")).json()
+        assert forced["generatedAt"] != snapshot["generatedAt"]
         stylesheet = await client.get("/admin/assets/dashboard.css")
         script = await client.get("/admin/assets/dashboard.js")
         assert stylesheet.status_code == 200 and "project-grid" in stylesheet.text

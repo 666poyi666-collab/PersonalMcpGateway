@@ -69,6 +69,8 @@ main { margin-left: var(--sidebar-w); min-height: 100vh; }
 .sync-state.offline span { background: var(--red); box-shadow: 0 0 12px var(--red); }
 .icon-button { border: 1px solid var(--line); background: rgba(255,255,255,.035); color: var(--muted); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 16px; }
 .icon-button:hover { border-color: var(--line-bright); color: var(--text); }
+.icon-button.loading { animation: spin .75s linear infinite; color: var(--violet-2); }
+@keyframes spin { to { transform: rotate(360deg); } }
 .clock { padding-left: 16px; border-left: 1px solid var(--line); display: flex; flex-direction: column; text-align: right; }
 .clock strong { font: 600 15px ui-monospace; }
 .clock small { color: var(--faint); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
@@ -159,6 +161,8 @@ main { margin-left: var(--sidebar-w); min-height: 100vh; }
 .count-badge { min-width: 22px; height: 22px; display: grid; place-items: center; border-radius: 7px; color: var(--red); background: rgba(251,113,133,.08); font: 700 9px ui-monospace; }
 .event-row { display: grid; grid-template-columns: 7px 1fr auto; gap: 9px; padding: 10px 5px; border-bottom: 1px solid rgba(255,255,255,.045); }
 .event-row > i { width: 6px; height: 6px; border-radius: 50%; background: var(--red); margin-top: 5px; }
+.event-row.recovered > i { background: var(--mint); box-shadow: 0 0 8px rgba(53,221,180,.5); }
+.event-row.changed > i { background: var(--orange); }
 .event-copy { min-width: 0; }.event-copy strong { display: block; font-size: 10px; margin-bottom: 3px; }.event-copy p { margin: 0; color: var(--faint); font-size: 9px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .event-row time { color: var(--faint); font: 8px ui-monospace; }
 .empty-state { min-height: 120px; display: grid; place-items: center; color: var(--faint); font-size: 10px; border: 1px dashed var(--line); border-radius: 10px; }

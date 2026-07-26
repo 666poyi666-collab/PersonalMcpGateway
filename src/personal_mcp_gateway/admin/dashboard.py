@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -96,8 +97,24 @@ DEFAULT_TARGETS = (
 class DashboardMonitor:
     def __init__(self, runtime: GatewayRuntime) -> None:
         self.runtime = runtime
+        self._cache: dict[str, Any] | None = None
+        self._cached_at = 0.0
+        self._cache_lock = asyncio.Lock()
+        self._last_states: dict[str, str] = {}
+        self._status_events: deque[dict[str, Any]] = deque(maxlen=40)
 
-    async def snapshot(self) -> dict[str, Any]:
+    async def snapshot(self, *, force: bool = False) -> dict[str, Any]:
+        if not force and self._cache is not None and time.monotonic() - self._cached_at < 3:
+            return self._cache
+        async with self._cache_lock:
+            if not force and self._cache is not None and time.monotonic() - self._cached_at < 3:
+                return self._cache
+            self._cache = await self._build_snapshot()
+            self._cached_at = time.monotonic()
+            return self._cache
+
+    async def _build_snapshot(self) -> dict[str, Any]:
+        probe_started = time.perf_counter()
         targets, config_warning = self.targets()
         async with httpx.AsyncClient(timeout=2.5, trust_env=False) as client:
             target_states = await asyncio.gather(
@@ -108,9 +125,11 @@ class DashboardMonitor:
         calls_24h = sum(int(bucket["calls"]) for bucket in activity)
         failures_24h = sum(int(bucket["failures"]) for bucket in activity)
         states = [str(target["state"]) for target in target_states]
+        self._record_state_changes(target_states)
         return {
             "generatedAt": datetime.now(UTC).isoformat(),
             "refreshIntervalSeconds": 4,
+            "probeDurationMs": round((time.perf_counter() - probe_started) * 1000),
             "gateway": {
                 "state": "online" if self.runtime.ready else "starting",
                 "version": self.runtime.settings.version,
@@ -133,8 +152,29 @@ class DashboardMonitor:
             "targets": target_states,
             "activity": {"hourly": activity, "recent": recent},
             "errors": errors,
+            "events": list(self._status_events),
             "configWarning": config_warning,
         }
+
+    def _record_state_changes(self, targets: list[dict[str, Any]]) -> None:
+        now = datetime.now(UTC).isoformat()
+        current = {str(target["id"]): str(target["state"]) for target in targets}
+        if self._last_states:
+            names = {str(target["id"]): str(target["name"]) for target in targets}
+            for target_id, state in current.items():
+                previous = self._last_states.get(target_id)
+                if previous is not None and previous != state:
+                    self._status_events.appendleft(
+                        {
+                            "type": "status_change",
+                            "target": target_id,
+                            "name": names[target_id],
+                            "fromState": previous,
+                            "toState": state,
+                            "occurredAt": now,
+                        }
+                    )
+        self._last_states = current
 
     def targets(self) -> tuple[list[DashboardTarget], str | None]:
         targets = {target.id: target for target in DEFAULT_TARGETS}

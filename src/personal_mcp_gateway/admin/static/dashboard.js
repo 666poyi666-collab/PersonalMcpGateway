@@ -11,6 +11,7 @@
   };
   let refreshTimer;
   let toastTimer;
+  let refreshInFlight = false;
 
   function text(node, value) { node.textContent = String(value); }
   function compact(value) { return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value || 0); }
@@ -22,7 +23,8 @@
   }
   function relative(date) {
     if (!date) return "刚刚";
-    const seconds = Math.max(0, Math.round((Date.now() - new Date(`${date}Z`.replace("ZZ", "Z"))) / 1000));
+    const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(date) ? date : `${date}Z`;
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(normalized)) / 1000));
     if (seconds < 60) return `${seconds} 秒前`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
@@ -89,9 +91,20 @@
       meta.append(result, duration); row.append(mark, info, meta); list.append(row);
     });
   }
-  function renderErrors(errors) {
-    const list = $("eventList"); list.replaceChildren(); text($("errorCount"), errors.length);
-    if (!errors.length) { const empty = document.createElement("div"); empty.className = "empty-state good"; empty.textContent = "当前没有异常"; list.append(empty); return; }
+  function renderEvents(errors, events) {
+    const list = $("eventList"); list.replaceChildren(); text($("errorCount"), errors.length + events.length);
+    if (!errors.length && !events.length) { const empty = document.createElement("div"); empty.className = "empty-state good"; empty.textContent = "当前没有异常"; list.append(empty); return; }
+    events.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = `event-row ${item.toState === "online" ? "recovered" : "changed"}`;
+      const dot = document.createElement("i");
+      const copy = document.createElement("div"); copy.className = "event-copy";
+      const title = document.createElement("strong"); title.textContent = item.toState === "online" ? `${item.name} 已恢复` : `${item.name} 状态变化`;
+      const body = document.createElement("p"); body.textContent = `${stateLabel(item.fromState)} → ${stateLabel(item.toState)}`;
+      copy.append(title, body);
+      const time = document.createElement("time"); time.textContent = relative(item.occurredAt);
+      row.append(dot, copy, time); list.append(row);
+    });
     errors.forEach((item) => {
       const row = document.createElement("div"); row.className = "event-row";
       const dot = document.createElement("i");
@@ -117,22 +130,27 @@
     text($("failureSub"), `失败请求 ${summary.failures24h}`);
     text($("uptime"), uptime(data.gateway.uptimeSeconds));
     text($("versionLabel"), `v${data.gateway.version}`);
-    text($("lastUpdated"), `刚刚同步 · ${new Date(data.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
+    text($("lastUpdated"), `探测 ${data.probeDurationMs}ms · ${new Date(data.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
     text($("chartTotal"), compact(summary.calls24h));
-    renderProjects(data.targets); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderErrors(data.errors);
+    renderProjects(data.targets); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []);
     $("syncState").classList.remove("offline"); $("syncState").querySelector("b").textContent = "实时连接";
     text($("footerState"), "CONNECTED");
     if (data.configWarning) showToast(data.configWarning);
   }
-  async function refresh() {
+  async function refresh(force = false) {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
+    $("refreshNow").classList.add("loading");
     try {
-      const response = await fetch("/admin/dashboard-data", { headers: { Accept: "application/json" }, cache: "no-store" });
+      const response = await fetch(`/admin/dashboard-data${force ? "?force=1" : ""}`, { headers: { Accept: "application/json" }, cache: "no-store" });
       if (!response.ok) throw new Error("dashboard unavailable");
       applySnapshot(await response.json());
     } catch (_) {
       $("syncState").classList.add("offline"); $("syncState").querySelector("b").textContent = "连接中断";
       text($("footerState"), "RECONNECTING");
     } finally {
+      refreshInFlight = false;
+      $("refreshNow").classList.remove("loading");
       clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, document.hidden ? 15000 : 4000);
     }
   }
@@ -149,6 +167,7 @@
       localStorage.setItem("poyi-dashboard-theme", document.body.classList.contains("light") ? "light" : "dark");
     });
   }
+  $("refreshNow").addEventListener("click", () => refresh(true));
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
   setupTheme(); updateClock(); setInterval(updateClock, 1000); refresh();
 })();
