@@ -5,7 +5,11 @@
 #   4. Installs and starts the PoyiFleetWatchdog service.
 #   5. Starts anything currently stopped and prints a final probe report.
 [CmdletBinding()]
-param([switch]$Pause)
+param(
+    [switch]$Pause,
+    # Account allowed to drop repair requests from the desktop board.
+    [string]$DesktopUser = $env:USERNAME
+)
 
 $ErrorActionPreference = 'Continue'
 $fleetSource = $PSScriptRoot
@@ -128,6 +132,13 @@ targets:
     if ([System.Diagnostics.EventLog]::SourceExists('PoyiFleetWatchdog') -eq $false) {
         New-EventLog -LogName Application -Source 'PoyiFleetWatchdog'
     }
+    # Trigger drop-box: the desktop board writes repair requests here, so the
+    # interactive user needs modify rights alongside SYSTEM and Administrators.
+    $triggerDir = Join-Path $dataDir 'triggers'
+    New-Item -ItemType Directory -Path $triggerDir -Force | Out-Null
+    & icacls $triggerDir /grant "$DesktopUser`:(OI)(CI)M" /Q | Out-Null
+    & icacls $triggerDir /grant 'NT SERVICE\PoyiPersonalMcpGateway:(OI)(CI)M' /Q | Out-Null
+    Write-Host "  trigger dir ready: $triggerDir (writer: $DesktopUser)"
     $existing = Get-Service -Name 'PoyiFleetWatchdog' -ErrorAction SilentlyContinue
     if ($null -ne $existing) {
         if ($existing.Status -ne 'Stopped') {

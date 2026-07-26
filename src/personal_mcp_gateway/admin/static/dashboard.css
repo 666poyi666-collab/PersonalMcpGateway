@@ -299,3 +299,7 @@ body.light .hero h1 span { background: linear-gradient(100deg,#4a3aa7 10%,#0d7a6
 }
 @media (max-width: 520px) { .kpi-grid,.project-grid { grid-template-columns: 1fr; }.kpi-card { min-height: 125px; }.hero h1 { font-size: 38px; }.hero-copy { max-width: 330px; line-height: 1.55; }.extension-panel { grid-template-columns: 42px 1fr; }.extension-arrow { display:none; } footer { flex-direction: column; gap: 7px; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+
+/* fleet watchdog footer chip */
+footer b.guard-ok { color: #0ca30c; }
+footer b.guard-bad { color: #d03b3b; }

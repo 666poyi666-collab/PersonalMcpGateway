@@ -44,13 +44,17 @@ const dom = {
   compactRate: el("compactRate"),
   offlineScreen: el("offlineScreen"),
   offlineHint: el("offlineHint"),
+  repairHint: el("repairHint"),
   sbDot: el("sbDot"),
   sbState: el("sbState"),
   sbSync: el("sbSync"),
   sbProbe: el("sbProbe"),
+  sbGuard: el("sbGuard"),
   btnTop: el("btnTop"),
   btnCompact: el("btnCompact"),
   btnRefresh: el("btnRefresh"),
+  btnRepair: el("btnRepair"),
+  btnRepairOffline: el("btnRepairOffline"),
 };
 
 /* ---------- helpers ---------- */
@@ -143,6 +147,7 @@ function render(payload) {
     setStatusChrome("disconnected", "—", "网关未连接");
     dom.sbSync.textContent = clockOf(payload.fetchedAt);
     dom.sbProbe.textContent = "—";
+    renderGuard(null);
     return;
   }
 
@@ -165,6 +170,21 @@ function render(payload) {
 
   dom.sbSync.textContent = `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`;
   dom.sbProbe.textContent = `探测 ${num(data.probeDurationMs)}ms`;
+  renderGuard(data.fleet || null);
+}
+
+function renderGuard(fleet) {
+  const state = fleet && fleet.watchdog ? fleet.watchdog.state : null;
+  if (state === "running") {
+    dom.sbGuard.textContent = "看护在线";
+    dom.sbGuard.dataset.state = "ok";
+  } else if (state) {
+    dom.sbGuard.textContent = state === "missing" ? "看护未安装" : "看护离线";
+    dom.sbGuard.dataset.state = "bad";
+  } else {
+    dom.sbGuard.textContent = "看护 —";
+    dom.sbGuard.dataset.state = "";
+  }
 }
 
 function setStatusChrome(status, count, label) {
@@ -217,7 +237,16 @@ function componentRow(label, probe) {
   const row = make("div", "pc-row");
   const dot = make("i", "dot");
   dot.dataset.status = probe && probe.ok ? "online" : "offline";
-  row.append(dot, make("span", null, label), make("em", null, probe && probe.ok ? `${num(probe.latencyMs)}ms` : "不可用"));
+  const service = probe && probe.service ? probe.service : null;
+  let detail = "不可用";
+  if (probe && probe.ok) {
+    detail = `${num(probe.latencyMs)}ms`;
+  } else if (service && service.state && service.state !== "running") {
+    detail = service.state === "missing" ? "服务未安装" : "服务已停止";
+  }
+  const em = make("em", null, detail);
+  if (service && service.name) row.title = `${service.name} · ${service.state || "unknown"}`;
+  row.append(dot, make("span", null, label), em);
   return row;
 }
 
@@ -448,6 +477,44 @@ dom.plot.addEventListener("mouseleave", () => {
 
 /* ---------- controls ---------- */
 
+/* ---------- one-click repair ---------- */
+
+let repairArmTimer = null;
+
+function disarmRepair() {
+  if (repairArmTimer) window.clearTimeout(repairArmTimer);
+  repairArmTimer = null;
+  dom.btnRepair.classList.remove("arming");
+  dom.btnRepair.title = "一键修复全部服务";
+  dom.btnRepairOffline.classList.remove("arming");
+  dom.btnRepairOffline.textContent = "一键修复全部服务";
+}
+
+async function requestRepair(button) {
+  const bridge = api();
+  if (!bridge || !bridge.repair_fleet) return;
+  // First click arms, second click within 5s fires: no dialogs in a tray app.
+  if (!button.classList.contains("arming")) {
+    disarmRepair();
+    button.classList.add("arming");
+    if (button === dom.btnRepairOffline) button.textContent = "再点一次确认修复";
+    button.title = "再点一次确认修复";
+    repairArmTimer = window.setTimeout(disarmRepair, 5000);
+    return;
+  }
+  disarmRepair();
+  let result = null;
+  try {
+    result = await bridge.repair_fleet();
+  } catch (error) {
+    result = { ok: false, message: "修复请求失败" };
+  }
+  const message = result && result.message ? result.message : "修复请求已发送";
+  dom.repairHint.textContent = message;
+  dom.sbState.textContent = message;
+  window.setTimeout(() => pull(true), 3000);
+}
+
 function bindControls() {
   el("btnRefresh").addEventListener("click", async () => {
     dom.btnRefresh.classList.add("spinning");
@@ -455,6 +522,8 @@ function bindControls() {
     dom.btnRefresh.classList.remove("spinning");
   });
   el("btnRetry").addEventListener("click", () => pull(true));
+  dom.btnRepair.addEventListener("click", () => requestRepair(dom.btnRepair));
+  dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
   el("btnMin").addEventListener("click", () => api() && api().minimize());
   el("btnClose").addEventListener("click", () => api() && api().hide_to_tray());
   el("btnTop").addEventListener("click", async () => {

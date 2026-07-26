@@ -2,6 +2,16 @@
 
 ## 0.1.0-dev
 
+- Integrate the fleet into both boards: each card's probes now carry the underlying
+  Windows service state (`服务已停止` / `服务未安装` vs plain `不可用`), the status bar
+  shows the watchdog state, and the desktop titlebar (and its offline screen) gains a
+  one-click repair button that drops a trigger file for the watchdog — no PowerShell
+  window, no UAC, and it still works while the gateway itself is down. Service states
+  are read via ctypes/advapi32 (BUG-005 fixed the missing restypes).
+- Add `fleet/Update-PoyiFleet.ps1` for code redeploys (wheel → private Python, ordered
+  service restarts under maintenance.flag, ACL re-stamp after install — BUG-004).
+- Add the Cloudflare hybrid roadmap (`docs/cloud-architecture.md`, REQ-001): Workers
+  remote MCP per project so ChatGPT/Claude keep working while the PC is off.
 - Add the fleet reliability layer under `fleet/`: the PoyiFleetWatchdog Windows service
   health-probes all four projects (MCP + tunnel), starts stopped services, force-restarts
   degraded ones with cooldown and hourly caps, and re-applies the ProgramData ACL baseline

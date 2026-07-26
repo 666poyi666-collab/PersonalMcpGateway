@@ -37,7 +37,15 @@
     const dot = document.createElement("i");
     const name = document.createElement("span"); name.textContent = label;
     const detail = document.createElement("em");
-    detail.textContent = data && data.ok ? (data.latencyMs == null ? "READY" : `${data.latencyMs}ms`) : "DOWN";
+    const service = data && data.service ? data.service : null;
+    if (data && data.ok) {
+      detail.textContent = data.latencyMs == null ? "READY" : `${data.latencyMs}ms`;
+    } else if (service && service.state && service.state !== "running") {
+      detail.textContent = service.state === "missing" ? "NOT INSTALLED" : "SVC STOPPED";
+    } else {
+      detail.textContent = "DOWN";
+    }
+    if (service && service.name) row.title = `${service.name} · ${service.state || "unknown"}`;
     row.append(dot, name, detail);
     return row;
   }
@@ -211,6 +219,14 @@
     renderProjects(data.targets); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []); renderWidgets(data.widgets || []);
     $("syncState").classList.remove("offline"); $("syncState").querySelector("b").textContent = "实时连接";
     text($("footerState"), "CONNECTED");
+    const guard = data.fleet && data.fleet.watchdog ? data.fleet.watchdog.state : null;
+    const guardNode = $("footerGuard");
+    if (guardNode) {
+      guardNode.textContent = guard === "running" ? "看护在线"
+        : guard === "missing" ? "看护未安装"
+        : guard ? "看护离线" : "看护 —";
+      guardNode.className = guard === "running" ? "guard-ok" : guard ? "guard-bad" : "";
+    }
     if (data.configWarning) showToast(data.configWarning);
   }
   async function refresh(force = false) {

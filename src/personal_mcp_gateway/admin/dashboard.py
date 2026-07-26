@@ -11,6 +11,7 @@ import httpx
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from personal_mcp_gateway.admin import fleet
 from personal_mcp_gateway.admin.widgets import WidgetHub
 from personal_mcp_gateway.core.runtime import GatewayRuntime
 
@@ -24,6 +25,8 @@ class DashboardTarget(BaseModel):
     health_url: str
     ready_url: str
     tunnel_ready_url: str | None = None
+    mcp_service: str | None = None
+    tunnel_service: str | None = None
     enabled: bool = True
 
     @field_validator("health_url", "ready_url", "tunnel_ready_url")
@@ -61,6 +64,8 @@ DEFAULT_TARGETS = (
         health_url="internal://gateway/healthz",
         ready_url="internal://gateway/readyz",
         tunnel_ready_url="http://127.0.0.1:8877/readyz",
+        mcp_service="PoyiPersonalMcpGateway",
+        tunnel_service="OpenAISecureMcpTunnel",
     ),
     DashboardTarget(
         id="watch",
@@ -71,6 +76,8 @@ DEFAULT_TARGETS = (
         health_url="http://127.0.0.1:8768/healthz",
         ready_url="http://127.0.0.1:8768/readyz",
         tunnel_ready_url="http://127.0.0.1:8880/readyz",
+        mcp_service="PoyiWatchMcp",
+        tunnel_service="PoyiWatchTunnel",
     ),
     DashboardTarget(
         id="foxlink",
@@ -81,6 +88,8 @@ DEFAULT_TARGETS = (
         health_url="http://127.0.0.1:8770/healthz",
         ready_url="http://127.0.0.1:8770/readyz",
         tunnel_ready_url="http://127.0.0.1:8878/readyz",
+        mcp_service="PoyiFoxlinkMcp",
+        tunnel_service="FoxlinkSecureMcpTunnel",
     ),
     DashboardTarget(
         id="journal",
@@ -91,6 +100,8 @@ DEFAULT_TARGETS = (
         health_url="http://127.0.0.1:8780/healthz",
         ready_url="http://127.0.0.1:8780/readyz",
         tunnel_ready_url="http://127.0.0.1:8887/readyz",
+        mcp_service="PoyiJournalMcp",
+        tunnel_service="PoyiJournalTunnel",
     ),
 )
 
@@ -118,10 +129,20 @@ class DashboardMonitor:
     async def _build_snapshot(self) -> dict[str, Any]:
         probe_started = time.perf_counter()
         targets, config_warning = self.targets()
-        async with httpx.AsyncClient(timeout=2.5, trust_env=False) as client:
-            target_states = await asyncio.gather(
-                *(self._probe_target(client, target) for target in targets)
-            )
+        service_names = sorted(
+            {
+                name
+                for target in targets
+                for name in (target.mcp_service, target.tunnel_service)
+                if name
+            }
+            | {fleet.WATCHDOG_SERVICE}
+        )
+        service_states, probed = await asyncio.gather(
+            asyncio.to_thread(fleet.query_service_states, service_names),
+            self._probe_all(targets),
+        )
+        target_states = self._attach_services(targets, probed, service_states)
         activity, recent, widgets = await asyncio.gather(
             self._activity(), self._recent_invocations(), self.widgets.snapshot()
         )
@@ -159,7 +180,39 @@ class DashboardMonitor:
             "errors": errors,
             "events": list(self._status_events),
             "configWarning": config_warning,
+            "fleet": {
+                "watchdog": {
+                    "service": fleet.WATCHDOG_SERVICE,
+                    "state": service_states.get(fleet.WATCHDOG_SERVICE, "unknown"),
+                },
+                "repairSupported": fleet.repair_supported(),
+            },
         }
+
+    async def _probe_all(self, targets: list[DashboardTarget]) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient(timeout=2.5, trust_env=False) as client:
+            return list(
+                await asyncio.gather(*(self._probe_target(client, target) for target in targets))
+            )
+
+    @staticmethod
+    def _attach_services(
+        targets: list[DashboardTarget],
+        probed: list[dict[str, Any]],
+        service_states: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        for target, payload in zip(targets, probed, strict=True):
+            if target.mcp_service and isinstance(payload.get("mcp"), dict):
+                payload["mcp"]["service"] = {
+                    "name": target.mcp_service,
+                    "state": service_states.get(target.mcp_service, "unknown"),
+                }
+            if target.tunnel_service and isinstance(payload.get("tunnel"), dict):
+                payload["tunnel"]["service"] = {
+                    "name": target.tunnel_service,
+                    "state": service_states.get(target.tunnel_service, "unknown"),
+                }
+        return probed
 
     def _record_state_changes(self, targets: list[dict[str, Any]]) -> None:
         now = datetime.now(UTC).isoformat()
@@ -191,6 +244,17 @@ class DashboardMonitor:
             config = DashboardConfig.model_validate(document)
             for target in config.targets:
                 if target.enabled:
+                    # Override entries written before service names existed keep
+                    # the default services for the same id.
+                    default = targets.get(target.id)
+                    if default is not None:
+                        updates: dict[str, str] = {}
+                        if target.mcp_service is None and default.mcp_service:
+                            updates["mcp_service"] = default.mcp_service
+                        if target.tunnel_service is None and default.tunnel_service:
+                            updates["tunnel_service"] = default.tunnel_service
+                        if updates:
+                            target = target.model_copy(update=updates)
                     targets[target.id] = target
                 else:
                     targets.pop(target.id, None)

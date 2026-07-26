@@ -35,10 +35,22 @@
 
 ## 日常操作
 
+**首选入口就是 Poyi Control Center 看板本身**（桌面版与 `http://127.0.0.1:8761/admin/status`）：
+
+- 每张项目卡片会显示探测结果；探测失败时区分"服务已停止 / 服务未安装 / 不可用"。
+- 状态栏 / 页脚显示 **看护在线**（PoyiFleetWatchdog 的服务状态）。
+- 桌面版标题栏的 **扳手按钮** = 一键修复：点一下进入确认态，再点一下发出修复请求
+  （写入 `C:\ProgramData\Poyi\FleetWatchdog\triggers\`，由 SYSTEM 权限的看护服务在
+  秒级内执行强制修复——不弹窗口、不需要 UAC；网关挂了时按钮照样有效，离线画面上
+  也有同一个按钮）。每分钟最多执行一次；维护模式（maintenance.flag）下忽略。
+
+命令行备用入口：
+
 | 想做什么 | 怎么做 |
 |---|---|
 | 看全家状态 | 双击 `fleet\Status-PoyiFleet.cmd`（无需管理员），或打开 Poyi Control Center 看板 |
-| 一键修复全部 | 双击 `fleet\Repair-PoyiFleet.cmd`（弹 UAC）——幂等，随时可跑 |
+| 一键修复全部 | 看板扳手按钮；或双击 `fleet\Repair-PoyiFleet.cmd`（弹 UAC）——幂等，随时可跑 |
+| 改完代码重新部署 | 管理员运行 `fleet\Update-PoyiFleet.ps1`（构建 wheel → 装入私有 Python → 重启网关与看护；会自动补 ACL、更新期间挂 maintenance.flag） |
 | 暂停 watchdog（维护/装新版本时） | 建一个空文件 `C:\ProgramData\Poyi\FleetWatchdog\maintenance.flag`，删掉即恢复 |
 | 查 watchdog 干了什么 | `C:\ProgramData\Poyi\FleetWatchdog\watchdog.log`；重启动作也写入 Windows 事件日志（来源 `PoyiFleetWatchdog`，事件 9001–9005） |
 | 调巡检节奏/阈值 | 改 `C:\Program Files\Poyi\FleetWatchdog\fleet-config.json` 后重启 PoyiFleetWatchdog 服务（仓库 `fleet\fleet-config.json` 是源头，改完用 Repair 重新部署） |

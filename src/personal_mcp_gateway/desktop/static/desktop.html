@@ -21,6 +21,9 @@
     </span>
   </div>
   <div class="tb-actions">
+    <button type="button" class="tb-btn" id="btnRepair" title="一键修复全部服务" aria-label="一键修复全部服务">
+      <svg viewBox="0 0 24 24"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 5.6L3 17.6V21h3.4l5.7-5.7a4.5 4.5 0 0 0 5.6-6l-3 3-2.6-.4-.4-2.6 3-3z"/></svg>
+    </button>
     <button type="button" class="tb-btn" id="btnRefresh" title="立即刷新" aria-label="立即刷新">
       <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
     </button>
@@ -51,7 +54,11 @@
     <h1>网关未连接</h1>
     <p>无法访问本机 Personal MCP Gateway 管理端口。看板会持续重试。</p>
     <p class="dc-hint" id="offlineHint"></p>
-    <button type="button" class="ghost-btn" id="btnRetry">立即重试</button>
+    <div class="dc-actions">
+      <button type="button" class="ghost-btn" id="btnRetry">立即重试</button>
+      <button type="button" class="ghost-btn accent" id="btnRepairOffline">一键修复全部服务</button>
+    </div>
+    <p class="dc-hint" id="repairHint"></p>
   </section>
 
   <div class="board" id="board">
@@ -191,6 +198,8 @@
     <span id="sbState">连接中</span>
   </span>
   <span class="sb-right">
+    <span id="sbGuard" title="PoyiFleetWatchdog 看护服务">看护 —</span>
+    <span class="sb-sep">·</span>
     <span id="sbSync">—</span>
     <span class="sb-sep">·</span>
     <span id="sbProbe">—</span>

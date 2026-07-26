@@ -215,6 +215,23 @@ class DesktopApi:
     def open_web(self) -> None:
         webbrowser.open(f"{admin_base_url()}/admin/status")
 
+    def repair_fleet(self) -> dict[str, Any]:
+        """Drop a repair request for the fleet watchdog.
+
+        Works even while the gateway is down: the request is a file in the
+        watchdog's trigger directory, not a gateway API call.
+        """
+        from personal_mcp_gateway.admin import fleet
+
+        try:
+            fleet.request_repair("desktop")
+        except OSError:
+            return {
+                "ok": False,
+                "message": "看护服务未部署或无权限: 请先运行 fleet\\Repair-PoyiFleet.cmd",
+            }
+        return {"ok": True, "message": "修复请求已发送: 看护服务正在处理"}
+
     def quit(self) -> None:
         self._controller.shutdown()
 

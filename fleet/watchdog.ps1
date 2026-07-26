@@ -14,9 +14,11 @@ $script:BaseDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:DataDir = 'C:\ProgramData\Poyi\FleetWatchdog'
 $script:LogPath = Join-Path $script:DataDir 'watchdog.log'
 $script:MaintenanceFlag = Join-Path $script:DataDir 'maintenance.flag'
+$script:TriggerDir = Join-Path $script:DataDir 'triggers'
 $script:EventSource = 'PoyiFleetWatchdog'
+$script:LastForcedPass = [DateTime]::MinValue
 
-New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null
+New-Item -ItemType Directory -Path $script:DataDir, $script:TriggerDir -Force | Out-Null
 
 function Write-Log([string]$Level, [string]$Message) {
     $line = '{0} {1} {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level.PadRight(5), $Message
@@ -181,7 +183,7 @@ function Restart-TunnelService($Project, $Config) {
     Start-FleetService $tunnelName $Config | Out-Null
 }
 
-function Invoke-FleetPass($Config, [bool]$InBootGrace) {
+function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
     foreach ($project in $Config.projects) {
         $mcpName = $project.mcp.service
         $tunnelName = $project.tunnel.service
@@ -192,7 +194,7 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace) {
         if ($mcpState -eq 'Missing') {
             Write-Log 'ERROR' "Service $mcpName is not installed."
         } elseif ($mcpState -eq 'Stopped') {
-            if (Test-RestartAllowed $mcpTarget $Config) {
+            if ($Forced -or (Test-RestartAllowed $mcpTarget $Config)) {
                 Register-Restart $mcpTarget
                 Start-FleetService $mcpName $Config | Out-Null
             }
@@ -204,10 +206,12 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace) {
                 $mcpTarget.Fails = $mcpTarget.Fails + 1
                 Write-Log 'WARN' ("{0} health probe failed ({1}/{2})." -f
                     $mcpName, $mcpTarget.Fails, $Config.mcpFailThreshold)
-                if (-not $InBootGrace -and $mcpTarget.Fails -ge $Config.mcpFailThreshold -and
-                    (Test-RestartAllowed $mcpTarget $Config)) {
+                $due = $Forced -or ($mcpTarget.Fails -ge $Config.mcpFailThreshold -and
+                    (Test-RestartAllowed $mcpTarget $Config))
+                if (-not $InBootGrace -and $due) {
                     Register-Restart $mcpTarget
                     Restart-McpService $project $Config
+                    $mcpHealthy = Test-Probe $project.mcp.health $Config.probeTimeoutSeconds
                 }
             }
         }
@@ -221,7 +225,7 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace) {
         if ($tunnelState -eq 'Stopped') {
             # A stopped tunnel whose ready port is still bound means an orphaned
             # tunnel-client survived a service kill; remove it before restarting.
-            if (Test-RestartAllowed $tunnelTarget $Config) {
+            if ($Forced -or (Test-RestartAllowed $tunnelTarget $Config)) {
                 Register-Restart $tunnelTarget
                 Stop-PortListeners $project.tunnel.ready
                 Start-FleetService $tunnelName $Config | Out-Null
@@ -240,13 +244,38 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace) {
             $tunnelTarget.Fails = $tunnelTarget.Fails + 1
             Write-Log 'WARN' ("{0} readiness probe failed ({1}/{2})." -f
                 $tunnelName, $tunnelTarget.Fails, $Config.tunnelFailThreshold)
-            if (-not $InBootGrace -and $tunnelTarget.Fails -ge $Config.tunnelFailThreshold -and
-                (Test-RestartAllowed $tunnelTarget $Config)) {
+            $due = $Forced -or ($tunnelTarget.Fails -ge $Config.tunnelFailThreshold -and
+                (Test-RestartAllowed $tunnelTarget $Config))
+            if (-not $InBootGrace -and $due) {
                 Register-Restart $tunnelTarget
                 Restart-TunnelService $project $Config
             }
         }
     }
+}
+
+function Test-RepairTrigger($Config) {
+    $requests = @(Get-ChildItem -LiteralPath $script:TriggerDir -File -ErrorAction SilentlyContinue)
+    if ($requests.Count -eq 0) { return $false }
+    foreach ($request in $requests) {
+        Remove-Item -LiteralPath $request.FullName -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $script:MaintenanceFlag) {
+        Write-Log 'WARN' 'Repair request ignored: maintenance.flag is present.'
+        Write-FleetEvent 9006 'Warning' 'Repair request ignored during maintenance.'
+        return $false
+    }
+    if (((Get-Date) - $script:LastForcedPass).TotalSeconds -lt 60) {
+        Write-Log 'WARN' 'Repair request rate-limited (one forced pass per minute).'
+        return $false
+    }
+    $script:LastForcedPass = Get-Date
+    Write-Log 'INFO' ("Repair requested ({0} trigger file(s)); running forced pass." -f $requests.Count)
+    Write-FleetEvent 9006 'Information' 'Repair requested via trigger; running forced remediation pass.'
+    Repair-DataDirAcls $Config
+    Invoke-FleetPass $Config $false $true
+    Write-Log 'INFO' 'Forced remediation pass finished.'
+    return $true
 }
 
 # --- main ---
@@ -257,14 +286,24 @@ Repair-DataDirAcls $config
 
 while ($true) {
     try {
+        $triggered = Test-RepairTrigger $config
         if (Test-Path -LiteralPath $script:MaintenanceFlag) {
             Write-Log 'INFO' 'maintenance.flag present; skipping this pass.'
-        } else {
+        } elseif (-not $triggered) {
             $inBootGrace = (Get-UptimeSeconds) -lt $config.bootGraceSeconds
             Invoke-FleetPass $config $inBootGrace
         }
     } catch {
         Write-Log 'ERROR' ("Watchdog pass failed: {0}" -f $_.Exception.Message)
     }
-    Start-Sleep -Seconds $config.loopSeconds
+    # Poll triggers frequently so the board's repair button feels immediate,
+    # while full probe passes keep their configured cadence.
+    $slept = 0
+    while ($slept -lt $config.loopSeconds) {
+        Start-Sleep -Seconds 3
+        $slept += 3
+        if (@(Get-ChildItem -LiteralPath $script:TriggerDir -File -ErrorAction SilentlyContinue).Count -gt 0) {
+            break
+        }
+    }
 }
