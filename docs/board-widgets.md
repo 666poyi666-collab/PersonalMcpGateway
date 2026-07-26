@@ -89,6 +89,33 @@ widgets:
 只做只读的 `git` 查询，不会改动任何仓库；结果缓存 60 秒。路径不存在或不是 Git
 仓库时，对应条目会说明原因，其余条目不受影响。
 
+### mcp — 直连各项目的 MCP（比状态更深的数据）
+
+对独立 MCP 项目（FocusLink / 拾光 / 间歇跑），看板可以直接调用它们的只读工具——
+和 ChatGPT 用的是同一批工具，项目方不用为看板写任何代码：
+
+```yaml
+  - id: focus_today
+    type: mcp
+    title: 今日专注
+    group: FocusLink
+    flavor: instrument
+    accent: "#007A55"
+    options:
+      url: http://127.0.0.1:8770/mcp
+      tool: foxlink_get_today_summary
+      # args: {days: 7}    # 可选的工具参数
+```
+
+规则：
+
+- 只允许工具名带 get / list / summarize / search / status / health / capabilities
+  的**只读调用**；start、stop、set、append 一类在建立连接前就被拒绝。
+- 仍然只接受 loopback 地址；结果缓存 30 秒；单次调用预算 9 秒（汇总类工具要
+  遍历真实历史，可能较慢）。
+- 已知工具有专门排版（今日专注、训练汇总、最近睡眠、最近日记等），未知的只读
+  工具降级为键值对呈现。每个项目的工具清单见 `docs/integrations/`。
+
 ### remote — 自定义数据源
 
 这是给你自己的程序留的接口：任何本机服务只要返回一段约定的 JSON，就能上看板。
@@ -128,6 +155,26 @@ widgets:
 widget 而访问外网；新闻、股票这类需要外网的数据，由你自己的本机服务去取，再以上面的
 JSON 形式交给看板。
 
+## 分组与风格（差异化呈现）
+
+每个 widget 还可以带三个可选字段，让不同项目在同一块板上保留各自的美术语言：
+
+```yaml
+group: 拾光日记        # 相同 group 的卡片聚成一节，节标题带色块
+flavor: paper          # neutral（默认）/ instrument / paper / sport
+accent: "#A85F27"      # 该项目的识别色（十六进制）
+```
+
+| flavor | 语言 | 来源 |
+| --- | --- | --- |
+| `instrument` | 发丝线直角、标题短刻度、等宽工业读数 | FocusLink「时间仪器」 |
+| `paper` | 暖纸衬线墨字、赭金竖线、陶土色日期锚点 | 拾光 Ink & Daylight |
+| `sport` | 常暗表盘、荧光绿读数、手表屏圆角 | 间歇跑 OWW221 表盘 |
+| `neutral` | 看板自己的样子 | 默认 |
+
+各项目的完整接入方案（数据面、工具清单、风格依据）见
+[docs/integrations/](integrations/README.md)。
+
 ## 规则
 
 - 一个模块出错只影响它自己：错误以卡片形式显示原因，其余模块照常刷新。
@@ -139,8 +186,11 @@ JSON 形式交给看板。
 
 | 卡片显示 | 原因 |
 | --- | --- |
-| `board-widgets.yaml 配置无效` | YAML 语法错误、`type` 拼错、`id` 重复或不合规 |
-| `remote 模块只接受 loopback 地址` | `url` 不是 `127.0.0.1` / `localhost` |
+| `board-widgets.yaml 配置无效` | YAML 语法错误、`type`/`flavor` 拼错、`accent` 不是十六进制、`id` 重复或不合规 |
+| `remote/mcp 模块只接受 loopback 地址` | `url` 不是 `127.0.0.1` / `localhost` |
 | `数据源无法访问` | 目标服务没启动，或 2.5 秒内没有响应 |
 | `数据源返回的 kind 不受支持` | JSON 里的 `kind` 不在上表中 |
+| `... 不是只读工具` | `mcp` 模块只允许 get/list/summarize 类调用 |
+| `MCP 服务无法访问或响应超时` | 对应 MCP 服务没启动，或 9 秒内没有完成 |
+| `工具执行返回错误` | MCP 服务本身报错（例如手表/手机暂时不在线），30 秒后自动重试 |
 | `未找到 git` | `projects` 模块需要 PATH 里有 `git` |

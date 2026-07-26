@@ -7,6 +7,7 @@
 - [Real-time dashboard](dashboard.md)
 - [Desktop board](desktop.md)
 - [Board widgets 扩展面板](board-widgets.md)
+- [Project integrations 项目接入](integrations/README.md)
 - [ChatGPT setup](chatgpt-setup.md)
 - [Troubleshooting](troubleshooting.md)
 - [Testing](testing.md)

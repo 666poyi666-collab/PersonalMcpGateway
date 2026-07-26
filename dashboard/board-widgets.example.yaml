@@ -1,6 +1,14 @@
 # Copy to %ProgramData%\Poyi\PersonalMcpGateway\board-widgets.yaml.
 # Every card appears on the web dashboard and the desktop board within seconds of
-# saving; no restart. Full guide: docs/board-widgets.md.
+# saving; no restart. Full guide: docs/board-widgets.md; per-project integration
+# specs live in docs/integrations/.
+#
+# Widgets can be grouped into per-project sections, and each section can keep its
+# source project's own art direction via `flavor` + `accent`:
+#   instrument - hairline right angles, tabular readings (FocusLink's 时间仪器)
+#   paper      - warm paper, serif ink, ochre accent (拾光日记's Ink & Daylight)
+#   sport      - dark watch dial with luminous digits (间歇跑's watch face)
+#   neutral    - the board's own look (default)
 widgets:
   # A static note.
   - id: memo
@@ -10,6 +18,20 @@ widgets:
       body: |
         把常看的东西放上看板：日程、项目进度、新闻、股票、专注统计。
         编辑这个文件即可增删卡片。
+
+  # One read-only tool call on a loopback MCP. This is how the board goes deeper
+  # than health for MCP projects: it uses the same tools ChatGPT uses. Only
+  # get/list/summarize/search/status-style tools are allowed; writes are refused.
+  - id: focus_today
+    type: mcp
+    title: 今日专注
+    group: FocusLink
+    flavor: instrument
+    accent: "#007A55"
+    options:
+      url: http://127.0.0.1:8770/mcp
+      tool: foxlink_get_today_summary
+      # args: {days: 7}   # optional tool arguments
 
   # Upcoming entries from agenda.yaml in the same directory. Quote times ("14:30").
   - id: agenda

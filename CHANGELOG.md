@@ -3,6 +3,14 @@
 ## 0.1.0-dev
 
 - Establish the independent Personal MCP Gateway repository.
+- Add the `mcp` widget type: the board calls read-only tools on each project's own loopback MCP
+  (Foxlink focus totals, watch workout and sleep summaries, journal counts and recent titles) with
+  curated presenters per tool; write-verb tools are refused before a connection opens, and journal
+  body text never reaches the board.
+- Add differentiated presentation: widgets carry `group` / `flavor` / `accent`, and each source
+  project keeps its own art on the shared board — FocusLink's hairline instrument, 拾光's warm
+  paper and ochre ink, 间歇跑's dark lime watch dial — with per-project integration specs under
+  `docs/integrations/`.
 - Add the extensible widget area (扩展面板) to both boards: `board-widgets.yaml` declares cards
   with built-in `text`, `agenda`, `projects` (read-only git freshness), and loopback-only `remote`
   types; a broken widget renders as an error card without taking the board down.
