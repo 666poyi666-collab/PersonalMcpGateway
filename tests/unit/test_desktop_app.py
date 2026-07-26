@@ -193,7 +193,7 @@ def test_snapshot_payload_carries_the_view_preferences() -> None:
     assert payload["view"] == {
         "compact": False,
         "onTop": False,
-        "theme": "dark",
+        "theme": "light",
         "adminUrl": "http://127.0.0.1:8761",
     }
 
@@ -232,10 +232,10 @@ def test_always_on_top_reaches_the_window_and_the_saved_state() -> None:
     assert load_state(state_path()).on_top is True
 
 
-def test_an_unknown_theme_falls_back_to_dark() -> None:
+def test_an_unknown_theme_falls_back_to_light() -> None:
     api = DesktopApi(_controller())
-    assert api.set_theme("light")["view"]["theme"] == "light"
-    assert api.set_theme("neon")["view"]["theme"] == "dark"
+    assert api.set_theme("dark")["view"]["theme"] == "dark"
+    assert api.set_theme("neon")["view"]["theme"] == "light"
 
 
 def test_minimize_and_hide_reach_the_window() -> None:

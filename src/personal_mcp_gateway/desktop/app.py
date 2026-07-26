@@ -31,7 +31,10 @@ from personal_mcp_gateway.desktop.window_state import (
 )
 
 POLL_SECONDS = 4.0
-BACKGROUND = "#080B12"
+# The pywebview window paints this before the page loads; matching the saved
+# theme's surface keeps startup from flashing the opposite mode.
+BACKGROUND_DARK = "#080B12"
+BACKGROUND_LIGHT = "#EEF0F6"
 # Session-local, not ``Global\``: the control center is a per-user app, so a second
 # desktop session gets its own window instead of being refused. ``Local\`` also needs
 # no SeCreateGlobalPrivilege, which an unelevated shortcut may not hold.
@@ -193,7 +196,7 @@ class DesktopApi:
 
     def set_theme(self, theme: str) -> dict[str, Any]:
         controller = self._controller
-        controller.state.theme = theme if theme in {"dark", "light"} else "dark"
+        controller.state.theme = theme if theme in {"dark", "light"} else "light"
         save_state(controller.state)
         return self.snapshot()
 
@@ -254,7 +257,7 @@ def main() -> int:
         y=state.y,
         min_size=MIN_SIZE,
         on_top=state.on_top,
-        background=BACKGROUND,
+        background=BACKGROUND_DARK if state.theme == "dark" else BACKGROUND_LIGHT,
     )
     if window is None:
         print("无法创建桌面窗口: 请确认已安装 WebView2 运行时", file=sys.stderr)

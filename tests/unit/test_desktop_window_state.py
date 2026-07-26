@@ -17,7 +17,7 @@ from personal_mcp_gateway.desktop.window_state import (
 def test_state_round_trips(tmp_path: Path) -> None:
     target = tmp_path / "window-state.json"
     saved = WindowState(
-        x=120, y=64, width=1200, height=800, compact=True, on_top=True, theme="light"
+        x=120, y=64, width=1200, height=800, compact=True, on_top=True, theme="dark"
     )
     assert save_state(saved, target) is True
     loaded = load_state(target)
@@ -29,7 +29,7 @@ def test_missing_file_falls_back_to_defaults(tmp_path: Path) -> None:
     loaded = load_state(tmp_path / "absent.json")
     assert loaded.size() == FULL_SIZE
     assert loaded.compact is False
-    assert loaded.theme == "dark"
+    assert loaded.theme == "light"
 
 
 def test_corrupt_or_unexpected_content_falls_back(tmp_path: Path) -> None:
@@ -51,7 +51,7 @@ def test_undersized_and_invalid_fields_are_clamped(tmp_path: Path) -> None:
     loaded = load_state(target)
     assert loaded.size() == MIN_SIZE
     assert loaded.x is None
-    assert loaded.theme == "dark"
+    assert loaded.theme == "light"
 
 
 def test_save_reports_failure_instead_of_raising(tmp_path: Path) -> None:

@@ -36,7 +36,8 @@ class WindowState:
     height: int = FULL_SIZE[1]
     compact: bool = False
     on_top: bool = False
-    theme: str = "dark"
+    # The operator prefers a light board; dark stays one titlebar click away.
+    theme: str = "light"
 
     def size(self) -> tuple[int, int]:
         return (self.width, self.height)
@@ -72,7 +73,7 @@ def load_state(path: Path | None = None) -> WindowState:
         height=max(height, MIN_SIZE[1]),
         compact=bool(data.get("compact", False)),
         on_top=bool(data.get("on_top", False)),
-        theme=theme if theme in {"dark", "light"} else "dark",
+        theme=theme if theme in {"dark", "light"} else "light",
     )
 
 
