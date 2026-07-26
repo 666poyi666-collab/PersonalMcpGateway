@@ -69,8 +69,8 @@ class McpClient:
         )
         self.rpc("notifications/initialized", notify=True)
 
-    def call_tool(self, name: str) -> tuple[bool, str]:
-        result = self.rpc("tools/call", {"name": name, "arguments": {}})
+    def call_tool(self, name: str, arguments: dict | None = None) -> tuple[bool, str]:
+        result = self.rpc("tools/call", {"name": name, "arguments": arguments or {}})
         if not result or "result" not in result:
             return False, json.dumps(result.get("error") if result else {"error": "no_response"})
         outcome = result["result"]
@@ -95,6 +95,90 @@ def push(cloud_base: str, key: str, source: str, snapshots: dict[str, str]) -> d
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode())
+
+
+def push_journal(cloud_base: str, key: str, entries: list[dict]) -> dict:
+    url = f"{cloud_base.rstrip('/')}/sync/push"
+    body = json.dumps({"source": "pc-sync", "entries": entries}).encode()
+    request = urllib.request.Request(
+        url,
+        body,
+        {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode())
+
+
+def _tool_data(text: str) -> dict:
+    payload = json.loads(text)
+    data = payload.get("data", payload)
+    return data if isinstance(data, dict) else {}
+
+
+def sync_journal(project: dict) -> None:
+    name = project["name"]
+    client = McpClient(project["localMcp"])
+    try:
+        client.connect()
+        cursor = ""
+        entries: list[dict] = []
+        while True:
+            ok, text = client.call_tool(
+                "journal_list_recent", {"limit": 100, "cursor": cursor}
+            )
+            if not ok:
+                raise ValueError(text)
+            page = _tool_data(text)
+            for summary in page.get("items", []):
+                if not isinstance(summary, dict) or not summary.get("date"):
+                    continue
+                date = str(summary["date"])
+                chunks: list[str] = []
+                offset = 0
+                detail: dict = {}
+                while True:
+                    ok, text = client.call_tool(
+                        "journal_get_entry",
+                        {"date": date, "offset": offset, "maxChars": 12_000},
+                    )
+                    if not ok:
+                        raise ValueError(text)
+                    detail = _tool_data(text)
+                    chunks.append(str(detail.get("contentChunk", "")))
+                    next_offset = detail.get("nextOffset")
+                    if next_offset is None:
+                        break
+                    offset = int(next_offset)
+                metadata = detail.get("entry", {})
+                entries.append(
+                    {
+                        "sourceKey": f"local:{date}",
+                        "sourceRevision": int(detail.get("revision", summary.get("revision", 1))),
+                        "date": date,
+                        "title": str(metadata.get("title", summary.get("title", ""))),
+                        "body": "".join(chunks),
+                        "tags": metadata.get("tags", summary.get("tags", [])),
+                        "mood": metadata.get("mood", summary.get("mood")),
+                        "updatedAt": str(metadata.get("updatedAt", summary.get("updatedAt", ""))),
+                    }
+                )
+            cursor = str(page.get("nextCursor") or "")
+            if not cursor:
+                break
+        if not entries:
+            print(f"[{name}] no local entries to push")
+            return
+        result = push_journal(project["cloudBase"], project["syncKey"], entries)
+        print(
+            f"[{name}] received {result.get('received')} local entry(s); "
+            f"updated {result.get('stored')} cloud row(s)"
+        )
+    except (urllib.error.URLError, OSError, ValueError, TypeError) as exc:
+        print(f"[{name}] journal sync failed: {exc}")
 
 
 def sync_project(project: dict) -> None:
@@ -134,7 +218,10 @@ def main() -> int:
     with open(args.config, encoding="utf-8") as handle:
         config = json.load(handle)
     for project in config.get("projects", []):
-        sync_project(project)
+        if project.get("kind") == "journal":
+            sync_journal(project)
+        else:
+            sync_project(project)
     return 0
 
 

@@ -2,6 +2,7 @@
 
 ## 0.1.0-dev
 
+- Push local Journal entries to Journal Cloud MCP with date/revision idempotent upserts, including chunked full-body reads. Treat `PHONE_OFFLINE` and `WATCH_OFFLINE` board results as neutral recovery states while preserving real execution errors as failures.
 - Split snapshot ingestion from connector access: Watch/Foxlink now accept bounded,
   allowlisted pushes only at `POST /sync/push` with an independent `SYNC_KEY` Bearer;
   the MCP capability key can no longer write snapshots. Fix the watchdog cadence

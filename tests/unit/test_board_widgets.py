@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
+from personal_mcp_gateway.admin import widgets as widget_module
 from personal_mcp_gateway.admin.widgets import (
     WidgetHub,
     _present_mcp_payload,  # pyright: ignore[reportPrivateUsage]
@@ -289,6 +290,30 @@ widgets:
     assert "loopback" in by_id["outside"]["error"]
     assert "只读" in by_id["writer"]["error"]
     assert "options.tool" in by_id["toolless"]["error"]
+
+
+async def test_mcp_device_offline_is_an_honest_neutral_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def offline(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        return {"isError": True, "error": {"code": "PHONE_OFFLINE"}}
+
+    monkeypatch.setattr(widget_module, "_call_mcp_tool", offline)
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: watch
+    type: mcp
+    title: 训练汇总
+    options: {url: "http://127.0.0.1:8768/mcp", tool: watch_summarize_workouts}
+""",
+    )
+
+    widget = (await build_hub(tmp_path).snapshot())[0]
+    assert widget["ok"] is True
+    assert widget["kind"] == "text"
+    assert "离线" in widget["data"]["body"]
 
 
 def test_mcp_presenters_shape_the_real_payloads() -> None:

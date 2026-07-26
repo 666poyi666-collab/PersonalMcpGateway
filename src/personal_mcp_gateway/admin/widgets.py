@@ -420,6 +420,15 @@ class WidgetHub:
         if payload is None:
             return self._fail(config, "工具没有返回可解析的数据")
         if payload.get("isError"):
+            error = payload.get("error")
+            error_dict = cast(dict[str, Any], error) if isinstance(error, dict) else {}
+            code = str(error_dict.get("code") or "")
+            if code in {"PHONE_OFFLINE", "WATCH_OFFLINE"}:
+                return self._ok(
+                    config,
+                    "text",
+                    {"body": "手机或手表当前离线 · 等待自动恢复或下一次云端同步"},
+                )
             return self._fail(config, "工具执行返回错误")
         kind, data = _present_mcp_payload(tool, payload)
         return self._ok(config, kind, data)
@@ -489,7 +498,22 @@ async def _call_mcp_tool(url: str, tool: str, args: dict[str, Any]) -> dict[str,
             await session.initialize()
             result = await session.call_tool(tool, args)
     if result.isError:
-        return {"isError": True}
+        error: dict[str, Any] = {}
+        for item in result.content:
+            text = getattr(item, "text", None)
+            if not isinstance(text, str):
+                continue
+            start = text.find("{")
+            if start < 0:
+                continue
+            try:
+                parsed: object = json.loads(text[start:])
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                error = cast(dict[str, Any], parsed)
+                break
+        return {"isError": True, "error": error}
     if isinstance(result.structuredContent, dict):
         return result.structuredContent
     for item in result.content:

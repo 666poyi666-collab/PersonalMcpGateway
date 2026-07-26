@@ -46,3 +46,16 @@ def test_push_uses_fixed_path_and_separate_bearer() -> None:
         "snapshots": {"foxlink_get_status": "{}"},
     }
     assert result == {"ok": True, "stored": 1}
+
+
+def test_journal_push_uses_bearer_and_entry_envelope() -> None:
+    cloud_sync = _load_cloud_sync()
+    entries = [{"sourceKey": "local:2026-07-27", "sourceRevision": 1}]
+
+    with patch.object(cloud_sync.urllib.request, "urlopen", return_value=_Response()) as send:
+        cloud_sync.push_journal("https://journal.example.test", "journal-sync", entries)
+
+    request = send.call_args.args[0]
+    assert request.full_url == "https://journal.example.test/sync/push"
+    assert request.headers["Authorization"] == "Bearer journal-sync"
+    assert json.loads(request.data) == {"source": "pc-sync", "entries": entries}
