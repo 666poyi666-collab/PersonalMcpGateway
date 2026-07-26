@@ -1,13 +1,16 @@
-# Migration From WatchIntervals
+# WatchIntervals Extraction
 
-The legacy `WatchIntervals/mcp` implementation is a migration source only. Personal MCP Gateway
-replaces its hand-written JSON-RPC HTTP surface and scheduled-task watchdog with the official SDK,
-module boundaries, SQLite state, WinSW services, and one fixed tunnel.
+WatchIntervals is intentionally not a Personal MCP Gateway module. Its API client, schemas, error
+mapping, tools, Resources, secrets, and lifecycle were moved into the independent MCP Server in the
+WatchIntervals repository.
 
-WatchIntervals remains responsible for Watch/phone applications, training state, plan and workout
-storage, route storage, system sleep access, LAN APIs, and phone-to-watch synchronization. Its phone
-API protocol v2 accepts revision-protected idempotent plan writes while preserving legacy clients.
+The resulting runtime boundary is:
 
-Do not remove legacy startup tasks or ChatGPT apps until the new gateway passes real E2E and reboot
-tests. After cutover, disable old tasks, retain rollback instructions, and remove legacy tunnel
-lifecycle code in a separate WatchIntervals commit.
+```text
+ChatGPT -> Watch Secure MCP Tunnel -> PoyiWatchMcp -> WatchIntervals phone API
+```
+
+Personal MCP Gateway does not register `watch_*` tools, publish `watch://` Resources, read a Watch
+token, discover the phone, or connect to the watch. The two products use separate ports, services,
+Tunnel IDs, Runtime Keys, data directories, logs, and ChatGPT applications. Stopping or upgrading
+one must not affect the other.

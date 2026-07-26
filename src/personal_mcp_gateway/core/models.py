@@ -34,10 +34,7 @@ class ModuleHealth(BaseModel):
     state: HealthState
     message: str | None = None
     last_success_at: str | None = Field(default=None, alias="lastSuccessAt")
-    phone: str | None = None
-    watch: str | None = None
     protocol_version: Any | None = Field(default=None, alias="protocolVersion")
-    watch_version: Any | None = Field(default=None, alias="watchVersion")
 
 
 class GatewayResult[ResultData](BaseModel):

@@ -25,4 +25,6 @@ business changes and validated by comparing tool/resource lists, Inspector outpu
 - `127.0.0.1:8760/mcp`: Streamable HTTP MCP
 - `127.0.0.1:8761`: health, metrics, and administration
 - `127.0.0.1:8877`: tunnel-client health and local UI
-- WatchIntervals phone and watch: trusted LAN HTTP with pairing authentication
+
+WatchIntervals is outside this process boundary. It owns a separate MCP Server, service, Tunnel,
+credentials, logs, and ChatGPT application.

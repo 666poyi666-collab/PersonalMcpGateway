@@ -3,8 +3,7 @@ param(
     [string]$InstallDir = "$env:ProgramFiles\Poyi\PersonalMcpGateway",
     [string]$DataDir = "$env:ProgramData\Poyi\PersonalMcpGateway",
     [string]$TunnelId,
-    [Security.SecureString]$RuntimeApiKey,
-    [Security.SecureString]$WatchPairingToken
+    [Security.SecureString]$RuntimeApiKey
 )
 
 $ErrorActionPreference = 'Stop'
@@ -140,6 +139,12 @@ Get-ChildItem -LiteralPath $resolvedSource -Force | Where-Object {
     $_.Name -notin @('.git', '.venv', '.pytest_cache', 'dist', 'build')
 } | Copy-Item -Destination $InstallDir -Recurse -Force
 
+# WatchIntervals now owns an independent MCP service. Remove files left by older upgrades.
+Remove-Item -LiteralPath (Join-Path $InstallDir 'modules\watch.yaml') `
+    -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $DataDir 'watch-token.dpapi') `
+    -Force -ErrorAction SilentlyContinue
+
 $gatewayExe = Join-Path $InstallDir 'PoyiPersonalMcpGateway.exe'
 $tunnelExe = Join-Path $InstallDir 'OpenAISecureMcpTunnel.exe'
 foreach ($service in @(
@@ -235,10 +240,6 @@ try {
     $env:UV_PYTHON_INSTALL_DIR = $previousPythonInstallDir
     $env:PYTHONNOUSERSITE = $previousNoUserSite
     Pop-Location
-}
-
-if ($null -ne $WatchPairingToken) {
-    Protect-Secret $WatchPairingToken (Join-Path $DataDir 'watch-token.dpapi')
 }
 
 if (-not [string]::IsNullOrWhiteSpace($TunnelId)) {

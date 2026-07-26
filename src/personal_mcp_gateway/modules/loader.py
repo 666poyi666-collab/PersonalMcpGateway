@@ -9,7 +9,6 @@ from personal_mcp_gateway.core.errors import GatewayError
 from personal_mcp_gateway.core.models import ExecutionMode, ModuleManifest
 from personal_mcp_gateway.core.registry import ModuleRegistry
 from personal_mcp_gateway.core.secrets import SecretStore
-from personal_mcp_gateway.modules.watch.module import WatchModule
 from personal_mcp_gateway.storage.database import Database
 
 
@@ -25,20 +24,13 @@ def load_modules(directory: Path, database: Database, secrets: SecretStore) -> M
             raw = cast(dict[str, Any], raw_value)
             manifest = ModuleManifest.model_validate(raw)
             if not manifest.enabled:
-                if manifest.id == "watch":
-                    registry.register(WatchModule(manifest, raw, database, secrets))
                 continue
             if manifest.execution_mode is not ExecutionMode.HTTP:
                 raise GatewayError(
                     "MODULE_PROTOCOL_ERROR",
                     f"Execution mode {manifest.execution_mode} is reserved but not implemented",
                 )
-            if manifest.id == "watch":
-                registry.register(WatchModule(manifest, raw, database, secrets))
-            else:
-                raise GatewayError(
-                    "MODULE_UNAVAILABLE", f"No adapter is installed for {manifest.id}"
-                )
+            raise GatewayError("MODULE_UNAVAILABLE", f"No adapter is installed for {manifest.id}")
         except GatewayError as exc:
             registry.record_load_error(path.stem, exc)
         except Exception as exc:

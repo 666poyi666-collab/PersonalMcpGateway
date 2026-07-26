@@ -1,1 +1,0 @@
-"""WatchIntervals adapter."""

@@ -11,9 +11,9 @@ uv run pytest --cov --cov-report=term-missing
 uv build
 ```
 
-Contract tests use synthetic phone/watch responses for status, plans, history, sleep, offline,
-authentication, revision conflict, sync pending, and sync verified. Fault tests cover invalid JSON,
-timeouts, mDNS misses, wrong identities, SQLite locking, process termination, and network recovery.
+Contract tests freeze the `personal_*` management surface and each installed adapter's independent
+tool namespace. They also assert that WatchIntervals tools and Resources are absent. Fault tests
+cover invalid manifests, SQLite locking, process termination, and module recovery.
 
 Release evidence must include Inspector output, Tunnel doctor output, real ChatGPT calls, Windows
 restart and sleep/wake results, 1000 status calls, 100 adapter recovery cycles, 20 restarts per

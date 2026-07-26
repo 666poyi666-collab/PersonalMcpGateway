@@ -21,7 +21,7 @@ async def test_ready_does_not_require_modules(tmp_path: Path) -> None:
         response = await client.get("/readyz")
         assert response.status_code == 200
         assert response.json() == {"gateway": "ready", "modules": {}}
-        forbidden = await client.post("/admin/modules/watch/restart")
+        forbidden = await client.post("/admin/modules/example/restart")
         assert forbidden.status_code == 403
     await runtime.stop()
 

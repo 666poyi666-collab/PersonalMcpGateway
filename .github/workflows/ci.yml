@@ -76,7 +76,11 @@ jobs:
           npx --yes @modelcontextprotocol/inspector@1.0.0 --cli \
             http://127.0.0.1:8760/mcp --transport http --method tools/list \
             | tee inspector-tools.txt
-          grep -q 'watch_set_plan' inspector-tools.txt
+          grep -q 'personal_system_status' inspector-tools.txt
+          if grep -q 'watch_' inspector-tools.txt; then
+            echo 'Watch tools must live only in the independent Watch MCP Server.' >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: inspector-evidence

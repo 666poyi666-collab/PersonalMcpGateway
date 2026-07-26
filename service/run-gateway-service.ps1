@@ -56,29 +56,11 @@ try {
         (Join-Path $sitePackages 'pythonwin')
     ) -join ';'
     $env:PATH = (Join-Path $sitePackages 'pywin32_system32') + ';' + $env:PATH
-    $keyPath = Join-Path $dataDir 'watch-token.dpapi'
-    if (-not (Test-Path -LiteralPath $keyPath)) {
-        Write-ServiceEvent 'Watch credential absent; starting gateway-only mode.' Information
-        $exitCode = Invoke-GatewayProcess $pythonExecutable $dataDir
-        if ($exitCode -ne 0) {
-            Write-ServiceEvent "Gateway process exited with code $exitCode." Error
-        }
-        exit $exitCode
+    $exitCode = Invoke-GatewayProcess $pythonExecutable $dataDir
+    if ($exitCode -ne 0) {
+        Write-ServiceEvent "Gateway process exited with code $exitCode." Error
     }
-
-    Write-ServiceEvent 'Watch credential present; decrypting for gateway process.' Information
-    $encrypted = [Convert]::FromBase64String((Get-Content -Raw -LiteralPath $keyPath).Trim())
-    $entropy = [Text.Encoding]::UTF8.GetBytes('Poyi.PersonalMcpGateway.v1')
-    $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
-        $encrypted, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-    try {
-        $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = [Text.Encoding]::UTF8.GetString($plainBytes)
-        exit (Invoke-GatewayProcess $pythonExecutable $dataDir)
-    } finally {
-        $env:PERSONAL_MCP_SECRET_WATCH_PHONE_TOKEN = $null
-        [Array]::Clear($plainBytes, 0, $plainBytes.Length)
-        [Array]::Clear($encrypted, 0, $encrypted.Length)
-    }
+    exit $exitCode
 } catch {
     $message = $_.Exception.Message `
         -replace 'sk-[A-Za-z0-9_-]+', 'sk-[REDACTED]' `

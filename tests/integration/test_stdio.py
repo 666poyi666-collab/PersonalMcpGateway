@@ -24,4 +24,4 @@ async def test_stdio_initializes_and_lists_stable_tools(tmp_path: Path) -> None:
 
     names = {tool.name for tool in response.tools}
     assert "personal_system_status" in names
-    assert "watch_set_plan" in names
+    assert all(not name.startswith("watch_") for name in names)
