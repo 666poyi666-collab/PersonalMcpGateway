@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poyi Control Center</title>
+<link rel="stylesheet" href="desktop.css">
+</head>
+<body class="booting">
+
+<header class="titlebar">
+  <div class="tb-drag pywebview-drag-region">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="brand-text">
+      <strong>POYI</strong><small>CONTROL CENTER</small>
+    </span>
+    <span class="tb-chip" id="tbChip">
+      <i class="dot" data-status="disconnected"></i>
+      <b id="tbCount">—</b>
+      <em id="tbLabel">连接中</em>
+    </span>
+  </div>
+  <div class="tb-actions">
+    <button type="button" class="tb-btn" id="btnRefresh" title="立即刷新" aria-label="立即刷新">
+      <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+    </button>
+    <button type="button" class="tb-btn" id="btnTheme" title="切换主题" aria-label="切换主题">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 5v14"/></svg>
+    </button>
+    <button type="button" class="tb-btn" id="btnTop" title="窗口置顶" aria-label="窗口置顶" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><path d="M12 19V9"/><path d="m7 12 5-5 5 5"/><path d="M6 5h12"/></svg>
+    </button>
+    <button type="button" class="tb-btn" id="btnCompact" title="紧凑模式" aria-label="紧凑模式" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/></svg>
+    </button>
+    <button type="button" class="tb-btn" id="btnMin" title="最小化" aria-label="最小化">
+      <svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg>
+    </button>
+    <button type="button" class="tb-btn danger" id="btnClose" title="隐藏到托盘（托盘菜单可退出）" aria-label="隐藏到托盘">
+      <svg viewBox="0 0 24 24"><path d="m7 7 10 10"/><path d="m17 7-10 10"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="stage">
+
+  <section class="disconnected-screen" id="offlineScreen" hidden>
+    <div class="dc-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3v6"/><path d="M5.6 8.6a9 9 0 1 0 12.8 0"/></svg>
+    </div>
+    <h1>网关未连接</h1>
+    <p>无法访问本机 Personal MCP Gateway 管理端口。看板会持续重试。</p>
+    <p class="dc-hint" id="offlineHint"></p>
+    <button type="button" class="ghost-btn" id="btnRetry">立即重试</button>
+  </section>
+
+  <div class="board" id="board">
+
+    <section class="hero-row">
+      <article class="hero-card">
+        <div class="meter" id="meter">
+          <svg viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="meter-track" cx="60" cy="60" r="52"></circle>
+            <circle class="meter-fill" id="meterFill" cx="60" cy="60" r="52"></circle>
+          </svg>
+          <div class="meter-center">
+            <strong id="heroValue">—</strong>
+            <small>在线项目</small>
+          </div>
+        </div>
+        <div class="hero-copy">
+          <p class="kicker">SYSTEM OVERVIEW</p>
+          <h1 id="heroTitle">正在读取状态</h1>
+          <p class="hero-sub" id="heroSub">连接本机 Gateway 管理端…</p>
+        </div>
+      </article>
+
+      <div class="tiles">
+        <article class="tile">
+          <span class="tile-label">24 小时调用</span>
+          <strong class="tile-value" id="tileCalls">—</strong>
+          <span class="tile-foot" id="tileCallsFoot">跨项目工具调用</span>
+        </article>
+        <article class="tile">
+          <span class="tile-label">成功率</span>
+          <strong class="tile-value" id="tileRate">—</strong>
+          <span class="tile-foot" id="tileRateFoot">失败请求 —</span>
+        </article>
+        <article class="tile">
+          <span class="tile-label">Gateway 在线</span>
+          <strong class="tile-value" id="tileUptime">—</strong>
+          <span class="tile-foot" id="tileUptimeFoot">本次运行时长</span>
+        </article>
+        <article class="tile">
+          <span class="tile-label">探测耗时</span>
+          <strong class="tile-value" id="tileProbe">—</strong>
+          <span class="tile-foot" id="tileProbeFoot">全部目标一轮</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel projects-panel">
+      <div class="panel-head">
+        <div>
+          <p class="kicker">PROJECT MATRIX</p>
+          <h2>独立项目状态</h2>
+        </div>
+        <div class="legend status-legend">
+          <span><i class="dot" data-status="online"></i>正常</span>
+          <span><i class="dot" data-status="degraded"></i>降级</span>
+          <span><i class="dot" data-status="offline"></i>离线</span>
+        </div>
+      </div>
+      <div class="project-grid" id="projectGrid"></div>
+    </section>
+
+    <section class="lower-row">
+      <section class="panel chart-panel">
+        <div class="panel-head">
+          <div>
+            <p class="kicker">ACTIVITY / 24 HOURS</p>
+            <h2>调用趋势</h2>
+          </div>
+          <div class="legend">
+            <span><i class="swatch series-calls"></i>调用</span>
+            <span><i class="swatch series-fail"></i>失败</span>
+          </div>
+        </div>
+        <figure class="chart" id="chart">
+          <div class="chart-body">
+            <div class="y-axis" id="yAxis"></div>
+            <div class="plot-area">
+              <div class="gridlines" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div class="plot" id="plot"></div>
+              <p class="plot-empty" id="plotEmpty" hidden>24 小时内暂无调用</p>
+            </div>
+          </div>
+          <figcaption class="x-axis"><span>24 小时前</span><span>现在</span></figcaption>
+        </figure>
+        <div class="chart-tooltip" id="chartTip" hidden></div>
+      </section>
+
+      <section class="panel events-panel">
+        <div class="panel-head">
+          <div>
+            <p class="kicker">EVENT CENTER</p>
+            <h2>状态与异常</h2>
+          </div>
+          <span class="count-badge" id="eventCount">0</span>
+        </div>
+        <div class="event-list" id="eventList"></div>
+      </section>
+    </section>
+  </div>
+
+  <div class="compact-board" id="compactBoard">
+    <div class="compact-hero">
+      <div class="meter compact" id="meterCompact">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="meter-track" cx="60" cy="60" r="52"></circle>
+          <circle class="meter-fill" id="meterFillCompact" cx="60" cy="60" r="52"></circle>
+        </svg>
+        <div class="meter-center">
+          <strong id="heroValueCompact">—</strong>
+          <small id="heroLabelCompact">在线</small>
+        </div>
+      </div>
+    </div>
+    <div class="compact-list" id="compactList"></div>
+    <div class="compact-foot">
+      <span><b id="compactCalls">—</b> 24h 调用</span>
+      <span><b id="compactRate">—</b> 成功率</span>
+    </div>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span class="sb-left">
+    <i class="dot" id="sbDot" data-status="disconnected"></i>
+    <span id="sbState">连接中</span>
+  </span>
+  <span class="sb-right">
+    <span id="sbSync">—</span>
+    <span class="sb-sep">·</span>
+    <span id="sbProbe">—</span>
+  </span>
+</footer>
+
+<script src="desktop.js"></script>
+</body>
+</html>

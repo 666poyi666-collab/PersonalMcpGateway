@@ -1,0 +1,321 @@
+/* Poyi Control Center — desktop shell.
+   Series and status hues are validated for both surfaces; see docs/dashboard.md.
+   Dark is the default; light is a selected set of steps, not an inverted flip. */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #080b12;
+  --surface-1: #121622;
+  --surface-2: rgba(255, 255, 255, .038);
+  --surface-3: rgba(255, 255, 255, .065);
+  --line: rgba(255, 255, 255, .075);
+  --line-bright: rgba(255, 255, 255, .145);
+  --grid: rgba(255, 255, 255, .062);
+  --baseline: rgba(255, 255, 255, .17);
+  --ink-1: #f4f5fa;
+  --ink-2: #b6bbcb;
+  --ink-3: #848a9d;
+  --ink-4: #5d6377;
+  --series-calls: #9085e9;
+  --series-calls-soft: rgba(144, 133, 233, .22);
+  --series-fail: #d03b3b;
+  --status-good: #0ca30c;
+  --status-warn: #fab219;
+  --status-crit: #d03b3b;
+  --status-idle: #898781;
+  --brand-a: #8878ff;
+  --brand-b: #35ddb4;
+  --titlebar: rgba(11, 15, 24, .92);
+  --shadow: 0 18px 44px rgba(0, 0, 0, .38);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-0: #eef0f6;
+  --surface-1: #fbfbfd;
+  --surface-2: rgba(20, 24, 40, .028);
+  --surface-3: rgba(20, 24, 40, .055);
+  --line: rgba(20, 24, 40, .09);
+  --line-bright: rgba(20, 24, 40, .17);
+  --grid: rgba(20, 24, 40, .085);
+  --baseline: rgba(20, 24, 40, .22);
+  --ink-1: #14161f;
+  --ink-2: #4b5164;
+  --ink-3: #6e7488;
+  --ink-4: #939ab0;
+  --series-calls: #4a3aa7;
+  --series-calls-soft: rgba(74, 58, 167, .16);
+  --series-fail: #d03b3b;
+  --status-good: #0ca30c;
+  --status-warn: #fab219;
+  --status-crit: #d03b3b;
+  --status-idle: #7b7a75;
+  --brand-a: #5b48d6;
+  --brand-b: #12876b;
+  --titlebar: rgba(250, 250, 253, .94);
+  --shadow: 0 16px 38px rgba(38, 43, 70, .12);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-0);
+  color: var(--ink-1);
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  letter-spacing: -.01em;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------- title bar ---------- */
+
+.titlebar {
+  flex: 0 0 auto;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 14px;
+  background: var(--titlebar);
+  border-bottom: 1px solid var(--line);
+}
+
+.tb-drag { flex: 1; height: 100%; display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.brand-mark { width: 20px; height: 20px; position: relative; flex: 0 0 auto; transform: rotate(45deg); }
+.brand-mark i { position: absolute; left: 3px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--brand-a), var(--brand-b)); }
+.brand-mark i:nth-child(1) { top: 5px; width: 7px; }
+.brand-mark i:nth-child(2) { top: 9px; width: 14px; }
+.brand-mark i:nth-child(3) { top: 13px; width: 10px; }
+
+.brand-text { display: flex; align-items: baseline; gap: 7px; flex: 0 0 auto; }
+.brand-text strong { font-size: 12px; letter-spacing: .19em; }
+.brand-text small { color: var(--ink-4); font-size: 8px; letter-spacing: .15em; }
+
+.tb-chip {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  margin-left: 4px; padding: 4px 10px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2);
+}
+.tb-chip b { font-size: 11px; font-variant-numeric: tabular-nums; }
+.tb-chip em { font-style: normal; font-size: 10px; color: var(--ink-3); white-space: nowrap; }
+
+.tb-actions { display: flex; align-items: center; gap: 2px; padding-right: 6px; }
+.tb-btn {
+  width: 34px; height: 30px; display: grid; place-items: center;
+  border: 0; border-radius: 7px; background: transparent; color: var(--ink-3); cursor: pointer;
+}
+.tb-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.tb-btn:hover { background: var(--surface-3); color: var(--ink-1); }
+.tb-btn[aria-pressed="true"] { color: var(--brand-a); background: var(--series-calls-soft); }
+.tb-btn.danger:hover { background: rgba(208, 59, 59, .16); color: var(--status-crit); }
+.tb-btn.spinning svg { animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- status dots (mark carries color, text stays ink) ---------- */
+
+/* Shape carries the state as well as hue. Any green/amber/red trio collapses under
+   deuteranopia (good vs crit is only ΔE 4.1), so no indicator is colour-alone:
+   circle = healthy, triangle = degraded, diamond = offline, square = no link. */
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--status-idle); }
+.dot[data-status="online"] { background: var(--status-good); }
+.dot[data-status="degraded"] { background: var(--status-warn); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.dot[data-status="offline"] { background: var(--status-crit); border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.dot[data-status="disconnected"] { background: var(--status-idle); border-radius: 1px; }
+
+/* ---------- stage ---------- */
+
+/* The stage scrolls by design -- panels get added over time. But at the default
+   window size the stock board must fit outright: a scrollbar that scrolls a
+   handful of pixels reads as a broken layout rather than as more content. */
+#stage { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+#stage { scrollbar-color: var(--surface-3) transparent; }
+.board { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+.compact-board { display: none; }
+body.compact .board { display: none; }
+body.compact .compact-board { display: flex; flex-direction: column; gap: 14px; padding: 18px 16px; }
+body.disconnected .board, body.disconnected .compact-board { display: none; }
+.disconnected-screen[hidden] { display: none; }
+
+.kicker { margin: 0 0 5px; color: var(--ink-4); font: 700 8px ui-monospace, monospace; letter-spacing: .17em; }
+
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.panel-head h2 { margin: 0; font-size: 14px; letter-spacing: -.02em; }
+
+/* ---------- hero ---------- */
+
+.hero-row { display: grid; grid-template-columns: minmax(280px, .95fr) minmax(0, 1.45fr); gap: 12px; }
+
+.hero-card {
+  display: flex; align-items: center; gap: 18px;
+  padding: 16px; border-radius: 14px; border: 1px solid var(--line);
+  background: var(--surface-1); box-shadow: var(--shadow);
+}
+
+.meter { position: relative; width: 108px; height: 108px; flex: 0 0 auto; }
+.meter svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.meter circle { fill: none; stroke-width: 9; }
+.meter-track { stroke: var(--surface-3); }
+.meter-fill { stroke: var(--status-idle); stroke-linecap: round; stroke-dasharray: 326.7; stroke-dashoffset: 326.7; transition: stroke-dashoffset .6s ease, stroke .3s ease; }
+.meter[data-status="online"] .meter-fill { stroke: var(--status-good); }
+.meter[data-status="degraded"] .meter-fill { stroke: var(--status-warn); }
+.meter[data-status="offline"] .meter-fill { stroke: var(--status-crit); }
+.meter-center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 2px; }
+.meter-center strong { font-size: 30px; font-weight: 650; letter-spacing: -.045em; line-height: 1; }
+.meter-center small { color: var(--ink-3); font-size: 9px; }
+
+.hero-copy { min-width: 0; }
+.hero-copy h1 { margin: 0; font-size: 21px; font-weight: 620; letter-spacing: -.035em; line-height: 1.2; }
+/* balance, not the default greedy fill: the copy column is ~273px and this line
+   wants ~280px, so greedy wrapping strands a single character on line two. */
+.hero-sub { margin: 8px 0 0; color: var(--ink-3); font-size: 11px; line-height: 1.55; text-wrap: balance; }
+
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tile {
+  display: flex; flex-direction: column; gap: 4px; justify-content: center;
+  min-height: 0; padding: 13px 15px; border-radius: 13px;
+  border: 1px solid var(--line); background: var(--surface-1); box-shadow: var(--shadow);
+}
+.tile-label { color: var(--ink-3); font-size: 10px; }
+.tile-value { font-size: 25px; font-weight: 640; letter-spacing: -.04em; line-height: 1.1; }
+.tile-foot { color: var(--ink-4); font-size: 9px; }
+
+/* ---------- project matrix ---------- */
+
+.legend { display: flex; align-items: center; gap: 13px; color: var(--ink-3); font-size: 9px; }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.legend .swatch { width: 9px; height: 9px; border-radius: 3px; flex: 0 0 auto; }
+.swatch.series-calls { background: var(--series-calls); }
+.swatch.series-fail { background: var(--series-fail); }
+
+.project-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.project-card {
+  min-width: 0; padding: 13px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.pc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pc-name { min-width: 0; }
+.pc-name strong { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-name small { color: var(--ink-4); font: 8px ui-monospace, monospace; }
+.pc-state { display: flex; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 6px; background: var(--surface-3); }
+.pc-state span { font-size: 9px; color: var(--ink-2); white-space: nowrap; }
+.pc-rows { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 7px; }
+.pc-row { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 7px; }
+.pc-row span { color: var(--ink-3); font-size: 9px; }
+.pc-row em { color: var(--ink-4); font: normal 9px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* ---------- lower row ---------- */
+
+.lower-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, .82fr); gap: 12px; }
+.chart-panel { position: relative; min-width: 0; }
+
+.chart { margin: 0; }
+.chart-body { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; }
+.y-axis { display: flex; flex-direction: column; justify-content: space-between; height: 132px; text-align: right; color: var(--ink-4); font: 9px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.plot-area { position: relative; height: 132px; border-bottom: 1px solid var(--baseline); }
+.gridlines { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.gridlines i { display: block; height: 1px; background: var(--grid); }
+.plot { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
+
+.hour { flex: 1 1 0; max-width: 24px; min-width: 3px; height: 100%; display: flex; flex-direction: column-reverse; gap: 2px; justify-content: flex-start; cursor: default; }
+.hour .seg { width: 100%; border-radius: 0; transition: height .5s ease; }
+.hour .seg.ok { background: var(--series-calls); }
+.hour .seg.fail { background: var(--series-fail); }
+.hour .seg.cap { border-radius: 4px 4px 0 0; }
+.hour .seg.zero { height: 2px; background: var(--surface-3); border-radius: 2px; }
+.hour:hover .seg.ok { background: color-mix(in srgb, var(--series-calls) 84%, white); }
+
+.plot-empty { position: absolute; inset: 0; margin: 0; display: grid; place-content: center; color: var(--ink-4); font-size: 10px; }
+.plot-empty[hidden] { display: none; }
+.x-axis { display: flex; justify-content: space-between; margin: 7px 0 0 42px; color: var(--ink-4); font: 9px ui-monospace, monospace; }
+
+.chart-tooltip {
+  position: absolute; z-index: 6; transform: translate(-50%, -100%);
+  padding: 6px 9px; border-radius: 8px; pointer-events: none;
+  background: var(--surface-0); border: 1px solid var(--line-bright);
+  color: var(--ink-1); font: 10px ui-monospace, monospace; white-space: nowrap;
+  box-shadow: var(--shadow);
+}
+.chart-tooltip[hidden] { display: none; }
+.chart-tooltip b { color: var(--ink-1); font-variant-numeric: tabular-nums; }
+
+/* ---------- events ---------- */
+
+.count-badge { min-width: 22px; height: 22px; display: grid; place-items: center; padding: 0 6px; border-radius: 7px; background: var(--surface-3); color: var(--ink-2); font: 700 10px ui-monospace, monospace; }
+.event-list { display: flex; flex-direction: column; gap: 2px; max-height: 178px; overflow-y: auto; scrollbar-width: thin; }
+.event-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 8px 2px; border-bottom: 1px solid var(--line); }
+.event-row:last-child { border-bottom: 0; }
+.event-row .dot { margin-top: 4px; }
+.event-copy { min-width: 0; }
+.event-copy strong { display: block; font-size: 11px; font-weight: 560; margin-bottom: 3px; }
+.event-copy p { margin: 0; color: var(--ink-4); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-row time { color: var(--ink-4); font: 9px ui-monospace, monospace; white-space: nowrap; }
+.empty-note { display: grid; place-content: center; min-height: 96px; border: 1px dashed var(--line); border-radius: 10px; color: var(--ink-4); font-size: 10px; }
+
+/* ---------- compact board ---------- */
+
+.compact-hero { display: grid; place-items: center; padding-top: 4px; }
+.meter.compact { width: 132px; height: 132px; }
+.meter.compact .meter-center strong { font-size: 34px; }
+.compact-list { display: flex; flex-direction: column; gap: 6px; }
+.compact-row {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-1);
+}
+.compact-row strong { font-size: 12px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-row .cr-meta { display: flex; align-items: center; gap: 7px; color: var(--ink-4); font: 9px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.compact-row .cr-meta .dot.mini { width: 7px; height: 7px; }
+.compact-foot { display: flex; justify-content: space-between; padding: 12px 4px 0; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 10px; }
+.compact-foot b { color: var(--ink-1); font-size: 13px; font-weight: 620; margin-right: 4px; }
+
+/* ---------- disconnected ---------- */
+
+.disconnected-screen { display: grid; justify-items: center; align-content: center; gap: 12px; min-height: 100%; padding: 40px 32px; text-align: center; }
+.dc-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 16px; border: 1px solid var(--line-bright); background: var(--surface-2); color: var(--status-idle); }
+.dc-icon svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.disconnected-screen h1 { margin: 0; font-size: 18px; font-weight: 620; letter-spacing: -.03em; }
+.disconnected-screen p { margin: 0; max-width: 340px; color: var(--ink-3); font-size: 11px; line-height: 1.65; }
+.dc-hint { color: var(--ink-4) !important; font: 9px ui-monospace, monospace !important; }
+.ghost-btn { margin-top: 4px; padding: 8px 18px; border-radius: 9px; border: 1px solid var(--line-bright); background: var(--surface-2); color: var(--ink-1); font-size: 11px; cursor: pointer; font-family: inherit; }
+.ghost-btn:hover { background: var(--surface-3); }
+
+/* ---------- status bar ---------- */
+
+.statusbar {
+  flex: 0 0 auto; height: 28px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; border-top: 1px solid var(--line); background: var(--titlebar);
+  color: var(--ink-4); font: 9px ui-monospace, monospace; letter-spacing: .04em;
+}
+.sb-left { display: flex; align-items: center; gap: 7px; }
+.sb-right { display: flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.sb-sep { opacity: .5; }
+
+/* ---------- narrow / compact window ---------- */
+
+@media (max-width: 960px) {
+  .hero-row { grid-template-columns: 1fr; }
+  .project-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lower-row { grid-template-columns: 1fr; }
+}
+
+body.compact .titlebar .brand-text small,
+body.compact .tb-btn#btnMin,
+body.compact .tb-btn#btnTheme { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

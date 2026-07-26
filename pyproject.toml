@@ -22,6 +22,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+desktop = [
+  "pillow>=11,<13",
+  "pystray>=0.19,<1",
+  "pywebview>=6,<7",
+]
 dev = [
   "build>=1.2,<2",
   "cyclonedx-bom>=7,<8",
@@ -36,6 +41,7 @@ dev = [
 
 [project.scripts]
 personal-mcp-gateway = "personal_mcp_gateway.main:main"
+personal-mcp-desktop = "personal_mcp_gateway.desktop.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personal_mcp_gateway"]
