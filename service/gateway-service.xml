@@ -3,7 +3,7 @@
   <name>Poyi Personal MCP Gateway</name>
   <description>Local modular MCP gateway for personal applications.</description>
   <executable>%PRIVATE_PYTHON%</executable>
-  <arguments>-s -m personal_mcp_gateway.main serve</arguments>
+  <arguments>-s -m personal_mcp_gateway.service_bootstrap serve</arguments>
   <workingdirectory>%BASE%</workingdirectory>
   <env name="PERSONAL_MCP_DATA_DIR" value="%PERSONAL_MCP_DATA_DIR%" />
   <env name="PERSONAL_MCP_MODULES_DIR" value="%BASE%\modules" />

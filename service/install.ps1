@@ -44,7 +44,11 @@ function Protect-Secret([Security.SecureString]$Secret, [string]$Destination) {
     }
 }
 
-function Set-ServiceDataDir([string]$ConfigurationPath, [string]$ResolvedDataDir) {
+function Set-ServiceDataDir(
+    [string]$ConfigurationPath,
+    [string]$ResolvedDataDir,
+    [string]$ServiceLogName
+) {
     [xml]$configuration = Get-Content -Raw -LiteralPath $ConfigurationPath
     foreach ($node in @($configuration.SelectNodes('/service/env'))) {
         if ($node.GetAttribute('name') -eq 'PERSONAL_MCP_DATA_DIR') {
@@ -53,7 +57,7 @@ function Set-ServiceDataDir([string]$ConfigurationPath, [string]$ResolvedDataDir
     }
     $logPathNode = $configuration.SelectSingleNode('/service/logpath')
     if ($null -eq $logPathNode) { throw "Missing logpath in $ConfigurationPath" }
-    $logPathNode.InnerText = Join-Path $ResolvedDataDir 'service-logs'
+    $logPathNode.InnerText = Join-Path $ResolvedDataDir "service-logs\$ServiceLogName"
     $configuration.Save($ConfigurationPath)
 
     [xml]$saved = Get-Content -Raw -LiteralPath $ConfigurationPath
@@ -73,12 +77,12 @@ function Set-GatewayRuntime([string]$ConfigurationPath, [string]$PythonExecutabl
         throw "Missing executable or arguments in $ConfigurationPath"
     }
     $executableNode.InnerText = $PythonExecutable
-    $argumentsNode.InnerText = '-s -m personal_mcp_gateway.main serve'
+    $argumentsNode.InnerText = '-s -m personal_mcp_gateway.service_bootstrap serve'
     $configuration.Save($ConfigurationPath)
 
     [xml]$saved = Get-Content -Raw -LiteralPath $ConfigurationPath
     if ($saved.service.executable -ne $PythonExecutable -or
-        $saved.service.arguments -ne '-s -m personal_mcp_gateway.main serve') {
+        $saved.service.arguments -ne '-s -m personal_mcp_gateway.service_bootstrap serve') {
         throw "Failed to set the private Python runtime in $ConfigurationPath"
     }
 }
@@ -128,9 +132,9 @@ try {
     Copy-Item (Join-Path $InstallDir 'service\tunnel-service.xml') `
         (Join-Path $InstallDir 'OpenAISecureMcpTunnel.xml') -Force
     Set-ServiceDataDir (Join-Path $InstallDir 'PoyiPersonalMcpGateway.xml') `
-        ([IO.Path]::GetFullPath($DataDir))
+        ([IO.Path]::GetFullPath($DataDir)) 'gateway'
     Set-ServiceDataDir (Join-Path $InstallDir 'OpenAISecureMcpTunnel.xml') `
-        ([IO.Path]::GetFullPath($DataDir))
+        ([IO.Path]::GetFullPath($DataDir)) 'tunnel'
 
     $tunnelZip = Join-Path $downloadDir 'tunnel-client.zip'
     Get-VerifiedDownload $dependencies.tunnelClient.url $dependencies.tunnelClient.sha256 $tunnelZip
@@ -218,15 +222,23 @@ $tunnelSid = 'NT SERVICE\OpenAISecureMcpTunnel'
 if ($LASTEXITCODE -ne 0) { throw 'Failed to grant service read access to the install directory.' }
 $gatewayLogDir = Join-Path $DataDir 'logs'
 $serviceLogDir = Join-Path $DataDir 'service-logs'
+$gatewayServiceLogDir = Join-Path $serviceLogDir 'gateway'
+$tunnelServiceLogDir = Join-Path $serviceLogDir 'tunnel'
 $tunnelLogDir = Join-Path $DataDir 'tunnel-logs'
-New-Item -ItemType Directory -Path $gatewayLogDir, $serviceLogDir, $tunnelLogDir -Force |
-    Out-Null
+New-Item -ItemType Directory -Path $gatewayLogDir, $gatewayServiceLogDir, `
+    $tunnelServiceLogDir, $tunnelLogDir -Force | Out-Null
 & icacls $DataDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
     "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(RX)" | Out-Null
 & icacls $gatewayLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
     "$gatewaySid`:(OI)(CI)M" /T | Out-Null
-& icacls $serviceLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
-    "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(OI)(CI)M" /T | Out-Null
+& icacls $serviceLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' |
+    Out-Null
+& icacls $gatewayServiceLogDir /inheritance:r `
+    /grant:r 'BUILTIN\Administrators:(OI)(CI)F' "$gatewaySid`:(OI)(CI)M" /T |
+    Out-Null
+& icacls $tunnelServiceLogDir /inheritance:r `
+    /grant:r 'BUILTIN\Administrators:(OI)(CI)F' "$tunnelSid`:(OI)(CI)M" /T |
+    Out-Null
 & icacls $tunnelLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
     "$tunnelSid`:(OI)(CI)M" /T | Out-Null
 foreach ($name in @('gateway.db', 'gateway.db-wal', 'gateway.db-shm',
