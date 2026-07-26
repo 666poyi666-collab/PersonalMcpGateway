@@ -1,0 +1,19 @@
+<service>
+  <id>PoyiFleetWatchdog</id>
+  <name>Poyi Fleet Watchdog</name>
+  <description>Health-probe based self-healing for all Poyi MCP services and tunnels.</description>
+  <executable>powershell.exe</executable>
+  <arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BASE%\watchdog.ps1"</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <startmode>Automatic</startmode>
+  <stoptimeout>15sec</stoptimeout>
+  <onfailure action="restart" delay="5 sec" />
+  <onfailure action="restart" delay="15 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <logpath>C:\ProgramData\Poyi\FleetWatchdog\service-logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>2048</sizeThreshold>
+    <keepFiles>3</keepFiles>
+  </log>
+</service>

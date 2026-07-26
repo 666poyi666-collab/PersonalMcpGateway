@@ -70,7 +70,7 @@ DEFAULT_TARGETS = (
         accent="#2dd4bf",
         health_url="http://127.0.0.1:8768/healthz",
         ready_url="http://127.0.0.1:8768/readyz",
-        tunnel_ready_url="http://127.0.0.1:8878/readyz",
+        tunnel_ready_url="http://127.0.0.1:8880/readyz",
     ),
     DashboardTarget(
         id="foxlink",
@@ -80,7 +80,7 @@ DEFAULT_TARGETS = (
         accent="#fb923c",
         health_url="http://127.0.0.1:8770/healthz",
         ready_url="http://127.0.0.1:8770/readyz",
-        tunnel_ready_url="http://127.0.0.1:8887/readyz",
+        tunnel_ready_url="http://127.0.0.1:8878/readyz",
     ),
     DashboardTarget(
         id="journal",
@@ -90,7 +90,7 @@ DEFAULT_TARGETS = (
         accent="#f472b6",
         health_url="http://127.0.0.1:8780/healthz",
         ready_url="http://127.0.0.1:8780/readyz",
-        tunnel_ready_url="http://127.0.0.1:8880/readyz",
+        tunnel_ready_url="http://127.0.0.1:8887/readyz",
     ),
 )
 

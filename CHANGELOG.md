@@ -2,6 +2,14 @@
 
 ## 0.1.0-dev
 
+- Add the fleet reliability layer under `fleet/`: the PoyiFleetWatchdog Windows service
+  health-probes all four projects (MCP + tunnel), starts stopped services, force-restarts
+  degraded ones with cooldown and hourly caps, and re-applies the ProgramData ACL baseline
+  at every boot; `Repair-PoyiFleet.cmd` (one-click elevated repair) and
+  `Status-PoyiFleet.cmd` (no-elevation status table) ship alongside, plus
+  `docs/fleet-operations.md` and `BUG_CATALOG.md` (BUG-001..003).
+- Fix the dashboard default tunnel readiness ports for Watch (8880), Foxlink (8878) and
+  Journal (8887), which were shuffled across the three projects (BUG-001).
 - Establish the independent Personal MCP Gateway repository.
 - Add the `mcp` widget type: the board calls read-only tools on each project's own loopback MCP
   (Foxlink focus totals, watch workout and sleep summaries, journal counts and recent titles) with

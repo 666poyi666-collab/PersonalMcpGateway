@@ -1,0 +1,74 @@
+{
+  "loopSeconds": 30,
+  "bootGraceSeconds": 180,
+  "mcpFailThreshold": 4,
+  "tunnelFailThreshold": 10,
+  "restartCooldownSeconds": 600,
+  "maxRestartsPerHour": 5,
+  "backoffSeconds": 1800,
+  "probeTimeoutSeconds": 5,
+  "projects": [
+    {
+      "id": "personal",
+      "name": "Personal Gateway",
+      "dataDir": "C:\\ProgramData\\Poyi\\PersonalMcpGateway",
+      "grantModify": [
+        "NT SERVICE\\PoyiPersonalMcpGateway",
+        "NT SERVICE\\OpenAISecureMcpTunnel"
+      ],
+      "mcp": {
+        "service": "PoyiPersonalMcpGateway",
+        "health": "http://127.0.0.1:8761/healthz"
+      },
+      "tunnel": {
+        "service": "OpenAISecureMcpTunnel",
+        "ready": "http://127.0.0.1:8877/readyz"
+      }
+    },
+    {
+      "id": "watch",
+      "name": "Watch MCP",
+      "dataDir": "C:\\ProgramData\\Poyi\\WatchMcp",
+      "grantModify": [],
+      "mcp": {
+        "service": "PoyiWatchMcp",
+        "health": "http://127.0.0.1:8768/healthz"
+      },
+      "tunnel": {
+        "service": "PoyiWatchTunnel",
+        "ready": "http://127.0.0.1:8880/readyz"
+      }
+    },
+    {
+      "id": "foxlink",
+      "name": "Foxlink MCP",
+      "dataDir": "C:\\ProgramData\\Poyi\\FoxlinkMcp",
+      "grantModify": [],
+      "mcp": {
+        "service": "PoyiFoxlinkMcp",
+        "health": "http://127.0.0.1:8770/healthz"
+      },
+      "tunnel": {
+        "service": "FoxlinkSecureMcpTunnel",
+        "ready": "http://127.0.0.1:8878/readyz"
+      }
+    },
+    {
+      "id": "journal",
+      "name": "Journal MCP",
+      "dataDir": "C:\\ProgramData\\Poyi\\JournalMcp",
+      "grantModify": [
+        "NT SERVICE\\PoyiJournalMcp",
+        "NT SERVICE\\PoyiJournalTunnel"
+      ],
+      "mcp": {
+        "service": "PoyiJournalMcp",
+        "health": "http://127.0.0.1:8780/healthz"
+      },
+      "tunnel": {
+        "service": "PoyiJournalTunnel",
+        "ready": "http://127.0.0.1:8887/readyz"
+      }
+    }
+  ]
+}

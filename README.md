@@ -24,6 +24,10 @@ operation. Each application remains the source of truth for its own business dat
 3. 想要桌面窗口就双击 `desktop\Install-PersonalMcpDesktop.cmd`（无需管理员权限），
    之后从桌面快捷方式「Poyi Control Center」启动。
 
+保活与自愈：全部 4 个项目共 8 个 Windows 服务由 `fleet\` 的 **PoyiFleetWatchdog** 统一看护
+（开机自启、崩溃重启、降级自动恢复）。出问题双击 `fleet\Repair-PoyiFleet.cmd` 一键修复，
+`fleet\Status-PoyiFleet.cmd` 随时体检，详见 [docs/fleet-operations.md](docs/fleet-operations.md)。
+
 Everything runs on this machine and listens on loopback only; nothing is exposed to the
 network except the outbound Secure MCP Tunnel.
 
