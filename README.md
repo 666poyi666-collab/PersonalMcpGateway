@@ -20,6 +20,7 @@ Endpoints:
 
 - MCP: `http://127.0.0.1:8760/mcp`
 - Health and administration: `http://127.0.0.1:8761`
+- Real-time dashboard: `http://127.0.0.1:8761/admin/status`
 
 Configuration examples are in `modules/`. Never commit application tokens, device IDs, tunnel
 IDs, network addresses, personal content, or runtime logs. WatchIntervals runs its own independent

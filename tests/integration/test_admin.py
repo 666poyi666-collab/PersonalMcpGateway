@@ -37,7 +37,20 @@ async def test_admin_endpoints_authorization_and_bundle(tmp_path: Path) -> None:
         assert (await client.get("/healthz")).json()["gateway"] == "alive"
         assert "personal_mcp_ready 1" in (await client.get("/metrics")).text
         html = await client.get("/admin/status", headers={"accept": "text/html"})
-        assert html.status_code == 200 and "<h1>" in html.text
+        assert html.status_code == 200 and "所有系统" in html.text
+        assert "Content-Security-Policy" in html.headers
+        dashboard = await client.get("/admin/dashboard-data")
+        assert dashboard.status_code == 200
+        snapshot = dashboard.json()
+        assert snapshot["refreshIntervalSeconds"] == 4
+        assert snapshot["summary"]["total"] == 4
+        assert snapshot["targets"][0]["id"] == "personal"
+        assert len(snapshot["activity"]["hourly"]) == 24
+        stylesheet = await client.get("/admin/assets/dashboard.css")
+        script = await client.get("/admin/assets/dashboard.js")
+        assert stylesheet.status_code == 200 and "project-grid" in stylesheet.text
+        assert script.status_code == 200 and "dashboard-data" in script.text
+        assert (await client.get("/admin/assets/private.txt")).status_code == 404
         assert (await client.get("/admin/modules")).json() == {"modules": []}
         assert (await client.get("/admin/errors?limit=1")).json() == {"errors": []}
 

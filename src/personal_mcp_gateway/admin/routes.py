@@ -1,20 +1,47 @@
 from __future__ import annotations
 
 import hmac
-import html
 import json
+from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from starlette.routing import Route
 
+from personal_mcp_gateway.admin.dashboard import DashboardMonitor
 from personal_mcp_gateway.admin.support_bundle import create_support_bundle
 from personal_mcp_gateway.core.errors import GatewayError
 from personal_mcp_gateway.core.runtime import GatewayRuntime
 
+STATIC_ROOT = Path(__file__).with_name("static")
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'",
+        )
+        return response
+
 
 def build_admin_app(runtime: GatewayRuntime) -> Starlette:
+    dashboard = DashboardMonitor(runtime)
+
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"gateway": "alive", "version": runtime.settings.version})
 
@@ -40,19 +67,27 @@ def build_admin_app(runtime: GatewayRuntime) -> Starlette:
             media_type="text/plain; version=0.0.4",
         )
 
-    async def status(request: Request) -> JSONResponse | HTMLResponse:
+    async def status(request: Request) -> Response:
         value = await runtime.system_status()
         if "text/html" in request.headers.get("accept", ""):
-            body = html.escape(json.dumps(value, ensure_ascii=False, indent=2))
-            return HTMLResponse(
-                "<!doctype html><meta charset=utf-8><title>Personal MCP Gateway</title>"
-                "<style>body{font:14px ui-monospace,monospace;max-width:960px;margin:32px auto;"
-                "padding:0 16px;color:#202124}pre{white-space:pre-wrap;"
-                "background:#f5f6f7;padding:16px;"
-                "border:1px solid #d8dadd;border-radius:6px}</style>"
-                f"<h1>Personal MCP Gateway</h1><pre>{body}</pre>"
-            )
+            return FileResponse(STATIC_ROOT / "dashboard.html", media_type="text/html")
         return JSONResponse(value)
+
+    async def dashboard_data(_: Request) -> JSONResponse:
+        return JSONResponse(
+            await dashboard.snapshot(),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def dashboard_asset(request: Request) -> FileResponse | JSONResponse:
+        name = request.path_params["name"]
+        if name not in {"dashboard.css", "dashboard.js"}:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        media_type = "text/css" if name.endswith(".css") else "text/javascript"
+        return FileResponse(STATIC_ROOT / name, media_type=media_type)
+
+    async def root(_: Request) -> RedirectResponse:
+        return RedirectResponse("/admin/status", status_code=307)
 
     async def modules(_: Request) -> JSONResponse:
         return JSONResponse(
@@ -100,15 +135,19 @@ def build_admin_app(runtime: GatewayRuntime) -> Starlette:
 
     return Starlette(
         routes=[
+            Route("/", root),
             Route("/healthz", health),
             Route("/readyz", ready),
             Route("/metrics", metrics),
             Route("/admin/status", status),
+            Route("/admin/dashboard-data", dashboard_data),
+            Route("/admin/assets/{name:str}", dashboard_asset),
             Route("/admin/modules", modules),
             Route("/admin/errors", errors),
             Route("/admin/modules/{id:str}/restart", restart_module, methods=["POST"]),
             Route("/admin/support-bundle", support_bundle),
-        ]
+        ],
+        middleware=[Middleware(SecurityHeadersMiddleware)],
     )
 
 

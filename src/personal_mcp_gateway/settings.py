@@ -33,3 +33,7 @@ class Settings(BaseSettings):
     @property
     def log_path(self) -> Path:
         return self.data_dir / "logs" / "gateway.jsonl"
+
+    @property
+    def dashboard_targets_path(self) -> Path:
+        return self.data_dir / "dashboard-targets.yaml"

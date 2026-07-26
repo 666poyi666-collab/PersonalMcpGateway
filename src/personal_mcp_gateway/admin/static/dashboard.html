@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Poyi Control Center</title>
+  <link rel="stylesheet" href="/admin/assets/dashboard.css">
+  <script src="/admin/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <aside class="sidebar">
+    <a class="brand" href="/admin/status" aria-label="Poyi Control Center">
+      <span class="brand-mark"><i></i><i></i><i></i></span>
+      <span><strong>POYI</strong><small>CONTROL CENTER</small></span>
+    </a>
+    <nav aria-label="主导航">
+      <a class="nav-item active" href="#overview">
+        <span class="nav-icon">⌁</span><span>系统总览</span>
+      </a>
+      <a class="nav-item" href="#projects">
+        <span class="nav-icon">◇</span><span>项目矩阵</span>
+      </a>
+      <a class="nav-item" href="#activity">
+        <span class="nav-icon">↗</span><span>调用活动</span>
+      </a>
+      <a class="nav-item" href="#events">
+        <span class="nav-icon">!</span><span>事件中心</span>
+      </a>
+    </nav>
+    <div class="sidebar-status">
+      <span class="live-dot"></span>
+      <div><strong>本地实时监控</strong><small>仅监听 loopback</small></div>
+    </div>
+    <div class="sidebar-foot">PERSONAL INFRASTRUCTURE<br><span id="versionLabel">v—</span></div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div class="mobile-brand">POYI <span>CONTROL</span></div>
+      <div class="topbar-actions">
+        <div class="sync-state" id="syncState"><span></span><b>实时连接</b></div>
+        <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题">◐</button>
+        <div class="clock"><strong id="clockTime">--:--</strong><small id="clockDate">----</small></div>
+      </div>
+    </header>
+
+    <div class="content">
+      <section class="hero" id="overview">
+        <div>
+          <p class="eyebrow">PERSONAL INFRASTRUCTURE / LIVE</p>
+          <h1>所有系统，<span>一眼掌握。</span></h1>
+          <p class="hero-copy">集中观察每个独立 MCP 项目、Secure Tunnel 与实时调用状态。</p>
+        </div>
+        <div class="hero-orbit" aria-hidden="true">
+          <div class="orbit-ring ring-a"></div><div class="orbit-ring ring-b"></div>
+          <div class="orbit-core"><span></span></div>
+        </div>
+      </section>
+
+      <section class="kpi-grid" aria-label="关键指标">
+        <article class="kpi-card primary">
+          <div class="kpi-head"><span>运行中项目</span><i class="trend positive">LIVE</i></div>
+          <strong id="onlineCount">—</strong><small id="onlineSub">正在获取状态</small>
+          <div class="mini-track"><span id="onlineTrack"></span></div>
+        </article>
+        <article class="kpi-card">
+          <div class="kpi-head"><span>24H 调用</span><i class="metric-icon">↗</i></div>
+          <strong id="callsCount">—</strong><small>跨项目工具调用</small>
+        </article>
+        <article class="kpi-card">
+          <div class="kpi-head"><span>成功率</span><i class="metric-icon mint">✓</i></div>
+          <strong id="successRate">—</strong><small id="failureSub">失败请求 —</small>
+        </article>
+        <article class="kpi-card">
+          <div class="kpi-head"><span>Gateway 在线</span><i class="metric-icon violet">⌁</i></div>
+          <strong id="uptime">—</strong><small id="lastUpdated">等待首次同步</small>
+        </article>
+      </section>
+
+      <section class="panel projects-panel" id="projects">
+        <div class="panel-head">
+          <div><p class="section-kicker">PROJECT MATRIX</p><h2>独立项目状态</h2></div>
+          <div class="legend"><span><i class="online"></i>正常</span><span><i class="degraded"></i>注意</span><span><i class="offline"></i>离线</span></div>
+        </div>
+        <div class="project-grid" id="projectGrid">
+          <div class="project-skeleton"></div><div class="project-skeleton"></div>
+          <div class="project-skeleton"></div><div class="project-skeleton"></div>
+        </div>
+      </section>
+
+      <div class="dashboard-grid">
+        <section class="panel chart-panel" id="activity">
+          <div class="panel-head compact">
+            <div><p class="section-kicker">ACTIVITY / 24 HOURS</p><h2>调用趋势</h2></div>
+            <span class="quiet-label">按小时聚合</span>
+          </div>
+          <div class="chart-summary"><strong id="chartTotal">0</strong><span>次调用</span></div>
+          <div class="bar-chart" id="activityChart" aria-label="24小时调用趋势"></div>
+          <div class="chart-axis"><span>24 小时前</span><span>现在</span></div>
+        </section>
+
+        <section class="panel activity-panel">
+          <div class="panel-head compact">
+            <div><p class="section-kicker">RECENT CALLS</p><h2>最近调用</h2></div>
+            <span class="pulse-label"><i></i>实时</span>
+          </div>
+          <div class="activity-list" id="activityList">
+            <div class="empty-state">暂无调用记录</div>
+          </div>
+        </section>
+
+        <section class="panel events-panel" id="events">
+          <div class="panel-head compact">
+            <div><p class="section-kicker">EVENT CENTER</p><h2>最近异常</h2></div>
+            <span class="count-badge" id="errorCount">0</span>
+          </div>
+          <div class="event-list" id="eventList">
+            <div class="empty-state good">当前没有异常</div>
+          </div>
+        </section>
+
+        <section class="panel extension-panel">
+          <div class="extension-icon">＋</div>
+          <div><p class="section-kicker">EXTENSIBLE BY DESIGN</p><h2>添加下一个监控目标</h2>
+            <p>在 ProgramData 的 <code>dashboard-targets.yaml</code> 中添加 loopback health 与 ready 地址，刷新后自动出现。</p>
+          </div>
+          <span class="extension-arrow">→</span>
+        </section>
+      </div>
+      <footer><span>POYI CONTROL CENTER</span><span>数据每 4 秒自动刷新 · <b id="footerState">CONNECTING</b></span></footer>
+    </div>
+  </main>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

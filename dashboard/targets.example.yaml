@@ -1,0 +1,12 @@
+# Copy to %ProgramData%\Poyi\PersonalMcpGateway\dashboard-targets.yaml.
+# An entry with an existing id overrides its default. enabled: false hides a default target.
+targets:
+  - id: example
+    name: Example MCP
+    description: Another independent local MCP project
+    icon: service
+    accent: "#60a5fa"
+    health_url: http://127.0.0.1:8790/healthz
+    ready_url: http://127.0.0.1:8790/readyz
+    tunnel_ready_url: http://127.0.0.1:8890/readyz
+    enabled: true
