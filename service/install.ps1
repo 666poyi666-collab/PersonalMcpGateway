@@ -213,6 +213,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Tunnel service installation failed.' }
 
 $gatewaySid = 'NT SERVICE\PoyiPersonalMcpGateway'
 $tunnelSid = 'NT SERVICE\OpenAISecureMcpTunnel'
+& icacls $InstallDir /grant:r "$gatewaySid`:(OI)(CI)RX" "$tunnelSid`:(OI)(CI)RX" `
+    /T /C | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Failed to grant service read access to the install directory.' }
 $gatewayLogDir = Join-Path $DataDir 'logs'
 $serviceLogDir = Join-Path $DataDir 'service-logs'
 $tunnelLogDir = Join-Path $DataDir 'tunnel-logs'
