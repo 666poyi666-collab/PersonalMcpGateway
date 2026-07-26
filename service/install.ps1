@@ -87,6 +87,45 @@ function Set-GatewayRuntime([string]$ConfigurationPath, [string]$PythonExecutabl
     }
 }
 
+function Stop-InstalledListenerProcesses([string]$ResolvedInstallDir) {
+    $installPrefix = [IO.Path]::GetFullPath($ResolvedInstallDir).TrimEnd('\') + '\'
+    $processIds = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -in @(8760, 8761, 8877) } |
+        Select-Object -ExpandProperty OwningProcess -Unique)
+    foreach ($processId in $processIds) {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $process -or [string]::IsNullOrWhiteSpace($process.ExecutablePath)) {
+            continue
+        }
+        $executable = [IO.Path]::GetFullPath($process.ExecutablePath)
+        if ($executable.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            Stop-Process -Id $processId -Force -ErrorAction Stop
+        }
+    }
+}
+
+function Wait-ServiceRunning([string]$Name, [int]$TimeoutSeconds = 30) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+        if ($null -ne $service -and $service.Status -eq 'Running') { return }
+        Start-Sleep -Milliseconds 500
+    } until ((Get-Date) -ge $deadline)
+    throw "Service $Name did not remain running within $TimeoutSeconds seconds."
+}
+
+function Wait-ReadyEndpoint([string]$Uri, [string]$Name, [int]$TimeoutSeconds = 45) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        try { $response = Invoke-RestMethod $Uri -TimeoutSec 2 }
+        catch { $response = $null }
+        if ($null -ne $response) { return }
+        Start-Sleep -Milliseconds 500
+    } until ((Get-Date) -ge $deadline)
+    throw "$Name did not become ready within $TimeoutSeconds seconds."
+}
+
 Assert-Administrator
 Add-Type -AssemblyName System.Security
 $sourceRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -117,6 +156,7 @@ foreach ($service in @(
         if ($LASTEXITCODE -ne 0) { throw "Failed to uninstall service $($service.Name)." }
     }
 }
+Stop-InstalledListenerProcesses $InstallDir
 
 $dependencies = Get-Content -Raw -LiteralPath (Join-Path $InstallDir 'service\dependencies.json') |
     ConvertFrom-Json
@@ -269,13 +309,15 @@ foreach ($name in @('gateway.db', 'gateway.db-wal', 'gateway.db-shm',
     /grant:r 'BUILTIN\Administrators:F' "$tunnelSid`:R" 2>$null | Out-Null
 
 & $gatewayExe start
-$deadline = (Get-Date).AddSeconds(45)
-do {
-    Start-Sleep -Milliseconds 500
-    try { $ready = Invoke-RestMethod 'http://127.0.0.1:8761/readyz' -TimeoutSec 2 }
-    catch { $ready = $null }
-} until ($null -ne $ready -or (Get-Date) -ge $deadline)
-if ($null -eq $ready) { throw 'Gateway did not become ready within 45 seconds.' }
-if (Test-Path -LiteralPath (Join-Path $DataDir 'runtime-key.dpapi')) { & $tunnelExe start }
+Wait-ServiceRunning 'PoyiPersonalMcpGateway'
+Wait-ReadyEndpoint 'http://127.0.0.1:8761/healthz' 'Gateway health endpoint'
+Wait-ReadyEndpoint 'http://127.0.0.1:8761/readyz' 'Gateway readiness endpoint'
+if (Test-Path -LiteralPath (Join-Path $DataDir 'runtime-key.dpapi')) {
+    & $tunnelExe start
+    Wait-ServiceRunning 'OpenAISecureMcpTunnel'
+    Wait-ReadyEndpoint 'http://127.0.0.1:8877/readyz' 'Tunnel readiness endpoint'
+    Start-Sleep -Seconds 3
+    Wait-ServiceRunning 'OpenAISecureMcpTunnel' 5
+}
 
 Write-Host "Installed Personal MCP Gateway in $InstallDir" -ForegroundColor Green

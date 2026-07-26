@@ -11,6 +11,14 @@ function Write-TunnelEvent([string]$Message, [Diagnostics.EventLogEntryType]$Typ
     }
 }
 
+function Get-RedactedText([string]$Text) {
+    return $Text `
+        -replace 'sk-[A-Za-z0-9_-]+', 'sk-[REDACTED]' `
+        -replace 'tunnel_[A-Za-z0-9_-]+', 'tunnel_[REDACTED]' `
+        -replace '(?i)(api[_-]?key["'' :=]+)[^,"'' ]+', '$1[REDACTED]' `
+        -replace '\b(?:\d{1,3}\.){3}\d{1,3}\b', '[REDACTED_IP]'
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 try {
     Write-TunnelEvent 'Tunnel service script started.' Information
@@ -44,13 +52,24 @@ try {
             -Filter 'tunnel-client.exe' -Recurse | Select-Object -First 1
         if ($null -eq $client) { throw 'tunnel-client.exe is missing.' }
         Write-TunnelEvent 'Tunnel client process is starting.' Information
-        & $client.FullName run --control-plane.tunnel-id $tunnelId `
-            --mcp.server-url 'url=http://127.0.0.1:8760/mcp,channel=main' `
-            --health.listen-addr '127.0.0.1:8877' --log.format json `
-            --log.file (Join-Path $dataDir 'tunnel-logs\tunnel.jsonl')
-        $exitCode = $LASTEXITCODE
+        $outputTail = [Collections.Generic.Queue[string]]::new()
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $client.FullName run --control-plane.tunnel-id $tunnelId `
+                --mcp.server-url 'url=http://127.0.0.1:8760/mcp,channel=main' `
+                --health.listen-addr '127.0.0.1:8877' --log.format json 2>&1 |
+                ForEach-Object {
+                    $outputTail.Enqueue((Get-RedactedText ([string]$_)))
+                    if ($outputTail.Count -gt 12) { [void]$outputTail.Dequeue() }
+                }
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
         if ($exitCode -ne 0) {
-            Write-TunnelEvent "Tunnel client exited with code $exitCode." Error
+            $detail = Get-RedactedText ($outputTail.ToArray() -join [Environment]::NewLine)
+            Write-TunnelEvent "Tunnel client exited with code $exitCode.`n$detail" Error
         }
         exit $exitCode
     } finally {
@@ -59,10 +78,7 @@ try {
         [Array]::Clear($encrypted, 0, $encrypted.Length)
     }
 } catch {
-    $message = $_.Exception.Message `
-        -replace 'sk-[A-Za-z0-9_-]+', 'sk-[REDACTED]' `
-        -replace 'tunnel_[A-Za-z0-9_-]+', 'tunnel_[REDACTED]' `
-        -replace '\b(?:\d{1,3}\.){3}\d{1,3}\b', '[REDACTED_IP]'
+    $message = Get-RedactedText $_.Exception.Message
     Write-TunnelEvent ("Tunnel service script failed: " + $message) Error
     throw
 }

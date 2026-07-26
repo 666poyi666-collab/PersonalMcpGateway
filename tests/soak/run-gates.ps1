@@ -14,9 +14,27 @@ $path = Join-Path $EvidenceDir "$Gate.json"
 $started = [DateTimeOffset]::UtcNow
 $checks = 0
 
-function Test-Ready {
-    $response = Invoke-RestMethod "$AdminBaseUrl/readyz" -TimeoutSec 5
-    if ($response.gateway -ne 'ready') { throw 'Gateway is not ready.' }
+function Wait-Endpoint([string]$Uri, [string]$Name, [int]$TimeoutSeconds = 45) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        try { $response = Invoke-RestMethod $Uri -TimeoutSec 3 }
+        catch { $response = $null }
+        if ($null -ne $response) { return $response }
+        Start-Sleep -Milliseconds 500
+    } until ((Get-Date) -ge $deadline)
+    throw "$Name did not become ready within $TimeoutSeconds seconds."
+}
+
+function Test-GatewayReady {
+    $response = Wait-Endpoint "$AdminBaseUrl/readyz" 'Gateway'
+    if ($response.gateway -ne 'ready') { throw 'Gateway returned a non-ready response.' }
+    $script:checks++
+}
+
+function Test-TunnelReady {
+    [void](Wait-Endpoint 'http://127.0.0.1:8877/readyz' 'Tunnel')
+    $service = Get-Service OpenAISecureMcpTunnel
+    if ($service.Status -ne 'Running') { throw 'Tunnel service is not running.' }
     $script:checks++
 }
 
@@ -33,18 +51,28 @@ function Write-Evidence([string]$Status, [string]$Message) {
 
 try {
     switch ($Gate) {
-        'status-1000' { 1..1000 | ForEach-Object { Test-Ready } }
-        'recovery-100' { 1..100 | ForEach-Object { Test-Ready; Start-Sleep -Milliseconds 100 } }
+        'status-1000' { 1..1000 | ForEach-Object { Test-GatewayReady } }
+        'recovery-100' { 1..100 | ForEach-Object { Test-GatewayReady; Start-Sleep -Milliseconds 100 } }
         'gateway-restart-20' {
-            1..20 | ForEach-Object { Restart-Service PoyiPersonalMcpGateway; Test-Ready }
+            1..20 | ForEach-Object {
+                Stop-Service OpenAISecureMcpTunnel
+                Restart-Service PoyiPersonalMcpGateway
+                Start-Service OpenAISecureMcpTunnel
+                Test-GatewayReady
+                Test-TunnelReady
+            }
         }
         'tunnel-restart-20' {
-            1..20 | ForEach-Object { Restart-Service OpenAISecureMcpTunnel; Test-Ready }
+            1..20 | ForEach-Object {
+                Restart-Service OpenAISecureMcpTunnel
+                Test-TunnelReady
+                Test-GatewayReady
+            }
         }
         'active-24h' {
             $deadline = $started.AddHours(24)
             while ([DateTimeOffset]::UtcNow -lt $deadline) {
-                Test-Ready
+                Test-GatewayReady
                 Write-Evidence 'running' 'Active gate has not reached 24 hours.'
                 Start-Sleep -Seconds 60
             }
@@ -52,7 +80,7 @@ try {
         'idle-72h' {
             $deadline = $started.AddHours(72)
             while ([DateTimeOffset]::UtcNow -lt $deadline) {
-                Test-Ready
+                Test-GatewayReady
                 Write-Evidence 'running' 'Idle gate has not reached 72 hours.'
                 Start-Sleep -Seconds 900
             }

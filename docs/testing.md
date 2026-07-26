@@ -23,3 +23,6 @@ or sleeping test cannot be reported as passing.
 Run each durable gate explicitly with `tests/soak/run-gates.ps1 -Gate <name>`. Evidence is written
 under `evidence/`; active and idle gates remain `running` until the full wall-clock duration has
 elapsed. The `evidence/` directory is local-only and must never be committed.
+
+On Windows, `service\Verify-PersonalMcpGateway.cmd` runs both 20-restart gates, the redacted Tunnel
+doctor, and final service account, startup mode, health, and readiness checks with one UAC prompt.
