@@ -1,0 +1,64 @@
+# 本机实际部署的看板数据卡（部署到 %ProgramData%\Poyi\PersonalMcpGateway\board-widgets.yaml）。
+# 每张 mcp 卡调用的就是 ChatGPT 用的同一批只读工具；改文件即生效，无需重启。
+widgets:
+  - id: focus_today
+    type: mcp
+    title: 今日专注
+    group: FocusLink
+    flavor: instrument
+    accent: "#007A55"
+    options:
+      url: http://127.0.0.1:8770/mcp
+      tool: foxlink_get_today_summary
+
+  - id: watch_workouts
+    type: mcp
+    title: 训练汇总
+    group: 步序 · 间歇跑
+    flavor: sport
+    accent: "#B6FF39"
+    options:
+      url: http://127.0.0.1:8768/mcp
+      tool: watch_summarize_workouts
+
+  - id: watch_sleep
+    type: mcp
+    title: 最近睡眠
+    group: 步序 · 间歇跑
+    flavor: sport
+    accent: "#B6FF39"
+    options:
+      url: http://127.0.0.1:8768/mcp
+      tool: watch_get_latest_sleep
+
+  - id: journal_recent
+    type: mcp
+    title: 最近日记
+    group: 拾光日记
+    flavor: paper
+    accent: "#A85F27"
+    options:
+      url: http://127.0.0.1:8780/mcp
+      tool: journal_list_recent
+
+  - id: journal_count
+    type: mcp
+    title: 记录概况
+    group: 拾光日记
+    flavor: paper
+    accent: "#A85F27"
+    options:
+      url: http://127.0.0.1:8780/mcp
+      tool: journal_get_status
+
+  - id: projects
+    type: projects
+    title: 项目进度
+    group: 开发
+    options:
+      repos:
+        - C:\开发\mcp开发\PersonalMcpGateway
+        - C:\开发\mcp开发\journal-cloud-mcp
+        - C:\开发\手表开发
+        - C:\开发\日记复盘
+        - C:\开发\不做手机控

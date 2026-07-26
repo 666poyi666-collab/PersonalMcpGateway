@@ -303,3 +303,45 @@ body.light .hero h1 span { background: linear-gradient(100deg,#4a3aa7 10%,#0d7a6
 /* fleet watchdog footer chip */
 footer b.guard-ok { color: #0ca30c; }
 footer b.guard-bad { color: #d03b3b; }
+
+/* ============ peer project sections (2026-07 redesign, web board) ============ */
+.project-grid { display: flex; flex-direction: column; gap: 14px; }
+.proj { border-radius: 16px; padding: 22px 24px 18px; border: 1px solid var(--line); background: var(--panel); display: grid; grid-template-columns: minmax(200px, 26%) 1fr; grid-template-areas: "head vitals" "head data"; column-gap: 26px; row-gap: 12px; min-height: 150px; }
+.proj-head { grid-area: head; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid var(--line); padding-right: 20px; }
+.proj-head h2 { margin: 0; font-size: 23px; font-weight: 800; color: var(--p-accent); }
+.proj-tagline { margin: 4px 0 0; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+.proj-state { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.proj-vitals { grid-area: vitals; display: flex; gap: 10px; flex-wrap: wrap; align-content: flex-start; }
+.pv-chip { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 9px; background: var(--faint); border: 1px solid var(--line); font-size: 11px; }
+.pv-chip em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pv-chip .dot, .proj-state .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--status-crit); }
+.pv-chip .dot[data-status="online"], .proj-state .dot[data-status="online"] { background: var(--status-good); }
+.pv-chip .dot[data-status="degraded"], .proj-state .dot[data-status="degraded"] { background: var(--status-warn); }
+.proj-data { grid-area: data; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-content: start; }
+.pd-stat, .pd-widget { border-radius: 10px; padding: 12px 14px; background: var(--faint); border: 1px solid var(--line); }
+.pd-stat { display: flex; flex-direction: column; gap: 2px; }
+.pd-stat strong { font-size: 18px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.pd-stat span { font-size: 10px; color: var(--muted); letter-spacing: .05em; }
+.pd-widget.error { border-color: rgba(208,59,59,.4); }
+.pd-widget-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.pd-widget-head strong { font-size: 12px; font-weight: 650; }
+.pd-empty { font-size: 11px; color: var(--muted); margin: 4px 0; }
+.proj-instrument { border-radius: 6px; border-color: color-mix(in srgb, var(--p-accent) 26%, var(--line)); }
+.proj-instrument .pv-chip, .proj-instrument .pd-stat, .proj-instrument .pd-widget { border-radius: 3px; border-color: color-mix(in srgb, var(--p-accent) 22%, var(--line)); }
+.proj-paper { background: #F6EFE2; border-color: rgba(168,95,39,.25); color: #4b3a28; }
+.proj-paper h2 { font-family: Georgia, "Times New Roman", "Songti SC", "SimSun", serif; }
+.proj-paper .pv-chip, .proj-paper .pd-stat, .proj-paper .pd-widget { background: #FBF6EB; border-color: rgba(168,95,39,.2); color: #4b3a28; }
+.proj-paper .proj-tagline, .proj-paper .pv-chip em, .proj-paper .pd-stat span { color: #8a6f52; }
+.proj-paper .proj-head { border-right-color: rgba(168,95,39,.25); }
+:root[data-theme="dark"] .proj-paper { background: #201d18; border-color: rgba(226,216,196,.18); color: #f2ede2; }
+:root[data-theme="dark"] .proj-paper .pv-chip, :root[data-theme="dark"] .proj-paper .pd-stat, :root[data-theme="dark"] .proj-paper .pd-widget { background: #2a2620; border-color: rgba(226,216,196,.14); color: #f2ede2; }
+:root[data-theme="dark"] .proj-paper .proj-tagline, :root[data-theme="dark"] .proj-paper .pv-chip em, :root[data-theme="dark"] .proj-paper .pd-stat span { color: rgba(242,237,226,.6); }
+.proj-sport { background: #0B0F0A; border-color: rgba(182,255,57,.22); color: #E8F5DC; border-radius: 22px; }
+.proj-sport h2 { text-shadow: 0 0 14px rgba(182,255,57,.25); }
+.proj-sport .pv-chip, .proj-sport .pd-stat, .proj-sport .pd-widget { background: #131a11; border-color: rgba(182,255,57,.16); color: #E8F5DC; border-radius: 12px; }
+.proj-sport .pd-stat strong { color: #B6FF39; }
+.proj-sport .proj-tagline, .proj-sport .pv-chip em, .proj-sport .pd-stat span { color: rgba(232,245,220,.55); }
+.proj-sport .proj-head { border-right-color: rgba(182,255,57,.18); }
+.proj-sport .widget-body, .proj-sport .widget-kv span, .proj-sport .widget-stat span { color: rgba(232,245,220,.6); }
+.proj-sport .widget-kv b, .proj-sport .widget-stat strong, .proj-sport .widget-row-info strong { color: #E8F5DC; }
+@media (max-width: 900px) { .proj { grid-template-columns: 1fr; grid-template-areas: "head" "vitals" "data"; } .proj-head { border-right: none; padding-right: 0; } }

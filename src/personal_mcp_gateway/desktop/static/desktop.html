@@ -63,63 +63,29 @@
 
   <div class="board" id="board">
 
-    <section class="hero-row">
-      <article class="hero-card">
-        <div class="meter" id="meter">
-          <svg viewBox="0 0 120 120" aria-hidden="true">
-            <circle class="meter-track" cx="60" cy="60" r="52"></circle>
-            <circle class="meter-fill" id="meterFill" cx="60" cy="60" r="52"></circle>
-          </svg>
-          <div class="meter-center">
-            <strong id="heroValue">—</strong>
-            <small>在线项目</small>
-          </div>
-        </div>
-        <div class="hero-copy">
-          <p class="kicker">SYSTEM OVERVIEW</p>
+    <section class="fleet-strip" id="fleetStrip">
+      <div class="fs-status">
+        <i class="dot fs-dot" id="fsDot" data-status="disconnected"></i>
+        <strong class="fs-count" id="heroValue">—</strong>
+        <div class="fs-copy">
           <h1 id="heroTitle">正在读取状态</h1>
-          <p class="hero-sub" id="heroSub">连接本机 Gateway 管理端…</p>
+          <small>在线项目 · 集中监控</small>
         </div>
-      </article>
-
-      <div class="tiles">
-        <article class="tile">
-          <span class="tile-label">24 小时调用</span>
-          <strong class="tile-value" id="tileCalls">—</strong>
-          <span class="tile-foot" id="tileCallsFoot">跨项目工具调用</span>
-        </article>
-        <article class="tile">
-          <span class="tile-label">成功率</span>
-          <strong class="tile-value" id="tileRate">—</strong>
-          <span class="tile-foot" id="tileRateFoot">失败请求 —</span>
-        </article>
-        <article class="tile">
-          <span class="tile-label">Gateway 在线</span>
-          <strong class="tile-value" id="tileUptime">—</strong>
-          <span class="tile-foot" id="tileUptimeFoot">本次运行时长</span>
-        </article>
-        <article class="tile">
-          <span class="tile-label">探测耗时</span>
-          <strong class="tile-value" id="tileProbe">—</strong>
-          <span class="tile-foot" id="tileProbeFoot">全部目标一轮</span>
-        </article>
+      </div>
+      <div class="fs-metrics">
+        <span><b id="tileCalls">—</b><i>24h 调用</i></span>
+        <span><b id="tileRate">—</b><i>成功率</i></span>
+        <span><b id="tileUptime">—</b><i>Gateway 在线</i></span>
+        <span><b id="tileProbe">—</b><i>探测一轮</i></span>
+      </div>
+      <div class="fs-legend legend status-legend">
+        <span><i class="dot" data-status="online"></i>正常</span>
+        <span><i class="dot" data-status="degraded"></i>降级</span>
+        <span><i class="dot" data-status="offline"></i>离线</span>
       </div>
     </section>
 
-    <section class="panel projects-panel">
-      <div class="panel-head">
-        <div>
-          <p class="kicker">PROJECT MATRIX</p>
-          <h2>独立项目状态</h2>
-        </div>
-        <div class="legend status-legend">
-          <span><i class="dot" data-status="online"></i>正常</span>
-          <span><i class="dot" data-status="degraded"></i>降级</span>
-          <span><i class="dot" data-status="offline"></i>离线</span>
-        </div>
-      </div>
-      <div class="project-grid" id="projectGrid"></div>
-    </section>
+    <div class="project-sections" id="projectSections"></div>
 
     <section class="lower-row">
       <section class="panel chart-panel">

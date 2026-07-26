@@ -2,6 +2,17 @@
 
 ## 0.1.0-dev
 
+- Rebuild both boards around peer project sections: each project gets a full-width
+  block in its own art (FocusLink hairline instrument, 拾光 warm paper, 间歇跑 dark
+  lime dial with its own dark surface in both themes), the gateway shrinks to a peer
+  block plus a slim fleet strip, project-owned mcp widgets render inside their
+  sections, and re-renders skip when data is unchanged. Ship the live
+  board-widgets config (focus/journal/watch data cards + repo freshness).
+- Add the cloud layer (REQ-001 P1-P3 partial): journal CRUD MCP plus watch/foxlink
+  snapshot-mirror MCPs on Cloudflare Workers (D1, capability-path auth), and
+  fleet/cloud_sync.py — driven by the watchdog every ~5 minutes — pushing local
+  read-tool snapshots with honest synced/stale/never_synced + PHONE_OFFLINE skip
+  semantics. CLOUD-SYNC.md delivered into each source project folder.
 - Integrate the fleet into both boards: each card's probes now carry the underlying
   Windows service state (`服务已停止` / `服务未安装` vs plain `不可用`), the status bar
   shows the watchdog state, and the desktop titlebar (and its offline screen) gains a

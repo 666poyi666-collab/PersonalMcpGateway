@@ -278,11 +278,35 @@ function Test-RepairTrigger($Config) {
     return $true
 }
 
+function Invoke-CloudSync($Config) {
+    if (-not ($Config.PSObject.Properties.Name -contains 'cloudSync')) { return }
+    if (-not $Config.cloudSync.enabled) { return }
+    if (-not (Test-Path -LiteralPath $Config.cloudSync.config)) {
+        Write-Log 'WARN' 'cloud sync enabled but its config file is missing.'
+        return
+    }
+    $pythonDirs = @(Get-ChildItem -LiteralPath "$env:ProgramFiles\Poyi\PersonalMcpGateway\python" `
+        -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'cpython-3.12.*' })
+    if ($pythonDirs.Count -lt 1) {
+        Write-Log 'WARN' 'cloud sync skipped: private Python runtime not found.'
+        return
+    }
+    $python = Join-Path $pythonDirs[0].FullName 'python.exe'
+    $script = Join-Path $script:BaseDir 'cloud_sync.py'
+    try {
+        $output = & $python -s $script --config $Config.cloudSync.config 2>&1
+        foreach ($line in @($output)) { Write-Log 'INFO' ("sync: {0}" -f $line) }
+    } catch {
+        Write-Log 'WARN' ("cloud sync failed: {0}" -f $_.Exception.Message)
+    }
+}
+
 # --- main ---
 $config = Get-Config
 Write-Log 'INFO' ("Fleet watchdog starting; monitoring {0} projects." -f @($config.projects).Count)
 Write-FleetEvent 9001 'Information' 'Fleet watchdog started.'
 Repair-DataDirAcls $config
+$script:PassCount = 0
 
 while ($true) {
     try {
@@ -293,6 +317,13 @@ while ($true) {
             $inBootGrace = (Get-UptimeSeconds) -lt $config.bootGraceSeconds
             Invoke-FleetPass $config $inBootGrace
         }
+        $script:PassCount = $script:PassCount + 1
+        $syncEvery = 10
+        if ($config.PSObject.Properties.Name -contains 'cloudSync' -and
+            $config.cloudSync.PSObject.Properties.Name -contains 'everyPasses') {
+            $syncEvery = [Math]::Max(1, [int]$config.cloudSync.everyPasses)
+        }
+        if (($script:PassCount % $syncEvery) -eq 1) { Invoke-CloudSync $config }
     } catch {
         Write-Log 'ERROR' ("Watchdog pass failed: {0}" -f $_.Exception.Message)
     }

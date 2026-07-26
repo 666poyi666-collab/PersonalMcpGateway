@@ -121,6 +121,7 @@ targets:
     Copy-Item (Join-Path $fleetSource 'watchdog.ps1') $installDir -Force
     Copy-Item (Join-Path $fleetSource 'fleet-config.json') $installDir -Force
     Copy-Item (Join-Path $fleetSource 'PoyiFleetWatchdog.xml') $installDir -Force
+    Copy-Item (Join-Path $fleetSource 'cloud_sync.py') $installDir -Force
     $watchdogExe = Join-Path $installDir 'PoyiFleetWatchdog.exe'
     $winswSource = Join-Path $gatewayInstall 'PoyiPersonalMcpGateway.exe'
     if (-not (Test-Path -LiteralPath $watchdogExe)) {

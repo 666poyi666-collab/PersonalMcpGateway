@@ -49,7 +49,94 @@
     row.append(dot, name, detail);
     return row;
   }
-  function renderProjects(targets) {
+  const PROJECT_STYLE = {
+    foxlink: { flavor: "instrument", accent: "#007A55", display: "FocusLink", tagline: "专注 · 时间仪器", groups: ["FocusLink"] },
+    watch: { flavor: "sport", accent: "#B6FF39", display: "步序 · 间歇跑", tagline: "训练 · 睡眠 · 手表", groups: ["步序 · 间歇跑"] },
+    journal: { flavor: "paper", accent: "#A85F27", display: "拾光 · 日记复盘", tagline: "记录 · 回看 · 复盘", groups: ["拾光日记"] },
+    personal: { flavor: "neutral", accent: "#7c6cff", display: "Personal Gateway", tagline: "总机房 · 隧道与看护", groups: [] },
+  };
+  const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
+  const CLAIMED_GROUPS = new Set(Object.values(PROJECT_STYLE).flatMap((s) => s.groups));
+  let lastSectionsKey = "";
+
+  function probeChip(label, probe) {
+    const chip = document.createElement("div"); chip.className = "pv-chip";
+    const dot = document.createElement("i"); dot.className = "dot";
+    dot.dataset.status = probe && probe.ok ? "online" : "offline";
+    const service = probe && probe.service ? probe.service : null;
+    let detail = "不可用";
+    if (probe && probe.ok) detail = probe.latencyMs == null ? "就绪" : `${probe.latencyMs}ms`;
+    else if (service && service.state && service.state !== "running") detail = service.state === "missing" ? "服务未安装" : "服务已停止";
+    if (service && service.name) chip.title = `${service.name} · ${service.state || "unknown"}`;
+    const name = document.createElement("span"); name.textContent = label;
+    const em = document.createElement("em"); em.textContent = detail;
+    chip.append(dot, name, em);
+    return chip;
+  }
+  function renderProjects(targets, widgets, data) {
+    const grid = $("projectGrid");
+    const key = JSON.stringify([targets, widgets, data.events, data.gateway, data.fleet]);
+    if (key === lastSectionsKey) return;
+    lastSectionsKey = key;
+    grid.replaceChildren();
+    const byId = new Map(targets.map((t) => [t.id, t]));
+    const ordered = [];
+    SECTION_ORDER.forEach((id) => { if (byId.has(id)) ordered.push(byId.get(id)); });
+    targets.forEach((t) => { if (!SECTION_ORDER.includes(t.id)) ordered.push(t); });
+    ordered.forEach((target) => {
+      const style = PROJECT_STYLE[target.id] || { flavor: "neutral", accent: target.accent || "#8878ff", display: target.name, tagline: target.description || "", groups: [] };
+      const section = document.createElement("section");
+      section.className = `proj proj-${style.flavor}`;
+      section.style.setProperty("--p-accent", style.accent);
+      section.dataset.state = target.state || "offline";
+
+      const head = document.createElement("header"); head.className = "proj-head";
+      const naming = document.createElement("div");
+      const h2 = document.createElement("h2"); h2.textContent = style.display;
+      const tagline = document.createElement("p"); tagline.className = "proj-tagline";
+      tagline.textContent = `${style.tagline}${target.version ? ` · v${String(target.version).replace(/^v/, "")}` : ""}`;
+      naming.append(h2, tagline);
+      const state = document.createElement("div"); state.className = "proj-state";
+      const sdot = document.createElement("i"); sdot.className = "dot"; sdot.dataset.status = target.state || "offline";
+      const slabel = document.createElement("b"); slabel.textContent = stateLabel(target.state);
+      state.append(sdot, slabel);
+      head.append(naming, state);
+
+      const vitals = document.createElement("div"); vitals.className = "proj-vitals";
+      vitals.append(probeChip("MCP", target.mcp));
+      if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
+
+      const dataZone = document.createElement("div"); dataZone.className = "proj-data";
+      if (target.id === "personal") {
+        const gw = data.gateway || {};
+        const fleet = data.fleet || {};
+        [["本次在线", uptime(gw.uptimeSeconds || 0)], ["累计调用", compact(gw.callsTotal)], ["调用失败", compact(gw.callsFailed)], ["看护服务", fleet.watchdog && fleet.watchdog.state === "running" ? "在线" : "异常"]].forEach(([label, value]) => {
+          const card = document.createElement("article"); card.className = "pd-stat";
+          const strong = document.createElement("strong"); strong.textContent = String(value);
+          const span = document.createElement("span"); span.textContent = label;
+          card.append(strong, span); dataZone.append(card);
+        });
+      } else {
+        const mine = (widgets || []).filter((w) => style.groups.includes(w.group || ""));
+        mine.forEach((widget) => {
+          const card = document.createElement("article"); card.className = `pd-widget${widget.ok ? "" : " error"}`;
+          const whead = document.createElement("div"); whead.className = "pd-widget-head";
+          const wtitle = document.createElement("strong"); wtitle.textContent = widget.title || widget.id; whead.append(wtitle);
+          if (widget.subtitle) { const ws = document.createElement("small"); ws.textContent = widget.subtitle; whead.append(ws); }
+          card.append(whead, widgetBody(widget)); dataZone.append(card);
+        });
+        if (!mine.length) {
+          const empty = document.createElement("p"); empty.className = "pd-empty";
+          empty.textContent = "尚未配置数据卡 — 编辑 board-widgets.yaml 即可点亮";
+          dataZone.append(empty);
+        }
+      }
+
+      section.append(head, vitals, dataZone);
+      grid.append(section);
+    });
+  }
+  function renderProjectsLegacy(targets) {
     const grid = $("projectGrid"); grid.replaceChildren();
     targets.forEach((target) => {
       const card = document.createElement("article");
@@ -174,7 +261,8 @@
     }
     return body;
   }
-  function renderWidgets(widgets) {
+  function renderWidgets(allWidgets) {
+    const widgets = (allWidgets || []).filter((w) => !CLAIMED_GROUPS.has(w.group || ""));
     const grid = $("widgetGrid"); grid.replaceChildren();
     let currentGroup = null;
     widgets.forEach((widget) => {
@@ -216,7 +304,7 @@
     text($("versionLabel"), `v${data.gateway.version}`);
     text($("lastUpdated"), `探测 ${data.probeDurationMs}ms · ${new Date(data.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
     text($("chartTotal"), compact(summary.calls24h));
-    renderProjects(data.targets); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []); renderWidgets(data.widgets || []);
+    renderProjects(data.targets, data.widgets || [], data); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []); renderWidgets(data.widgets || []);
     $("syncState").classList.remove("offline"); $("syncState").querySelector("b").textContent = "实时连接";
     text($("footerState"), "CONNECTED");
     const guard = data.fleet && data.fleet.watchdog ? data.fleet.watchdog.state : null;

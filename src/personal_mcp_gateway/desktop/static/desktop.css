@@ -416,3 +416,87 @@ body.compact .tb-btn#btnTheme { display: none; }
 .ghost-btn.arming { background: rgba(250, 178, 25, .18); color: var(--status-warn); }
 #sbGuard[data-state="ok"] { color: var(--status-good); }
 #sbGuard[data-state="bad"] { color: var(--status-crit); font-weight: 600; }
+
+/* ================= peer project sections (2026-07 redesign) ================= */
+
+.fleet-strip { display: flex; align-items: center; gap: 22px; padding: 14px 20px; border-radius: 14px; background: var(--surface-1); border: 1px solid var(--line); margin-bottom: 14px; }
+.fs-status { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.fs-dot { width: 12px; height: 12px; }
+.fs-count { font-size: 26px; font-weight: 750; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.fs-copy h1 { font-size: 14px; font-weight: 650; margin: 0; }
+.fs-copy small { color: var(--ink-3); font-size: 10px; letter-spacing: .08em; }
+.fs-metrics { display: flex; gap: 20px; margin-left: auto; }
+.fs-metrics span { display: flex; flex-direction: column; align-items: flex-end; }
+.fs-metrics b { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fs-metrics i { font-style: normal; font-size: 9px; color: var(--ink-3); letter-spacing: .06em; }
+.fs-legend { margin-left: 6px; }
+body.compact .fleet-strip { display: none; }
+
+.project-sections { display: flex; flex-direction: column; gap: 14px; margin-bottom: 14px; }
+body.compact .project-sections { display: none; }
+
+.proj { border-radius: 16px; padding: 22px 24px 18px; border: 1px solid var(--line); background: var(--surface-1); display: grid; grid-template-columns: minmax(210px, 26%) 1fr; grid-template-areas: "head vitals" "head data" "tail data"; column-gap: 26px; row-gap: 12px; min-height: 190px; }
+.proj-head { grid-area: head; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid var(--line); padding-right: 20px; }
+.proj-naming h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: .01em; color: var(--p-accent); }
+.proj-tagline { margin: 4px 0 0; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+.proj-state { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.proj-state b { font-weight: 650; }
+.proj-vitals { grid-area: vitals; display: flex; gap: 10px; flex-wrap: wrap; align-content: flex-start; }
+.pv-chip { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--line); font-size: 11px; }
+.pv-chip em { font-style: normal; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.proj-data { grid-area: data; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-content: start; }
+.pd-stat { border-radius: 10px; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.pd-stat strong { font-size: 18px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.pd-stat span { font-size: 10px; color: var(--ink-3); letter-spacing: .05em; }
+.pd-widget { border-radius: 10px; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--line); }
+.pd-widget.error { border-color: rgba(208, 59, 59, .4); }
+.pd-widget-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.pd-widget-head strong { font-size: 12px; font-weight: 650; }
+.pd-widget-head small { font-size: 10px; color: var(--ink-3); }
+.pd-empty { font-size: 11px; color: var(--ink-3); margin: 4px 0; }
+.proj-tail { grid-area: tail; display: flex; flex-direction: column; gap: 5px; padding-right: 20px; }
+.pt-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-2); }
+.pt-row time { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.pt-mark { font-style: normal; color: var(--status-good); font-size: 11px; }
+.pt-mark.fail { color: var(--status-crit); }
+.pt-quiet { font-size: 11px; color: var(--ink-3); margin: 0; }
+
+/* -- instrument (FocusLink): hairlines, right angles, tabular readings -- */
+.proj-instrument { border-radius: 6px; border-color: color-mix(in srgb, var(--p-accent) 26%, var(--line)); background: var(--surface-1); }
+.proj-instrument .proj-naming h2 { font-weight: 640; letter-spacing: .06em; }
+.proj-instrument .proj-head { border-right: 1px solid color-mix(in srgb, var(--p-accent) 30%, transparent); }
+.proj-instrument .pv-chip, .proj-instrument .pd-stat, .proj-instrument .pd-widget { border-radius: 3px; border-color: color-mix(in srgb, var(--p-accent) 22%, var(--line)); }
+.proj-instrument .pd-widget strong, .proj-instrument .pd-stat strong { font-variant-numeric: tabular-nums; }
+
+/* -- paper (拾光): warm paper, serif ink, ochre -- */
+.proj-paper { background: #F6EFE2; border-color: rgba(168, 95, 39, .25); }
+.proj-paper .proj-naming h2 { font-family: Georgia, "Times New Roman", "Songti SC", "SimSun", serif; font-weight: 700; }
+.proj-paper .proj-tagline { color: #8a6f52; }
+.proj-paper .pv-chip, .proj-paper .pd-stat, .proj-paper .pd-widget { background: #FBF6EB; border-color: rgba(168, 95, 39, .2); color: #4b3a28; }
+.proj-paper .pv-chip em, .proj-paper .pd-stat span { color: #8a6f52; }
+.proj-paper .proj-head { border-right-color: rgba(168, 95, 39, .25); }
+.proj-paper .pt-row, .proj-paper .pt-quiet { color: #6d5335; }
+:root[data-theme="dark"] .proj-paper { background: #201d18; border-color: rgba(226, 216, 196, .18); }
+:root[data-theme="dark"] .proj-paper .pv-chip, :root[data-theme="dark"] .proj-paper .pd-stat, :root[data-theme="dark"] .proj-paper .pd-widget { background: #2a2620; border-color: rgba(226, 216, 196, .14); color: #f2ede2; }
+:root[data-theme="dark"] .proj-paper .pv-chip em, :root[data-theme="dark"] .proj-paper .pd-stat span, :root[data-theme="dark"] .proj-paper .proj-tagline, :root[data-theme="dark"] .proj-paper .pt-row, :root[data-theme="dark"] .proj-paper .pt-quiet { color: rgba(242, 237, 226, .6); }
+
+/* -- sport (间歇跑): its own dark watch dial in BOTH themes; lime lives only on
+      this dark surface (light-surface contrast for #B6FF39 is 1.06:1 — never). -- */
+.proj-sport { background: #0B0F0A; border-color: rgba(182, 255, 57, .22); color: #E8F5DC; border-radius: 22px; }
+.proj-sport .proj-naming h2 { font-weight: 850; letter-spacing: .04em; text-shadow: 0 0 14px rgba(182, 255, 57, .25); }
+.proj-sport .proj-tagline { color: rgba(232, 245, 220, .55); }
+.proj-sport .proj-head { border-right-color: rgba(182, 255, 57, .18); }
+.proj-sport .pv-chip, .proj-sport .pd-stat, .proj-sport .pd-widget { background: #131a11; border-color: rgba(182, 255, 57, .16); color: #E8F5DC; border-radius: 12px; }
+.proj-sport .pd-stat strong { color: #B6FF39; font-variant-numeric: tabular-nums; }
+.proj-sport .pv-chip em, .proj-sport .pd-stat span { color: rgba(232, 245, 220, .55); }
+.proj-sport .pt-row, .proj-sport .pt-quiet { color: rgba(232, 245, 220, .6); }
+.proj-sport .widget-body, .proj-sport .widget-kv span, .proj-sport .widget-row-info small, .proj-sport .widget-stat span { color: rgba(232, 245, 220, .6); }
+.proj-sport .widget-kv b, .proj-sport .widget-stat strong, .proj-sport .widget-row-info strong { color: #E8F5DC; }
+
+/* -- neutral (gateway): the board's own violet, quiet peer -- */
+.proj-neutral .proj-naming h2 { font-weight: 700; }
+
+@media (max-width: 760px) {
+  .proj { grid-template-columns: 1fr; grid-template-areas: "head" "vitals" "data" "tail"; }
+  .proj-head { border-right: none; padding-right: 0; }
+}

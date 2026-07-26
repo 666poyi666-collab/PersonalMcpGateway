@@ -112,6 +112,7 @@ try {
     Copy-Item (Join-Path $fleetSource 'watchdog.ps1') $watchdogInstall -Force
     Copy-Item (Join-Path $fleetSource 'fleet-config.json') $watchdogInstall -Force
     Copy-Item (Join-Path $fleetSource 'PoyiFleetWatchdog.xml') $watchdogInstall -Force
+    Copy-Item (Join-Path $fleetSource 'cloud_sync.py') $watchdogInstall -Force
     & sc.exe stop PoyiFleetWatchdog | Out-Null
     Wait-ServiceStatus 'PoyiFleetWatchdog' 'Stopped' 30 | Out-Null
     & sc.exe start PoyiFleetWatchdog | Out-Null

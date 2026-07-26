@@ -1,6 +1,11 @@
 /* Poyi Control Center — desktop renderer.
    All gateway I/O happens in Python and arrives through pywebview.api, so this
-   file never performs a network request of its own. */
+   file never performs a network request of its own.
+
+   Layout: a slim fleet strip on top, then one full-width peer section per
+   project — each keeping its source project's own art (instrument / paper /
+   sport / neutral) — then the global activity chart, event center and the
+   extension widgets. Sections re-render only when their data actually changed. */
 "use strict";
 
 const POLL_MS = 4000;
@@ -14,22 +19,18 @@ const dom = {
   tbCount: el("tbCount"),
   tbLabel: el("tbLabel"),
   tbChipDot: document.querySelector("#tbChip .dot"),
+  fsDot: el("fsDot"),
   heroValue: el("heroValue"),
   heroTitle: el("heroTitle"),
-  heroSub: el("heroSub"),
-  meter: el("meter"),
-  meterFill: el("meterFill"),
   meterCompact: el("meterCompact"),
   meterFillCompact: el("meterFillCompact"),
   heroValueCompact: el("heroValueCompact"),
   heroLabelCompact: el("heroLabelCompact"),
   tileCalls: el("tileCalls"),
-  tileCallsFoot: el("tileCallsFoot"),
   tileRate: el("tileRate"),
-  tileRateFoot: el("tileRateFoot"),
   tileUptime: el("tileUptime"),
   tileProbe: el("tileProbe"),
-  projectGrid: el("projectGrid"),
+  projectSections: el("projectSections"),
   plot: el("plot"),
   plotEmpty: el("plotEmpty"),
   yAxis: el("yAxis"),
@@ -56,6 +57,41 @@ const dom = {
   btnRepair: el("btnRepair"),
   btnRepairOffline: el("btnRepairOffline"),
 };
+
+/* Per-project art direction: the section carries the source project's own
+   surface, type and accent (docs/integrations). Accents mark identity only —
+   status stays with the reserved status colors, charts keep their own series. */
+const PROJECT_STYLE = {
+  foxlink: {
+    flavor: "instrument",
+    accent: "#007A55",
+    display: "FocusLink",
+    tagline: "专注 · 时间仪器",
+    groups: ["FocusLink"],
+  },
+  watch: {
+    flavor: "sport",
+    accent: "#B6FF39",
+    display: "步序 · 间歇跑",
+    tagline: "训练 · 睡眠 · 手表",
+    groups: ["步序 · 间歇跑"],
+  },
+  journal: {
+    flavor: "paper",
+    accent: "#A85F27",
+    display: "拾光 · 日记复盘",
+    tagline: "记录 · 回看 · 复盘",
+    groups: ["拾光日记"],
+  },
+  personal: {
+    flavor: "neutral",
+    accent: "#7c6cff",
+    display: "Personal Gateway",
+    tagline: "总机房 · 隧道与看护",
+    groups: [],
+  },
+};
+const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
 
 /* ---------- helpers ---------- */
 
@@ -134,6 +170,8 @@ async function pull(force) {
 
 /* ---------- rendering ---------- */
 
+let lastDataKey = "";
+
 function render(payload) {
   const view = payload.view || {};
   applyView(view);
@@ -148,6 +186,7 @@ function render(payload) {
     dom.sbSync.textContent = clockOf(payload.fetchedAt);
     dom.sbProbe.textContent = "—";
     renderGuard(null);
+    lastDataKey = "";
     return;
   }
 
@@ -161,16 +200,40 @@ function render(payload) {
   const total = num(summary.total);
 
   setStatusChrome(payload.status, `${online}/${total}`, payload.statusLabel || "");
-  renderHero(payload, online, total, gateway);
-  renderTiles(summary, gateway, data);
-  renderProjects(Array.isArray(data.targets) ? data.targets : []);
-  renderChart(data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : []);
-  renderEvents(data);
-  renderWidgets(Array.isArray(data.widgets) ? data.widgets : []);
-
   dom.sbSync.textContent = `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`;
   dom.sbProbe.textContent = `探测 ${num(data.probeDurationMs)}ms`;
   renderGuard(data.fleet || null);
+
+  // Skip the DOM rebuild when nothing but timestamps changed — the board polls
+  // every 4s and most passes carry identical data.
+  const key = JSON.stringify([
+    payload.status,
+    data.targets,
+    data.widgets,
+    data.summary,
+    data.events,
+    data.errors,
+    data.activity,
+    data.fleet,
+  ]);
+  if (key === lastDataKey) return;
+  lastDataKey = key;
+
+  renderStrip(payload, online, total, gateway, summary, data);
+  renderSections(data);
+  renderChart(data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : []);
+  renderEvents(data);
+  renderExtensionWidgets(Array.isArray(data.widgets) ? data.widgets : []);
+  renderCompact(data, payload);
+}
+
+function setStatusChrome(status, count, label) {
+  dom.tbChipDot.dataset.status = status;
+  dom.sbDot.dataset.status = status;
+  if (dom.fsDot) dom.fsDot.dataset.status = status;
+  dom.tbCount.textContent = count;
+  dom.tbLabel.textContent = label;
+  dom.sbState.textContent = status === "disconnected" ? "DISCONNECTED" : "CONNECTED";
 }
 
 function renderGuard(fleet) {
@@ -187,93 +250,167 @@ function renderGuard(fleet) {
   }
 }
 
-function setStatusChrome(status, count, label) {
-  dom.tbChipDot.dataset.status = status;
-  dom.sbDot.dataset.status = status;
-  dom.tbCount.textContent = count;
-  dom.tbLabel.textContent = label;
-  dom.sbState.textContent = status === "disconnected" ? "DISCONNECTED" : "CONNECTED";
-}
-
-function setMeter(meter, fill, online, total, status) {
-  const ratio = total > 0 ? Math.min(1, online / total) : 0;
-  meter.dataset.status = status;
-  fill.style.strokeDasharray = String(CIRCUMFERENCE);
-  fill.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - ratio));
-}
-
-function renderHero(payload, online, total, gateway) {
+function renderStrip(payload, online, total, gateway, summary, data) {
   dom.heroValue.textContent = `${online}/${total}`;
-  dom.heroValueCompact.textContent = `${online}/${total}`;
-  dom.heroLabelCompact.textContent = payload.statusLabel || "在线";
-  setMeter(dom.meter, dom.meterFill, online, total, payload.status);
-  setMeter(dom.meterCompact, dom.meterFillCompact, online, total, payload.status);
-
   const titles = {
     online: "所有系统正常运行",
     degraded: "部分链路已降级",
     offline: "存在离线项目",
   };
   dom.heroTitle.textContent = titles[payload.status] || "状态未知";
-  dom.heroSub.textContent =
-    `Gateway ${gateway.state === "online" ? "在线" : "启动中"} · ` +
-    `版本 ${gateway.version || "—"} · 集中监控 ${total} 个独立项目`;
-}
-
-function renderTiles(summary, gateway, data) {
-  const calls = num(summary.calls24h);
-  const failures = num(summary.failures24h);
-  dom.tileCalls.textContent = compact(calls);
-  dom.tileCallsFoot.textContent = calls ? `其中失败 ${compact(failures)}` : "跨项目工具调用";
+  dom.tileCalls.textContent = compact(summary.calls24h);
   dom.tileRate.textContent = `${num(summary.successRate, 100).toFixed(1)}%`;
-  dom.tileRateFoot.textContent = `失败请求 ${compact(failures)}`;
   dom.tileUptime.textContent = duration(gateway.uptimeSeconds);
   dom.tileProbe.textContent = `${num(data.probeDurationMs)}ms`;
-  dom.compactCalls.textContent = compact(calls);
-  dom.compactRate.textContent = `${num(summary.successRate, 100).toFixed(1)}%`;
 }
 
-function componentRow(label, probe) {
-  const row = make("div", "pc-row");
+/* ---------- project sections ---------- */
+
+function probeChip(label, probe) {
+  const chip = make("div", "pv-chip");
   const dot = make("i", "dot");
   dot.dataset.status = probe && probe.ok ? "online" : "offline";
   const service = probe && probe.service ? probe.service : null;
   let detail = "不可用";
   if (probe && probe.ok) {
-    detail = `${num(probe.latencyMs)}ms`;
+    detail = probe.latencyMs == null ? "就绪" : `${num(probe.latencyMs)}ms`;
   } else if (service && service.state && service.state !== "running") {
     detail = service.state === "missing" ? "服务未安装" : "服务已停止";
   }
-  const em = make("em", null, detail);
-  if (service && service.name) row.title = `${service.name} · ${service.state || "unknown"}`;
-  row.append(dot, make("span", null, label), em);
-  return row;
+  if (service && service.name) chip.title = `${service.name} · ${service.state || "unknown"}`;
+  chip.append(dot, make("span", null, label), make("em", null, detail));
+  return chip;
 }
 
-function renderProjects(targets) {
-  const cards = targets.map((target) => {
-    const card = make("article", "project-card");
+function sectionDataCards(target, widgets, gateway, fleet) {
+  const style = PROJECT_STYLE[target.id];
+  const cards = [];
+  if (target.id === "personal") {
+    const stats = [
+      ["本次在线", duration(gateway.uptimeSeconds)],
+      ["累计调用", compact(gateway.callsTotal)],
+      ["调用失败", compact(gateway.callsFailed)],
+      ["看护服务", fleet && fleet.watchdog && fleet.watchdog.state === "running" ? "在线" : "异常"],
+    ];
+    for (const [label, value] of stats) {
+      const card = make("article", "pd-stat");
+      card.append(make("strong", null, String(value)), make("span", null, label));
+      cards.push(card);
+    }
+    return cards;
+  }
+  const mine = widgets.filter((w) => style.groups.includes(w.group || ""));
+  for (const widget of mine) {
+    const card = make("article", `pd-widget${widget.ok ? "" : " error"}`);
+    const head = make("div", "pd-widget-head");
+    head.append(make("strong", null, widget.title || widget.id));
+    if (widget.subtitle) head.append(make("small", null, widget.subtitle));
+    card.append(head, widgetBody(widget));
+    cards.push(card);
+  }
+  if (!cards.length) {
+    const empty = make("p", "pd-empty", "尚未配置数据卡 — 编辑 board-widgets.yaml 即可点亮");
+    cards.push(empty);
+  }
+  return cards;
+}
 
-    const top = make("div", "pc-top");
-    const name = make("div", "pc-name");
-    name.append(make("strong", null, target.name || target.id));
-    name.append(make("small", null, target.version ? `v${String(target.version).replace(/^v/, "")}` : target.description || ""));
-    const state = make("div", "pc-state");
+function sectionTail(target, data) {
+  const rows = [];
+  const events = Array.isArray(data.events) ? data.events : [];
+  for (const event of events.filter((e) => e.target === target.id).slice(0, 3)) {
+    const row = make("div", "pt-row");
+    const dot = make("i", "dot");
+    dot.dataset.status = event.toState === "online" ? "online" : event.toState === "degraded" ? "degraded" : "offline";
+    row.append(
+      dot,
+      make("span", null, event.toState === "online" ? "已恢复" : `${event.fromState} → ${event.toState}`),
+      make("time", null, clockOf(event.occurredAt))
+    );
+    rows.push(row);
+  }
+  const recent = data.activity && Array.isArray(data.activity.recent) ? data.activity.recent : [];
+  for (const item of recent.filter((r) => (r.module || "") === target.id).slice(0, 3)) {
+    const row = make("div", "pt-row");
+    const mark = make("i", "pt-mark", "↗");
+    if (item.result !== "success") mark.classList.add("fail");
+    row.append(
+      mark,
+      make("span", null, String(item.tool || "")),
+      make("time", null, `${num(item.durationMs)}ms`)
+    );
+    rows.push(row);
+  }
+  return rows;
+}
+
+function renderSections(data) {
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const widgets = Array.isArray(data.widgets) ? data.widgets : [];
+  const byId = new Map(targets.map((t) => [t.id, t]));
+  const ordered = [];
+  for (const id of SECTION_ORDER) if (byId.has(id)) ordered.push(byId.get(id));
+  for (const t of targets) if (!SECTION_ORDER.includes(t.id)) ordered.push(t);
+
+  const sections = ordered.map((target) => {
+    const style = PROJECT_STYLE[target.id] || {
+      flavor: "neutral",
+      accent: target.accent || "#8878ff",
+      display: target.name,
+      tagline: target.description || "",
+      groups: [],
+    };
+    const section = make("section", `proj proj-${style.flavor}`);
+    section.style.setProperty("--p-accent", style.accent);
+    section.dataset.state = target.state || "offline";
+
+    const head = make("header", "proj-head");
+    const naming = make("div", "proj-naming");
+    naming.append(make("h2", null, style.display));
+    const sub = make("p", "proj-tagline");
+    sub.textContent = `${style.tagline}${target.version ? ` · v${String(target.version).replace(/^v/, "")}` : ""}`;
+    naming.append(sub);
+    const state = make("div", "proj-state");
     const dot = make("i", "dot");
     dot.dataset.status = target.state || "offline";
     const stateText = { online: "正常", degraded: "降级", offline: "离线" }[target.state] || "未知";
-    state.append(dot, make("span", null, stateText));
-    top.append(name, state);
+    state.append(dot, make("b", null, stateText));
+    head.append(naming, state);
 
-    const rows = make("div", "pc-rows");
-    rows.append(componentRow("MCP Server", target.mcp));
-    if (target.tunnel) rows.append(componentRow("Secure Tunnel", target.tunnel));
+    const vitals = make("div", "proj-vitals");
+    vitals.append(probeChip("MCP", target.mcp));
+    if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
 
-    card.append(top, rows);
-    return card;
+    const dataZone = make("div", "proj-data");
+    for (const card of sectionDataCards(target, widgets, data.gateway || {}, data.fleet || null)) {
+      dataZone.append(card);
+    }
+
+    const tail = make("div", "proj-tail");
+    const tailRows = sectionTail(target, data);
+    if (tailRows.length) {
+      for (const row of tailRows) tail.append(row);
+    } else {
+      tail.append(make("p", "pt-quiet", "近期安静，无状态变化"));
+    }
+
+    section.append(head, vitals, dataZone, tail);
+    return section;
   });
-  replace(dom.projectGrid, cards.length ? cards : [make("p", "empty-note", "尚未配置监控目标")]);
+  replace(dom.projectSections, sections);
+}
 
+function renderCompact(data, payload) {
+  const summary = data.summary || {};
+  const online = num(summary.online);
+  const total = num(summary.total);
+  dom.heroValueCompact.textContent = `${online}/${total}`;
+  dom.heroLabelCompact.textContent = payload.statusLabel || "在线";
+  setMeter(dom.meterCompact, dom.meterFillCompact, online, total, payload.status);
+  dom.compactCalls.textContent = compact(summary.calls24h);
+  dom.compactRate.textContent = `${num(summary.successRate, 100).toFixed(1)}%`;
+
+  const targets = Array.isArray(data.targets) ? data.targets : [];
   const rows = targets.map((target) => {
     const row = make("div", "compact-row");
     const dot = make("i", "dot");
@@ -289,6 +426,15 @@ function renderProjects(targets) {
   });
   replace(dom.compactList, rows.length ? rows : [make("p", "empty-note", "尚未配置监控目标")]);
 }
+
+function setMeter(meter, fill, online, total, status) {
+  const ratio = total > 0 ? Math.min(1, online / total) : 0;
+  meter.dataset.status = status;
+  fill.style.strokeDasharray = String(CIRCUMFERENCE);
+  fill.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - ratio));
+}
+
+/* ---------- chart / events / extension widgets ---------- */
 
 function renderChart(hourly) {
   const totals = hourly.map((bucket) => num(bucket.calls));
@@ -361,8 +507,6 @@ function renderEvents(data) {
   replace(dom.eventList, rows.length ? rows : [make("p", "empty-note", "暂无状态变化或异常")]);
 }
 
-/* ---------- board widgets (扩展面板) ---------- */
-
 function widgetBody(widget) {
   const body = make("div", "widget-body");
   if (!widget.ok) {
@@ -420,11 +564,18 @@ function widgetBody(widget) {
   return body;
 }
 
-function renderWidgets(widgets) {
-  dom.widgetCount.textContent = String(widgets.length);
+function renderExtensionWidgets(widgets) {
+  // Project-owned widgets live inside their sections; the extension panel keeps
+  // everything else (memos, agenda, project progress, custom cards).
+  const claimed = new Set();
+  for (const style of Object.values(PROJECT_STYLE)) {
+    for (const g of style.groups) claimed.add(g);
+  }
+  const rest = widgets.filter((w) => !claimed.has(w.group || ""));
+  dom.widgetCount.textContent = String(rest.length);
   const nodes = [];
   let currentGroup = null;
-  for (const widget of widgets) {
+  for (const widget of rest) {
     const group = widget.group || null;
     if (group !== currentGroup) {
       currentGroup = group;
@@ -475,8 +626,6 @@ dom.plot.addEventListener("mouseleave", () => {
   dom.chartTip.hidden = true;
 });
 
-/* ---------- controls ---------- */
-
 /* ---------- one-click repair ---------- */
 
 let repairArmTimer = null;
@@ -515,6 +664,8 @@ async function requestRepair(button) {
   window.setTimeout(() => pull(true), 3000);
 }
 
+/* ---------- controls ---------- */
+
 function bindControls() {
   el("btnRefresh").addEventListener("click", async () => {
     dom.btnRefresh.classList.add("spinning");
@@ -539,7 +690,10 @@ function bindControls() {
   el("btnTheme").addEventListener("click", async () => {
     const next = root.dataset.theme === "dark" ? "light" : "dark";
     const bridge = api();
-    if (bridge) render(await bridge.set_theme(next));
+    if (bridge) {
+      lastDataKey = "";
+      render(await bridge.set_theme(next));
+    }
   });
 }
 
