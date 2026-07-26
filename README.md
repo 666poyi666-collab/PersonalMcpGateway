@@ -22,6 +22,9 @@ Endpoints:
 - Health and administration: `http://127.0.0.1:8761`
 - Real-time dashboard: `http://127.0.0.1:8761/admin/status`
 
+The same board is available as a native window with a status tray icon. Install it for the current
+user, with no elevation, using `desktop\Install-PersonalMcpDesktop.cmd`; see `docs/desktop.md`.
+
 Configuration examples are in `modules/`. Never commit application tokens, device IDs, tunnel
 IDs, network addresses, personal content, or runtime logs. WatchIntervals runs its own independent
 MCP Server and is intentionally not registered here.

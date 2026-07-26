@@ -5,6 +5,7 @@
 - [Security](security.md)
 - [Windows deployment](deployment-windows.md)
 - [Real-time dashboard](dashboard.md)
+- [Desktop board](desktop.md)
 - [ChatGPT setup](chatgpt-setup.md)
 - [Troubleshooting](troubleshooting.md)
 - [Testing](testing.md)

@@ -10,6 +10,9 @@ recovers. The refresh button bypasses the three-second shared probe cache. The c
 multiple open dashboard tabs from multiplying health traffic. The page loads no CDN scripts, fonts,
 analytics, or remote resources.
 
+The same data is available as a native window with a status tray icon. See
+[Desktop board](desktop.md).
+
 ## Add a target
 
 Copy `dashboard/targets.example.yaml` to:
