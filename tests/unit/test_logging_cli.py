@@ -24,6 +24,17 @@ def test_json_formatter_and_logging_configuration(tmp_path: Path) -> None:
     assert settings.log_path.exists()
 
 
+def test_logging_falls_back_to_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def denied(*args: object, **kwargs: object) -> logging.Handler:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(logging, "FileHandler", denied)
+    configure_logging(Settings(data_dir=tmp_path))
+
+    assert len(logging.getLogger().handlers) == 1
+    assert isinstance(logging.getLogger().handlers[0], logging.StreamHandler)
+
+
 @pytest.mark.asyncio
 async def test_doctor_and_parser(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     runtime = build_runtime(Settings(data_dir=tmp_path, modules_dir=tmp_path / "missing"))

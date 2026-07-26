@@ -231,6 +231,13 @@ New-Item -ItemType Directory -Path $gatewayLogDir, $gatewayServiceLogDir, `
     "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(RX)" | Out-Null
 & icacls $gatewayLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
     "$gatewaySid`:(OI)(CI)M" /T | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Failed to configure Gateway log directory ACLs.' }
+$gatewayLogPath = Join-Path $gatewayLogDir 'gateway.jsonl'
+if (Test-Path -LiteralPath $gatewayLogPath) {
+    & icacls $gatewayLogPath /inheritance:r `
+        /grant:r 'BUILTIN\Administrators:F' "$gatewaySid`:M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to configure Gateway log file ACLs.' }
+}
 & icacls $serviceLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' |
     Out-Null
 & icacls $gatewayServiceLogDir /inheritance:r `

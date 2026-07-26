@@ -29,10 +29,23 @@ def configure_logging(settings: Settings) -> None:
     formatter = JsonFormatter()
     stream = logging.StreamHandler()
     stream.setFormatter(formatter)
-    file_handler = logging.FileHandler(settings.log_path, encoding="utf-8")
-    file_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stream]
+    file_error: OSError | None = None
+    try:
+        file_handler = logging.FileHandler(settings.log_path, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+    except OSError as exc:
+        file_error = exc
     root = logging.getLogger()
     root.handlers.clear()
-    root.addHandler(stream)
-    root.addHandler(file_handler)
+    for handler in handlers:
+        root.addHandler(handler)
     root.setLevel(settings.log_level.upper())
+    if file_error is not None:
+        root.warning(
+            json.dumps(
+                {"event": "file_log_unavailable", "error": type(file_error).__name__},
+                separators=(",", ":"),
+            )
+        )
