@@ -19,6 +19,8 @@ paths if that changes.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import shutil
 import subprocess
 import sys
@@ -35,13 +37,26 @@ from pydantic import BaseModel, Field, field_validator
 from personal_mcp_gateway.settings import Settings
 
 WIDGET_KINDS = frozenset({"stat", "list", "keyvalue", "text"})
-WIDGET_TYPES = frozenset({"text", "agenda", "projects", "remote"})
+WIDGET_TYPES = frozenset({"text", "agenda", "projects", "remote", "mcp"})
+# Presentation flavors let each source project keep its own art direction on the
+# shared board: FocusLink's hairline instrument, the journal's ink-on-paper, the
+# watch's dark sport dial. The renderers own the actual styles.
+WIDGET_FLAVORS = frozenset({"neutral", "instrument", "paper", "sport"})
+
+# The board is observational: an mcp widget may call a tool only when its name
+# carries a read verb. Everything else -- start/stop/set/append and friends --
+# is refused before a connection is even opened.
+_READ_TOOL = re.compile(r"(^|_)(get|list|summarize|search|read|status|health|capabilities)(_|$)")
 
 # How long one widget's result stays good. The dashboard snapshot itself caches
 # for 3 seconds; these only need to keep the slow providers off that hot path.
-_TTL_SECONDS = {"text": 3600.0, "agenda": 15.0, "projects": 60.0, "remote": 0.0}
+_TTL_SECONDS = {"text": 3600.0, "agenda": 15.0, "projects": 60.0, "remote": 0.0, "mcp": 30.0}
 
 _PROVIDER_TIMEOUT = 4.0
+# MCP widgets aggregate real project data (a workout summary walks the phone's
+# whole history over LAN), so they get a longer leash; their 30s TTL keeps the
+# occasional slow round off the snapshot hot path.
+_MCP_TIMEOUT = 9.0
 _REMOTE_TIMEOUT = 2.5
 _GIT_TIMEOUT = 3.0
 _MAX_REPOS = 12
@@ -64,6 +79,9 @@ class WidgetConfig(BaseModel):
     type: str
     title: str
     subtitle: str | None = None
+    group: str | None = Field(default=None, max_length=24)
+    accent: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    flavor: str = "neutral"
     options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("type")
@@ -73,6 +91,13 @@ class WidgetConfig(BaseModel):
         # message instead of a permanently erroring card.
         if value not in WIDGET_TYPES:
             raise ValueError(f"unknown widget type: {value}")
+        return value
+
+    @field_validator("flavor")
+    @classmethod
+    def known_flavor(cls, value: str) -> str:
+        if value not in WIDGET_FLAVORS:
+            raise ValueError(f"unknown widget flavor: {value}")
         return value
 
 
@@ -234,14 +259,17 @@ class WidgetHub:
             expires, cached_fingerprint, payload = cached
             if cached_fingerprint == fingerprint and time.monotonic() < expires:
                 return payload
+        budget = _MCP_TIMEOUT if config.type == "mcp" else _PROVIDER_TIMEOUT
         try:
-            async with asyncio.timeout(_PROVIDER_TIMEOUT):
+            async with asyncio.timeout(budget):
                 if config.type == "text":
                     payload = self._provide_text(config)
                 elif config.type == "agenda":
                     payload = await asyncio.to_thread(self._provide_agenda, config)
                 elif config.type == "projects":
                     payload = await asyncio.to_thread(self._provide_projects, config)
+                elif config.type == "mcp":
+                    payload = await self._provide_mcp(config)
                 else:
                     payload = await self._provide_remote(config)
         except TimeoutError:
@@ -258,6 +286,9 @@ class WidgetHub:
             "type": config.type,
             "title": config.title,
             "subtitle": config.subtitle,
+            "group": config.group,
+            "accent": config.accent,
+            "flavor": config.flavor,
         }
 
     def _ok(self, config: WidgetConfig, kind: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -363,6 +394,36 @@ class WidgetHub:
         item["subtitle"] = _clip(f"{branch} · {_relative_zh(committed)} · {subject}")
         return item
 
+    async def _provide_mcp(self, config: WidgetConfig) -> dict[str, Any]:
+        """Call one read-only tool on a loopback MCP and present its result.
+
+        This is how the board goes deeper than health for the independent MCP
+        projects: today's focus total from Foxlink, workout and sleep summaries
+        from the watch, journal counts and recent titles from 拾光 -- all
+        through the same tools ChatGPT uses, so there is no second data path.
+        """
+        url = config.options.get("url")
+        if not isinstance(url, str) or not _require_loopback(url):
+            return self._fail(config, "mcp 模块只接受 loopback 地址 (127.0.0.1)")
+        tool = config.options.get("tool")
+        if not isinstance(tool, str) or not tool.strip():
+            return self._fail(config, "mcp 模块缺少 options.tool")
+        tool = tool.strip()
+        if not _READ_TOOL.search(tool):
+            return self._fail(config, f"{tool} 不是只读工具; 看板只允许 get/list/summarize 类调用")
+        args_raw = config.options.get("args")
+        args = cast(dict[str, Any], args_raw) if isinstance(args_raw, dict) else {}
+        try:
+            payload = await _call_mcp_tool(url, tool, args)
+        except Exception:
+            return self._fail(config, "MCP 服务无法访问或响应超时")
+        if payload is None:
+            return self._fail(config, "工具没有返回可解析的数据")
+        if payload.get("isError"):
+            return self._fail(config, "工具执行返回错误")
+        kind, data = _present_mcp_payload(tool, payload)
+        return self._ok(config, kind, data)
+
     async def _provide_remote(self, config: WidgetConfig) -> dict[str, Any]:
         url = config.options.get("url")
         if not isinstance(url, str) or not _require_loopback(url):
@@ -416,6 +477,158 @@ def _coerce_clock(value: object) -> str | None:
     if isinstance(value, str):
         return value.strip() or None
     return None
+
+
+async def _call_mcp_tool(url: str, tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Run one tool against a loopback MCP and return its structured payload."""
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    async with streamable_http_client(url) as (read_stream, write_stream, _):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            result = await session.call_tool(tool, args)
+    if result.isError:
+        return {"isError": True}
+    if isinstance(result.structuredContent, dict):
+        return result.structuredContent
+    for item in result.content:
+        text = getattr(item, "text", None)
+        if isinstance(text, str) and text.strip():
+            try:
+                parsed: object = json.loads(text)
+            except ValueError:
+                return {"text": text}
+            return cast(dict[str, Any], parsed) if isinstance(parsed, dict) else {"value": parsed}
+    return None
+
+
+def _unwrap_envelope(payload: dict[str, Any]) -> dict[str, Any]:
+    # Journal and Foxlink wrap results as {ok, data}; the watch returns bare.
+    data = payload.get("data")
+    if payload.get("ok") is True and isinstance(data, dict):
+        return cast(dict[str, Any], data)
+    return payload
+
+
+def _fmt_hours(milliseconds: object) -> str:
+    try:
+        minutes = int(float(cast(Any, milliseconds)) / 60000)
+    except (TypeError, ValueError):
+        return "—"
+    if minutes < 60:
+        return f"{minutes} 分钟"
+    return f"{minutes // 60} 小时 {minutes % 60:02d} 分"
+
+
+def _fmt_km(meters: object) -> str:
+    try:
+        value = float(cast(Any, meters))
+    except (TypeError, ValueError):
+        return "—"
+    return f"{value / 1000:.2f} km" if value >= 1000 else f"{value:.0f} m"
+
+
+_MOOD_GLYPHS = {1: "低落", 2: "一般", 3: "平稳", 4: "不错", 5: "很好"}
+
+
+def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Shape a known tool's result for the board; unknown tools get keyvalue.
+
+    Presenters are curated per tool from the real payloads each MCP returns
+    today, so the cards read like the source project rather than raw JSON.
+    Journal items deliberately surface date/title/mood only -- diary body text
+    never reaches a board that hangs on a wall.
+    """
+    data = _unwrap_envelope(payload)
+    if tool == "foxlink_get_today_summary":
+        sessions = data.get("sessionCount", 0)
+        note = f"{sessions} 次会话 · 暂停 {_fmt_hours(data.get('pauseElapsedMs', 0))}"
+        return "stat", {
+            "value": _fmt_hours(data.get("activeElapsedMs", 0)),
+            "label": f"有效专注 · {data.get('date', '')}",
+            "note": note,
+        }
+    if tool == "watch_summarize_workouts":
+        latest = data.get("latest")
+        latest_dict = cast(dict[str, Any], latest) if isinstance(latest, dict) else {}
+        plan = str(latest_dict.get("planName") or "").strip()
+        plan_group = str(latest_dict.get("planGroup") or "").strip()
+        pairs = [
+            {"label": "训练次数", "value": str(data.get("workoutCount", 0))},
+            {"label": "总距离", "value": _fmt_km(data.get("totalDistanceMeters", 0))},
+            {"label": "累计活动", "value": _fmt_hours(data.get("totalActiveDurationMs", 0))},
+            {"label": "平均心率", "value": f"{data.get('averageHeartRate', 0)} bpm"},
+        ]
+        if plan:
+            label = f"{plan_group} · {plan}" if plan_group else plan
+            pairs.append({"label": "最近计划", "value": _clip(label, 40)})
+        return "keyvalue", {"pairs": pairs}
+    if tool == "watch_get_latest_sleep":
+        record = data.get("record")
+        record_dict = cast(dict[str, Any], record) if isinstance(record, dict) else {}
+        if not record_dict:
+            return "text", {"body": "暂无睡眠记录"}
+        minutes = int(record_dict.get("totalDurationMinutes", 0) or 0)
+        heart = record_dict.get("heartRateRangeBpm")
+        heart_dict = cast(dict[str, Any], heart) if isinstance(heart, dict) else {}
+        pairs = [
+            {"label": "睡眠时长", "value": f"{minutes // 60} 小时 {minutes % 60:02d} 分"},
+            {"label": "睡眠评分", "value": str(record_dict.get("sleepScore", "—"))},
+        ]
+        if heart_dict:
+            low, high = heart_dict.get("minimum", "—"), heart_dict.get("maximum", "—")
+            pairs.append({"label": "心率区间", "value": f"{low}-{high} bpm"})
+        return "keyvalue", {"pairs": pairs}
+    if tool == "journal_get_status":
+        updated = str(data.get("latestUpdatedAt") or "")
+        note = None
+        if updated:
+            try:
+                moment = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                note = f"最近更新 {_relative_zh(moment)}"
+            except ValueError:
+                note = None
+        return "stat", {
+            "value": str(data.get("entryCount", 0)),
+            "label": "日记总数",
+            "note": note,
+        }
+    if tool == "journal_list_recent":
+        items_raw = data.get("items")
+        items: list[dict[str, Any]] = []
+        if isinstance(items_raw, list):
+            for entry in cast(list[Any], items_raw)[:8]:
+                if not isinstance(entry, dict):
+                    continue
+                entry_dict = cast(dict[str, Any], entry)
+                mood = entry_dict.get("mood")
+                mood_label = _MOOD_GLYPHS.get(mood) if isinstance(mood, int) else None
+                tags_raw = entry_dict.get("tags")
+                tags = (
+                    "、".join(str(tag) for tag in cast(list[Any], tags_raw)[:3])
+                    if isinstance(tags_raw, list) and tags_raw
+                    else None
+                )
+                subtitle_parts = [part for part in (mood_label, tags) if part]
+                items.append(
+                    {
+                        "title": _clip(str(entry_dict.get("title") or "(无标题)"), 60),
+                        "subtitle": " · ".join(subtitle_parts) or None,
+                        "value": str(entry_dict.get("date") or ""),
+                        "state": None,
+                    }
+                )
+        return "list", {"items": items, "empty": "还没有日记"}
+    # Unknown read tool: surface its scalar fields honestly rather than raw JSON.
+    pairs = [
+        {"label": _clip(key, 40), "value": _clip(value, 80)}
+        for key, value in data.items()
+        if isinstance(value, str | int | float | bool)
+    ][:8]
+    if pairs:
+        return "keyvalue", {"pairs": pairs}
+    return "text", {"body": _clip(json.dumps(data, ensure_ascii=False), 400)}
 
 
 def _git(path: Path, *args: str) -> str | None:

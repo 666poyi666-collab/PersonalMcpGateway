@@ -168,8 +168,21 @@
   }
   function renderWidgets(widgets) {
     const grid = $("widgetGrid"); grid.replaceChildren();
+    let currentGroup = null;
     widgets.forEach((widget) => {
-      const card = document.createElement("article"); card.className = `widget-card${widget.ok ? "" : " error"}`;
+      const group = widget.group || null;
+      if (group !== currentGroup) {
+        currentGroup = group;
+        if (group) {
+          const head = document.createElement("div"); head.className = "widget-group-head";
+          if (widget.accent) head.style.setProperty("--w-accent", widget.accent);
+          const dot = document.createElement("i");
+          const label = document.createElement("span"); label.textContent = group;
+          head.append(dot, label); grid.append(head);
+        }
+      }
+      const card = document.createElement("article"); card.className = `widget-card flavor-${widget.flavor || "neutral"}${widget.ok ? "" : " error"}`;
+      if (widget.accent) card.style.setProperty("--w-accent", widget.accent);
       const head = document.createElement("div"); head.className = "widget-head";
       const heading = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = widget.title; heading.append(title);

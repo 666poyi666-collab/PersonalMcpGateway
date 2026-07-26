@@ -230,6 +230,46 @@ footer { display: flex; justify-content: space-between; padding: 20px 3px 0; col
 .widget-text p:last-child { margin-bottom: 0; }
 .widget-empty { min-height: 64px; display: grid; place-items: center; padding: 10px; border: 1px dashed var(--line); border-radius: 9px; color: var(--faint); font-size: 10px; text-align: center; }
 
+/* Widget groups & flavors: each source project keeps its own art direction on
+   the shared board, built from that project's real tokens. Accents here are
+   project identity (like target accents), never status. */
+.widget-group-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; margin: 6px 0 -3px; color: var(--muted); font: 700 9px ui-monospace; letter-spacing: .14em; }
+.widget-group-head i { width: 8px; height: 8px; flex: 0 0 auto; background: var(--w-accent, var(--violet)); }
+.widget-card { --w-accent: var(--violet); }
+.widget-card.flavor-instrument { --w-accent: #007a55; border-radius: 0; background: var(--panel-solid); border-color: var(--line-bright); }
+body:not(.light) .widget-card.flavor-instrument { --w-accent: #35c493; }
+.flavor-instrument .widget-head { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.flavor-instrument .widget-head > div > strong::after { content: ""; display: block; width: 20px; height: 2px; margin-top: 5px; background: var(--w-accent); }
+.flavor-instrument .widget-chip { border-radius: 0; }
+.flavor-instrument .widget-stat strong { color: var(--w-accent); font-variant-numeric: tabular-nums; }
+.flavor-instrument .widget-kv b, .flavor-instrument .widget-row em { font-variant-numeric: tabular-nums; }
+.widget-card.flavor-paper { --w-accent: #a85f27; background: #f7f4ed; border-color: #e3ddce; border-radius: 8px; color: #191713; }
+body:not(.light) .widget-card.flavor-paper { --w-accent: #e0a458; background: #201d18; border-color: rgba(226,216,196,.16); color: #f2ede2; }
+.flavor-paper .widget-head strong, .flavor-paper .widget-stat strong { font-family: Georgia, "Noto Serif SC", "SimSun", serif; }
+.flavor-paper .widget-head small, .flavor-paper .widget-stat span, .flavor-paper .widget-row-info small { color: #8a8271; }
+body:not(.light) .flavor-paper .widget-head small, body:not(.light) .flavor-paper .widget-stat span, body:not(.light) .flavor-paper .widget-row-info small { color: rgba(242,237,226,.55); }
+.flavor-paper .widget-chip { border-color: #e3ddce; color: #8a8271; }
+body:not(.light) .flavor-paper .widget-chip { border-color: rgba(226,216,196,.2); color: rgba(242,237,226,.5); }
+.flavor-paper .widget-row { border-bottom-color: #e3ddce; border-left: 2px solid var(--w-accent); padding-left: 8px; }
+body:not(.light) .flavor-paper .widget-row { border-bottom-color: rgba(226,216,196,.14); }
+.flavor-paper .widget-row-info strong, .flavor-paper .widget-text p { color: inherit; }
+.flavor-paper .widget-row em { color: var(--w-accent); }
+.flavor-paper .widget-empty { border-color: #e3ddce; color: #8a8271; }
+.widget-card.flavor-sport { --w-accent: #b6ff39; background: #0e120b; border: 1px solid rgba(182,255,57,.22); border-radius: 18px; color: #e8f5d0; }
+.flavor-sport .widget-head strong { color: #f2ffdc; }
+.flavor-sport .widget-head small, .flavor-sport .widget-stat span, .flavor-sport .widget-kv span { color: rgba(232,245,208,.6); }
+.flavor-sport .widget-chip { border-color: rgba(182,255,57,.3); border-radius: 999px; color: var(--w-accent); }
+.flavor-sport .widget-stat strong, .flavor-sport .widget-kv b { color: var(--w-accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.flavor-sport .widget-stat small { color: rgba(232,245,208,.45); }
+.flavor-sport .widget-row { border-bottom-color: rgba(182,255,57,.12); }
+.flavor-sport .widget-row-info strong { color: #f2ffdc; }
+.flavor-sport .widget-row-info small { color: rgba(232,245,208,.5); }
+.flavor-sport .widget-row em { color: var(--w-accent); }
+.flavor-sport .widget-text p { color: rgba(232,245,208,.75); }
+.flavor-sport .widget-empty { border-color: rgba(182,255,57,.2); color: rgba(232,245,208,.5); }
+.flavor-sport .widget-error { color: #ff9d7a; }
+.flavor-sport .widget-error::before { background: #ff9d7a; }
+
 /* Light is the default surface (set by dashboard.js) and dark stays one click away.
    It is a selected set of steps, not an inverted flip: the series hue is re-picked
    for a white surface (#4a3aa7 clears 3:1 where the dark step would not). Status hues

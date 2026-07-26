@@ -10,7 +10,10 @@ from typing import Any
 import httpx
 import pytest
 
-from personal_mcp_gateway.admin.widgets import WidgetHub
+from personal_mcp_gateway.admin.widgets import (
+    WidgetHub,
+    _present_mcp_payload,  # pyright: ignore[reportPrivateUsage]
+)
 from personal_mcp_gateway.settings import Settings
 
 
@@ -223,6 +226,159 @@ widgets:
     )
     widgets = await build_hub(tmp_path, transport=httpx.MockTransport(handler)).snapshot()
     assert all(widget["ok"] is False for widget in widgets)
+
+
+async def test_group_accent_and_flavor_flow_through_to_the_payload(tmp_path: Path) -> None:
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: focus
+    type: text
+    title: 专注
+    group: FocusLink
+    accent: "#007A55"
+    flavor: instrument
+    options: {body: x}
+""",
+    )
+    widgets = await build_hub(tmp_path).snapshot()
+    widget = widgets[0]
+    assert widget["group"] == "FocusLink"
+    assert widget["accent"] == "#007A55"
+    assert widget["flavor"] == "instrument"
+
+
+async def test_bad_accent_or_flavor_is_a_config_error(tmp_path: Path) -> None:
+    write_config(
+        tmp_path,
+        "widgets:\n  - id: a\n    type: text\n    title: X\n    flavor: hologram\n",
+    )
+    widgets = await build_hub(tmp_path).snapshot()
+    assert widgets[0]["ok"] is False
+
+    write_config(
+        tmp_path,
+        "widgets:\n  - id: a\n    type: text\n    title: X\n    accent: red\n",
+    )
+    widgets = await build_hub(tmp_path).snapshot()
+    assert widgets[0]["ok"] is False
+
+
+async def test_mcp_widget_gate_rejects_bad_configs_without_network(tmp_path: Path) -> None:
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: outside
+    type: mcp
+    title: A
+    options: {url: "https://example.com/mcp", tool: foxlink_get_status}
+  - id: writer
+    type: mcp
+    title: B
+    options: {url: "http://127.0.0.1:8770/mcp", tool: foxlink_start_focus}
+  - id: toolless
+    type: mcp
+    title: C
+    options: {url: "http://127.0.0.1:8770/mcp"}
+""",
+    )
+    widgets = await build_hub(tmp_path).snapshot()
+    by_id = {widget["id"]: widget for widget in widgets}
+    assert "loopback" in by_id["outside"]["error"]
+    assert "只读" in by_id["writer"]["error"]
+    assert "options.tool" in by_id["toolless"]["error"]
+
+
+def test_mcp_presenters_shape_the_real_payloads() -> None:
+    kind, data = _present_mcp_payload(
+        "foxlink_get_today_summary",
+        {
+            "ok": True,
+            "data": {
+                "date": "2026-07-25",
+                "sessionCount": 3,
+                "activeElapsedMs": 10331904,
+                "pauseElapsedMs": 10786202,
+            },
+        },
+    )
+    assert kind == "stat"
+    assert data["value"] == "2 小时 52 分"
+    assert "3 次会话" in data["note"]
+
+    kind, data = _present_mcp_payload(
+        "watch_summarize_workouts",
+        {
+            "workoutCount": 11,
+            "totalDistanceMeters": 2671.6,
+            "totalActiveDurationMs": 7790154.0,
+            "averageHeartRate": 105,
+            "latest": {"planName": "day1", "planGroup": "减肥"},
+        },
+    )
+    assert kind == "keyvalue"
+    pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
+    assert pairs["训练次数"] == "11"
+    assert pairs["总距离"] == "2.67 km"
+    assert pairs["最近计划"] == "减肥 · day1"
+
+    kind, data = _present_mcp_payload(
+        "watch_get_latest_sleep",
+        {
+            "state": "ready",
+            "record": {
+                "totalDurationMinutes": 315,
+                "sleepScore": 69,
+                "heartRateRangeBpm": {"minimum": 55, "maximum": 69},
+            },
+        },
+    )
+    assert kind == "keyvalue"
+    pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
+    assert pairs["睡眠时长"] == "5 小时 15 分"
+    assert pairs["心率区间"] == "55-69 bpm"
+
+
+def test_journal_presenter_never_leaks_diary_body_text() -> None:
+    kind, data = _present_mcp_payload(
+        "journal_list_recent",
+        {
+            "ok": True,
+            "data": {
+                "items": [
+                    {
+                        "date": "2026-07-22",
+                        "title": "复盘",
+                        "mood": 3,
+                        "tags": ["生活"],
+                        "summary": "这是绝不能上墙的私密正文",
+                    }
+                ]
+            },
+        },
+    )
+    assert kind == "list"
+    item = data["items"][0]
+    assert item["title"] == "复盘"
+    assert item["value"] == "2026-07-22"
+    assert item["subtitle"] == "平稳 · 生活"
+    assert "私密正文" not in str(data)
+
+
+def test_unknown_read_tool_falls_back_to_scalar_keyvalue() -> None:
+    kind, data = _present_mcp_payload(
+        "journal_get_status",
+        {"ok": True, "data": {"entryCount": 7, "latestUpdatedAt": "bad-date"}},
+    )
+    assert kind == "stat"
+    assert data["value"] == "7"
+    assert data["note"] is None
+
+    kind, data = _present_mcp_payload("something_get_odd", {"alpha": 1, "beta": "two"})
+    assert kind == "keyvalue"
+    assert {pair["label"] for pair in data["pairs"]} == {"alpha", "beta"}
 
 
 async def test_results_are_cached_until_the_config_changes(

@@ -393,17 +393,31 @@ function widgetBody(widget) {
 
 function renderWidgets(widgets) {
   dom.widgetCount.textContent = String(widgets.length);
-  const cards = widgets.map((widget) => {
-    const card = make("article", widget.ok ? "widget-card" : "widget-card error");
+  const nodes = [];
+  let currentGroup = null;
+  for (const widget of widgets) {
+    const group = widget.group || null;
+    if (group !== currentGroup) {
+      currentGroup = group;
+      if (group) {
+        const head = make("div", "widget-group-head");
+        if (widget.accent) head.style.setProperty("--w-accent", widget.accent);
+        head.append(make("i"), make("span", null, group));
+        nodes.push(head);
+      }
+    }
+    const flavor = `flavor-${widget.flavor || "neutral"}`;
+    const card = make("article", `widget-card ${flavor}${widget.ok ? "" : " error"}`);
+    if (widget.accent) card.style.setProperty("--w-accent", widget.accent);
     const head = make("div", "widget-head");
     const heading = make("div");
     heading.append(make("strong", null, widget.title || widget.id));
     if (widget.subtitle) heading.append(make("small", null, widget.subtitle));
     head.append(heading, make("span", "widget-chip", widget.type || ""));
     card.append(head, widgetBody(widget));
-    return card;
-  });
-  replace(dom.widgetGrid, cards);
+    nodes.push(card);
+  }
+  replace(dom.widgetGrid, nodes);
 }
 
 /* ---------- view state ---------- */

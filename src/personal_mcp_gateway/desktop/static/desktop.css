@@ -299,6 +299,61 @@ body.disconnected .board, body.disconnected .compact-board { display: none; }
 .widget-text p:last-child { margin-bottom: 0; }
 .widget-empty { min-height: 60px; display: grid; place-items: center; padding: 10px; border: 1px dashed var(--line); border-radius: 9px; color: var(--ink-4); font-size: 10px; text-align: center; }
 
+/* ---------- widget groups & flavors ----------
+   Differentiation is the point: each source project keeps its own art
+   direction on the shared board, built from that project's real tokens.
+   Accents here are project identity (like target accents), never status. */
+
+.widget-group-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; margin: 5px 0 -2px; color: var(--ink-3); font: 700 9px ui-monospace, monospace; letter-spacing: .14em; }
+.widget-group-head i { width: 8px; height: 8px; flex: 0 0 auto; background: var(--w-accent, var(--brand-a)); }
+.widget-card { --w-accent: var(--brand-a); }
+
+/* FocusLink「时间仪器」: hairline right angles, a 20px accent tick under the
+   title, tabular industrial readings in the running accent (their own rule:
+   运行读数使用强调色). Default accent = FocusLink 翡翠 #007A55. */
+.widget-card.flavor-instrument { --w-accent: #007a55; border-radius: 0; box-shadow: none; background: var(--surface-1); border-color: var(--line-bright); }
+.flavor-instrument .widget-head { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.flavor-instrument .widget-head > div > strong::after { content: ""; display: block; width: 20px; height: 2px; margin-top: 5px; background: var(--w-accent); }
+.flavor-instrument .widget-chip { border-radius: 0; }
+.flavor-instrument .widget-stat strong { color: var(--w-accent); font-variant-numeric: tabular-nums; }
+.flavor-instrument .widget-kv b, .flavor-instrument .widget-row em { font-variant-numeric: tabular-nums; }
+
+/* 拾光「Ink & Daylight」: warm paper, serif ink, single ochre-gold accent;
+   list rows carry the 2px 赭金 focus line, dates act as 陶土 time anchors. */
+.widget-card.flavor-paper { --w-accent: #a85f27; background: #f7f4ed; border-color: #e3ddce; border-radius: 8px; box-shadow: none; color: #191713; }
+:root[data-theme="dark"] .widget-card.flavor-paper { --w-accent: #e0a458; background: #201d18; border-color: rgba(226, 216, 196, .16); color: #f2ede2; }
+.flavor-paper .widget-head strong, .flavor-paper .widget-stat strong { font-family: Georgia, "Noto Serif SC", "SimSun", serif; }
+.flavor-paper .widget-head small, .flavor-paper .widget-stat span { color: #8a8271; }
+:root[data-theme="dark"] .flavor-paper .widget-head small, :root[data-theme="dark"] .flavor-paper .widget-stat span { color: rgba(242, 237, 226, .55); }
+.flavor-paper .widget-chip { border-color: #e3ddce; color: #8a8271; }
+:root[data-theme="dark"] .flavor-paper .widget-chip { border-color: rgba(226, 216, 196, .2); color: rgba(242, 237, 226, .5); }
+.flavor-paper .widget-row { border-bottom-color: #e3ddce; border-left: 2px solid var(--w-accent); padding-left: 8px; }
+:root[data-theme="dark"] .flavor-paper .widget-row { border-bottom-color: rgba(226, 216, 196, .14); }
+.flavor-paper .widget-row-info strong { color: inherit; }
+.flavor-paper .widget-row-info small { color: #8a8271; }
+:root[data-theme="dark"] .flavor-paper .widget-row-info small { color: rgba(242, 237, 226, .5); }
+.flavor-paper .widget-row em { color: var(--w-accent); }
+.flavor-paper .widget-text p { color: inherit; }
+.flavor-paper .widget-empty { border-color: #e3ddce; color: #8a8271; }
+
+/* 间歇跑 sport dial: an always-dark watch face on the board -- luminous lime
+   readings on near-black, watch-screen corner radius, bold tabular digits. */
+.widget-card.flavor-sport { --w-accent: #b6ff39; background: #0e120b; border: 1px solid rgba(182, 255, 57, .22); border-radius: 18px; box-shadow: none; color: #e8f5d0; }
+.flavor-sport .widget-head strong { color: #f2ffdc; }
+.flavor-sport .widget-head small { color: rgba(232, 245, 208, .55); }
+.flavor-sport .widget-chip { border-color: rgba(182, 255, 57, .3); border-radius: 999px; color: var(--w-accent); }
+.flavor-sport .widget-stat strong, .flavor-sport .widget-kv b { color: var(--w-accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.flavor-sport .widget-stat span, .flavor-sport .widget-kv span { color: rgba(232, 245, 208, .6); }
+.flavor-sport .widget-stat small { color: rgba(232, 245, 208, .45); }
+.flavor-sport .widget-row { border-bottom-color: rgba(182, 255, 57, .12); }
+.flavor-sport .widget-row-info strong { color: #f2ffdc; }
+.flavor-sport .widget-row-info small { color: rgba(232, 245, 208, .5); }
+.flavor-sport .widget-row em { color: var(--w-accent); }
+.flavor-sport .widget-text p { color: rgba(232, 245, 208, .75); }
+.flavor-sport .widget-empty { border-color: rgba(182, 255, 57, .2); color: rgba(232, 245, 208, .5); }
+.flavor-sport .widget-error { color: #ff9d7a; }
+.flavor-sport .widget-error::before { background: #ff9d7a; }
+
 /* ---------- compact board ---------- */
 
 .compact-hero { display: grid; place-items: center; padding-top: 4px; }
