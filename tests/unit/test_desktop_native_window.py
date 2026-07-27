@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import itertools
+from collections.abc import Callable
+from typing import Any, cast
+
+import pytest
+
+from personal_mcp_gateway.desktop import native_window
 from personal_mcp_gateway.desktop.native_window import (
     HTBOTTOM,
     HTBOTTOMLEFT,
@@ -11,8 +18,168 @@ from personal_mcp_gateway.desktop.native_window import (
     HTTOPRIGHT,
     begin_window_resize,
     install_frameless_resize,
+    interpolate_window_rect,
     resize_hit_test,
+    resize_smoothing_factor,
+    resize_target_rect,
+    set_desktop_window_mode,
 )
+
+
+class _FakeCall:
+    def __init__(self, function: Callable[..., object]) -> None:
+        self.function = function
+        self.argtypes: object = None
+        self.restype: object = None
+
+    def __call__(self, *args: object) -> object:
+        return self.function(*args)
+
+
+class _ResizeUser32:
+    def __init__(self) -> None:
+        self.cursor_reads = 0
+        self.button_reads = 0
+        self.positions: list[tuple[int, int, int, int]] = []
+        self.messages: list[tuple[object, ...]] = []
+        self.GetCursorPos = _FakeCall(self._get_cursor_pos)
+        self.GetWindowRect = _FakeCall(self._get_window_rect)
+        self.WindowFromPoint = _FakeCall(self._window_from_point)
+        self.GetAsyncKeyState = _FakeCall(self._get_async_key_state)
+        self.ReleaseCapture = _FakeCall(self._release_capture)
+        self.SetForegroundWindow = _FakeCall(self._set_foreground_window)
+        self.SetWindowPos = _FakeCall(self._set_window_pos)
+        self.SendMessageW = _FakeCall(self._send_message)
+        self.GetDpiForWindow = _FakeCall(self._get_dpi_for_window)
+
+    def _get_cursor_pos(self, pointer: object) -> bool:
+        point = cast(Any, pointer)._obj
+        if self.cursor_reads == 0:
+            point.x, point.y = 1300, 1100
+        elif self.cursor_reads <= 3:
+            point.x, point.y = 1400, 1160
+        else:
+            # The cursor can move elsewhere while the ease-out is settling. The
+            # release rectangle must stay frozen at the last pressed position.
+            point.x, point.y = 1900, 1560
+        self.cursor_reads += 1
+        return True
+
+    @staticmethod
+    def _get_window_rect(_hwnd: object, pointer: object) -> bool:
+        rect = cast(Any, pointer)._obj
+        rect.left, rect.top, rect.right, rect.bottom = 100, 200, 1300, 1100
+        return True
+
+    def _get_async_key_state(self, _key: object) -> int:
+        self.button_reads += 1
+        return 0x8000 if self.button_reads <= 2 else 0
+
+    @staticmethod
+    def _window_from_point(_point: object) -> int:
+        return 456
+
+    @staticmethod
+    def _release_capture() -> bool:
+        return True
+
+    @staticmethod
+    def _set_foreground_window(_hwnd: object) -> bool:
+        return True
+
+    @staticmethod
+    def _get_dpi_for_window(_hwnd: object) -> int:
+        return 144
+
+    def _set_window_pos(
+        self,
+        _hwnd: object,
+        _after: object,
+        left: object,
+        top: object,
+        width: object,
+        height: object,
+        _flags: object,
+    ) -> bool:
+        self.positions.append(
+            (
+                int(cast(int, left)),
+                int(cast(int, top)),
+                int(cast(int, width)),
+                int(cast(int, height)),
+            )
+        )
+        return True
+
+    def _send_message(self, *args: object) -> int:
+        self.messages.append(args)
+        return 0
+
+
+class _ImmediateThread:
+    def __init__(
+        self,
+        *,
+        target: Callable[..., None],
+        args: tuple[object, ...],
+        name: str,
+        daemon: bool,
+    ) -> None:
+        self.target = target
+        self.args = args
+        self.name = name
+        self.daemon = daemon
+
+    def start(self) -> None:
+        self.target(*self.args)
+
+
+class _DesktopUser32:
+    def __init__(self) -> None:
+        self.ex_style = 0x00000100
+        self.alpha_calls: list[int] = []
+        self.position_after: list[int] = []
+        self.GetWindowLongPtrW = _FakeCall(self._get_window_long)
+        self.GetWindowLongW = self.GetWindowLongPtrW
+        self.SetWindowLongPtrW = _FakeCall(self._set_window_long)
+        self.SetWindowLongW = self.SetWindowLongPtrW
+        self.SetLayeredWindowAttributes = _FakeCall(self._set_layered_window_attributes)
+        self.SetWindowPos = _FakeCall(self._set_window_pos)
+
+    def _get_window_long(self, _hwnd: object, index: object) -> int:
+        assert int(cast(int, index)) == native_window.GWL_EXSTYLE
+        return self.ex_style
+
+    def _set_window_long(self, _hwnd: object, index: object, style: object) -> int:
+        assert int(cast(int, index)) == native_window.GWL_EXSTYLE
+        previous = self.ex_style
+        self.ex_style = int(cast(int, style))
+        return previous
+
+    def _set_layered_window_attributes(
+        self,
+        _hwnd: object,
+        _color: object,
+        alpha: object,
+        flags: object,
+    ) -> bool:
+        assert int(cast(int, flags)) == native_window.LWA_ALPHA
+        self.alpha_calls.append(int(cast(int, alpha)))
+        return True
+
+    def _set_window_pos(
+        self,
+        _hwnd: object,
+        insert_after: object,
+        _left: object,
+        _top: object,
+        _width: object,
+        _height: object,
+        flags: object,
+    ) -> bool:
+        assert int(cast(int, flags)) == native_window.SWP_DESKTOP_MODE
+        self.position_after.append(int(cast(int, insert_after)))
+        return True
 
 
 def test_resize_hit_test_covers_every_edge_and_corner() -> None:
@@ -32,3 +199,123 @@ def test_native_resize_requires_a_real_window_handle() -> None:
     assert install_frameless_resize(object()) is False
     assert begin_window_resize(object(), "se") is False
     assert begin_window_resize(object(), "not-an-edge") is False
+    assert set_desktop_window_mode(object(), True) is False
+
+
+def test_desktop_mode_adds_and_restores_native_window_styles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = _DesktopUser32()
+
+    def fake_native_handle(_window: Any) -> int:
+        return 321
+
+    def fake_windll(_name: str, use_last_error: bool) -> _DesktopUser32:
+        assert use_last_error is True
+        return user32
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+
+    assert set_desktop_window_mode(object(), True) is True
+    assert user32.ex_style & native_window.WS_EX_LAYERED
+    assert user32.ex_style & native_window.WS_EX_NOACTIVATE
+    assert user32.alpha_calls == [224]
+    assert user32.position_after == [native_window.HWND_BOTTOM]
+    assert begin_window_resize(object(), "se") is False
+
+    assert set_desktop_window_mode(object(), False) is True
+    assert user32.ex_style == 0x00000100
+    assert user32.alpha_calls[-1] == 255
+    assert user32.position_after[-1] == native_window.HWND_NOTOPMOST
+
+
+def test_resize_target_rect_moves_each_requested_boundary() -> None:
+    rect = (100, 200, 500, 600)
+    minimum = (240, 260)
+    assert resize_target_rect(rect, (500, 600), (560, 640), "se", minimum) == (
+        100,
+        200,
+        560,
+        640,
+    )
+    assert resize_target_rect(rect, (100, 200), (140, 230), "nw", minimum) == (
+        140,
+        230,
+        500,
+        600,
+    )
+
+
+def test_resize_target_rect_enforces_minimum_from_the_active_edge() -> None:
+    rect = (100, 200, 500, 600)
+    assert resize_target_rect(rect, (500, 400), (250, 400), "e", (300, 300)) == (
+        100,
+        200,
+        400,
+        600,
+    )
+    assert resize_target_rect(rect, (100, 200), (450, 550), "nw", (300, 300)) == (
+        200,
+        300,
+        500,
+        600,
+    )
+
+
+def test_window_rect_interpolation_is_smooth_and_frame_rate_independent() -> None:
+    factor = resize_smoothing_factor(1 / 60)
+    assert 0.2 < factor < 0.4
+    current = (0.0, 0.0, 100.0, 100.0)
+    target = (20, 10, 180, 160)
+    moved = interpolate_window_rect(current, target, factor)
+    assert 0 < moved[0] < target[0]
+    assert 0 < moved[1] < target[1]
+    assert current[2] < moved[2] < target[2]
+    assert current[3] < moved[3] < target[3]
+    assert resize_smoothing_factor(0) == 0
+    assert resize_smoothing_factor(1, 0) == 1
+
+
+def test_window_resize_runs_a_smoothed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = _ResizeUser32()
+    ticks = itertools.count()
+
+    def fake_native_handle(_window: Any) -> int:
+        return 123
+
+    def fake_windll(_name: str, use_last_error: bool) -> _ResizeUser32:
+        assert use_last_error is True
+        return user32
+
+    def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+    monkeypatch.setattr(native_window.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(native_window.time, "perf_counter", lambda: next(ticks) * 0.02)
+    monkeypatch.setattr(native_window.time, "sleep", no_sleep)
+
+    assert begin_window_resize(object(), "se") is True
+
+    assert user32.messages and user32.messages[0][1] == native_window.WM_CANCELMODE
+    assert len(user32.positions) >= 3
+    assert user32.positions[-1] == (100, 200, 1300, 960)
+    assert user32.cursor_reads >= 5
+    widths = {position[2] for position in user32.positions}
+    assert len(widths) >= 3

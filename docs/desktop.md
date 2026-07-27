@@ -59,6 +59,13 @@ starts the native GUI launcher and waits for a real window to appear. An instanc
 already started is inspected in place instead of being replaced, because the single-instance guard
 would refuse a second one anyway.
 
+For a visible restored window, the launch check presses and drags the bottom-right resize zone,
+confirms that both dimensions changed through at least four intermediate rectangles, and restores the
+original rectangle and cursor. The probe uses physical per-monitor DPI coordinates, so 125%, 150%,
+and other display scales test the same pixels a real pointer reaches. Minimized and hidden-to-tray
+windows retain the structural native frame and hit-test checks without being surfaced just for
+verification.
+
 The window is matched on its title and its restored size, and the state it was found in is recorded
 as `visible`, `minimized` or `hidden-to-tray`:
 
@@ -83,15 +90,16 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 | --- | --- |
 | Refresh | Bypasses the shared probe cache. |
 | Camera | Captures the board through Win32 `PrintWindow` without activating or controlling it, then saves a PNG under `Pictures\Poyi Control Center`. |
-| Tiles | Enters a freeform canvas. Drag any tile surface to place it, or drag any edge/corner to resize continuously. Alignment guides appear near board and peer-tile edges; changes save automatically. |
-| Window edges | Drag any edge or corner to resize the whole frameless window through the native Windows sizing loop. The board follows directly and settles after release. |
+| Tiles | Enters a freeform pixel canvas. Drag any tile surface horizontally or vertically, or drag any edge/corner to resize continuously. The workspace fills the window and expands beyond it in both directions; edge auto-scroll and both scrollbars expose off-screen content. Alignment guides appear near viewport and peer-tile edges; changes save automatically. |
+| Window edges | Drag any edge or corner to resize the whole frameless window. A 120 Hz Win32 bounds animator eases the outer edge toward the pointer and settles on the exact final size after release. |
 | Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
 | Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
+| Desktop | Locks the board in place, applies light transparency, avoids activation, and keeps it below normal application windows. This is independent from Pin and disables conflicting window controls until released. |
 | Compact | Shrinks to a narrow status panel that fits beside other work. |
 | Close | Hides to the tray; the poll loop and the tray icon keep running. |
-| Tray menu | Show, compact, pin, open the web dashboard, refresh, quit. |
+| Tray menu | Show, desktop mode, compact, pin, open the web dashboard, refresh, quit. |
 
-Window size, position, theme, compact mode, pin state, free tile positions and dimensions persist across
+Window size, position, theme, desktop mode, compact mode, pin state, free tile positions and dimensions persist across
 restarts. Brief probe failures keep the last valid board visible and show a restrained recovery
 banner until the next successful poll instead of flashing a full-screen disconnect state.
 

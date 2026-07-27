@@ -194,8 +194,10 @@ def test_snapshot_payload_carries_the_view_preferences() -> None:
     assert payload["view"] == {
         "compact": False,
         "onTop": False,
+        "desktopMode": False,
         "theme": "light",
         "adminUrl": "http://127.0.0.1:8761",
+        "projectLayoutVersion": 2,
         "projectLayout": {},
     }
     assert payload["stale"] is False
@@ -233,6 +235,47 @@ def test_always_on_top_reaches_the_window_and_the_saved_state() -> None:
 
     assert window.on_top is True
     assert load_state(state_path()).on_top is True
+
+
+def test_desktop_mode_locks_out_conflicting_window_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    window = FakeWindow()
+    controller.window = window
+    controller.state.compact = True
+    controller.state.on_top = True
+    controller.state.width = window.width
+    controller.state.height = window.height
+    calls: list[bool] = []
+
+    def set_mode(_window: Any, enabled: bool) -> bool:
+        calls.append(enabled)
+        return True
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.set_native_desktop_mode",
+        set_mode,
+    )
+    api = DesktopApi(controller)
+
+    payload = api.set_desktop_mode(True)
+
+    assert calls == [True]
+    assert window.resized[-1] == (1000, 700)
+    assert window.on_top is False
+    assert payload["view"]["desktopMode"] is True
+    assert payload["view"]["compact"] is False
+    assert payload["view"]["onTop"] is False
+    assert load_state(state_path()).desktop_mode is True
+
+    api.set_compact(True)
+    api.set_on_top(True)
+    assert controller.state.compact is False
+    assert controller.state.on_top is False
+
+    assert api.set_desktop_mode(False)["view"]["desktopMode"] is False
+    assert calls == [True, False]
 
 
 def test_an_unknown_theme_falls_back_to_light() -> None:
@@ -333,16 +376,36 @@ def test_open_web_targets_the_local_admin_status_page(monkeypatch: pytest.Monkey
     assert opened == ["http://127.0.0.1:8761/admin/status"]
 
 
-def test_tray_actions_toggle_the_current_view_state() -> None:
+def test_tray_actions_toggle_the_current_view_state(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _controller()
     controller.window = FakeWindow()
+
+    def set_mode(_window: Any, _enabled: bool) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.set_native_desktop_mode",
+        set_mode,
+    )
     actions = tray_actions(controller, DesktopApi(controller))
-    assert set(actions) == {"show", "compact", "on_top", "web", "refresh", "quit"}
+    assert set(actions) == {
+        "show",
+        "compact",
+        "desktop",
+        "on_top",
+        "web",
+        "refresh",
+        "quit",
+    }
 
     actions["compact"]()
     assert controller.state.compact is True
     actions["on_top"]()
     assert controller.state.on_top is True
+    actions["desktop"]()
+    assert controller.state.desktop_mode is True
+    assert controller.state.compact is False
+    assert controller.state.on_top is False
     actions["show"]()
     assert "show" in controller.window.events
 

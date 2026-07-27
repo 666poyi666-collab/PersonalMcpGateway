@@ -6,6 +6,7 @@ FocusLink 是发丝线与直角的时间仪器，拾光是暖纸上的衬线墨�
 
 | 项目 | 数据面 | 分组建议 | flavor | accent | 接入文档 |
 | --- | --- | --- | --- | --- | --- |
+| Personal Gateway | 网关运行时 + Fleet Watchdog | 内建 | `gateway` | `#63D8FF` | [personal-gateway.md](personal-gateway.md) |
 | FocusLink（专注） | Foxlink MCP `127.0.0.1:8770/mcp` | `FocusLink` | `instrument` | `#007A55` | [focuslink.md](focuslink.md) |
 | 拾光 · 日记复盘 | Journal MCP `127.0.0.1:8780/mcp` | `拾光日记` | `paper` | `#A85F27` | [journal.md](journal.md) |
 | 步序 · 间歇跑 | Watch MCP `127.0.0.1:8768/mcp` | `步序 · 间歇跑` | `sport` | `#B6FF39` | [watch.md](watch.md) |

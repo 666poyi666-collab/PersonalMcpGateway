@@ -1,0 +1,38 @@
+{
+  "standardVersion": 1,
+  "id": "replace-me",
+  "name": "Replace Me",
+  "runtimeProject": true,
+  "dataPolicy": "cloud_allowed",
+  "dataInventory": [
+    {
+      "id": "example-entity",
+      "classification": "private",
+      "mcpExposure": "resource",
+      "coverage": "missing",
+      "reason": ""
+    }
+  ],
+  "mcp": {
+    "status": "missing",
+    "localBaseUrl": "http://127.0.0.1:0",
+    "cloudBaseUrl": null,
+    "routes": {
+      "mcp": "/mcp",
+      "health": "/healthz",
+      "ready": "/readyz",
+      "oauthResourceMetadata": "/.well-known/oauth-protected-resource/mcp"
+    }
+  },
+  "sync": {
+    "status": "missing",
+    "authority": "cloud",
+    "routes": {
+      "exchange": "/sync/v1/exchange",
+      "status": "/sync/v1/status"
+    },
+    "supportsPcOff": false,
+    "supportsBidirectionalDelta": false
+  },
+  "knownGaps": []
+}

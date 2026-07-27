@@ -38,8 +38,12 @@ def test_the_inlined_page_carries_the_real_asset_content() -> None:
 
 def test_the_page_never_references_a_remote_origin() -> None:
     page = build_page()
-    assert "http://" not in page
-    assert "https://" not in page
+    # createElementNS requires the literal W3C SVG namespace. It identifies DOM
+    # nodes and is never fetched, so remove only that exact standard identifier
+    # before checking that the renderer carries no network origin.
+    network_references = page.replace("http://www.w3.org/2000/svg", "")
+    assert "http://" not in network_references
+    assert "https://" not in network_references
 
 
 def test_assets_are_inlined_from_an_explicit_root(tmp_path: Path) -> None:

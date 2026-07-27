@@ -24,6 +24,7 @@ from personal_mcp_gateway.desktop.page import build_page
 from personal_mcp_gateway.desktop.window_state import (
     COMPACT_SIZE,
     MIN_SIZE,
+    PROJECT_LAYOUT_VERSION,
     WindowState,
     load_state,
     normalize_project_layout,
@@ -128,6 +129,10 @@ class DesktopController:
         try:
             window.show()
             window.restore()
+            if self.state.desktop_mode:
+                from personal_mcp_gateway.desktop import shell
+
+                shell.set_native_desktop_mode(window, True)
         except Exception:
             pass
 
@@ -161,8 +166,10 @@ class DesktopApi:
         payload["view"] = {
             "compact": controller.state.compact,
             "onTop": controller.state.on_top,
+            "desktopMode": controller.state.desktop_mode,
             "theme": controller.state.theme,
             "adminUrl": admin_base_url(),
+            "projectLayoutVersion": controller.state.project_layout_version,
             "projectLayout": controller.state.project_layout or {},
         }
         return payload
@@ -173,6 +180,8 @@ class DesktopApi:
 
     def set_compact(self, compact: bool) -> dict[str, Any]:
         controller = self._controller
+        if controller.state.desktop_mode:
+            return self.snapshot()
         window = controller.window
         if window is not None and compact != controller.state.compact:
             if compact:
@@ -186,6 +195,8 @@ class DesktopApi:
 
     def set_on_top(self, on_top: bool) -> dict[str, Any]:
         controller = self._controller
+        if controller.state.desktop_mode:
+            return self.snapshot()
         window = controller.window
         if window is not None:
             try:
@@ -193,6 +204,40 @@ class DesktopApi:
             except Exception:
                 pass
         controller.state.on_top = on_top
+        save_state(controller.state)
+        return self.snapshot()
+
+    def set_desktop_mode(self, desktop_mode: bool) -> dict[str, Any]:
+        controller = self._controller
+        enabled = bool(desktop_mode)
+        window = controller.window
+        if enabled == controller.state.desktop_mode:
+            return self.snapshot()
+
+        if window is not None:
+            from personal_mcp_gateway.desktop import shell
+
+            if enabled and controller.state.compact:
+                window.resize(controller.state.width, controller.state.height)
+            if enabled:
+                try:
+                    window.on_top = False
+                except Exception:
+                    pass
+            if not shell.set_native_desktop_mode(window, enabled):
+                if enabled and controller.state.compact:
+                    window.resize(*COMPACT_SIZE)
+                if enabled and controller.state.on_top:
+                    try:
+                        window.on_top = True
+                    except Exception:
+                        pass
+                return self.snapshot()
+
+        if enabled:
+            controller.state.compact = False
+            controller.state.on_top = False
+        controller.state.desktop_mode = enabled
         save_state(controller.state)
         return self.snapshot()
 
@@ -205,12 +250,14 @@ class DesktopApi:
     def set_project_layout(self, layout: dict[str, Any]) -> dict[str, Any]:
         controller = self._controller
         controller.state.project_layout = normalize_project_layout(layout)
+        controller.state.project_layout_version = PROJECT_LAYOUT_VERSION
         save_state(controller.state)
         return self.snapshot()
 
     def reset_project_layout(self) -> dict[str, Any]:
         controller = self._controller
         controller.state.project_layout = {}
+        controller.state.project_layout_version = PROJECT_LAYOUT_VERSION
         save_state(controller.state)
         return self.snapshot()
 
@@ -228,7 +275,13 @@ class DesktopApi:
         from personal_mcp_gateway.desktop import shell
 
         window = self._controller.window
-        return {"ok": window is not None and shell.begin_native_resize(window, edge)}
+        return {
+            "ok": (
+                window is not None
+                and not self._controller.state.desktop_mode
+                and shell.begin_native_resize(window, edge)
+            )
+        }
 
     def minimize(self) -> None:
         window = self._controller.window
@@ -270,6 +323,7 @@ def tray_actions(controller: DesktopController, api: DesktopApi) -> dict[str, An
     return {
         "show": controller.show_window,
         "compact": lambda: api.set_compact(not controller.state.compact),
+        "desktop": lambda: api.set_desktop_mode(not controller.state.desktop_mode),
         "on_top": lambda: api.set_on_top(not controller.state.on_top),
         "web": api.open_web,
         "refresh": controller.refresh_now,
@@ -303,14 +357,20 @@ def main() -> int:
         x=state.x,
         y=state.y,
         min_size=MIN_SIZE,
-        on_top=state.on_top,
+        on_top=state.on_top and not state.desktop_mode,
         background=BACKGROUND_DARK if state.theme == "dark" else BACKGROUND_LIGHT,
     )
     if window is None:
         print("无法创建桌面窗口: 请确认已安装 WebView2 运行时", file=sys.stderr)
         return 3
     controller.window = window
-    window.events.before_show += lambda: shell.enable_native_resize(window)
+
+    def prepare_native_window() -> None:
+        shell.enable_native_resize(window)
+
+    window.events.before_show += prepare_native_window
+    if state.desktop_mode:
+        window.events.shown += lambda: shell.set_native_desktop_mode(window, True)
 
     def on_start() -> None:
         threading.Thread(target=controller.poll_forever, name="poyi-poll", daemon=True).start()

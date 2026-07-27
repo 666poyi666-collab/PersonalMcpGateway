@@ -1,0 +1,352 @@
+{
+  "standardVersion": 1,
+  "auditedAt": "2026-07-27T20:20:00+08:00",
+  "scope": {
+    "formalInventory": "C:\\开发\\README.md",
+    "githubOwner": "666poyi666-collab",
+    "officialRepositoryCount": 9,
+    "officialProductCount": 8,
+    "note": "SuixinYiTing has separate development and publication repositories."
+  },
+  "securityFindings": [
+    {
+      "severity": "critical",
+      "projectId": "math-mistake-manager",
+      "path": "chatgpt-web-automation/auth.json",
+      "finding": "The public repository tracks a non-empty browser authentication state containing cookies and origins.",
+      "requiredAction": "Revoke the affected ChatGPT/browser sessions, remove the file from the current branch, add an ignore rule, and purge the secret from Git history. A normal delete commit alone does not remove historical exposure."
+    }
+  ],
+  "canonicalRoutes": {
+    "mcp": "/mcp",
+    "health": "/healthz",
+    "ready": "/readyz",
+    "oauthResourceMetadata": "/.well-known/oauth-protected-resource/mcp",
+    "syncExchange": "/sync/v1/exchange",
+    "syncStatus": "/sync/v1/status"
+  },
+  "projects": [
+    {
+      "id": "focuslink",
+      "name": "FocusLink",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/time-dida"
+      ],
+      "repositoryPaths": [
+        "C:\\Users\\poyi\\Desktop\\time1"
+      ],
+      "dataPolicy": "cloud_allowed",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "partial",
+        "localEndpoint": "http://127.0.0.1:8770/mcp",
+        "localHealth": "http://127.0.0.1:8770/healthz",
+        "cloudHealth": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+        "localToolCount": 9,
+        "cloudToolCount": 4,
+        "coverage": "Cloud exposes three no-argument snapshots plus sync overview; current session, one-session detail, resources, complete pagination, and commands are absent."
+      },
+      "sync": {
+        "status": "partial",
+        "mode": "pc_snapshot_mirror_plus_separate_device_sync_worker",
+        "cloudHealth": "https://focuslink-sync.pyzzgk.dpdns.org/health",
+        "legacyIngressRoute": "/sync/push",
+        "pcOffBehavior": "The MCP mirror retains the last Windows snapshot. The installed desktop device-sync endpoint is loopback, so new data reaching the MCP while Windows is off is not proven.",
+        "lastObservedSource": "pc-sync"
+      },
+      "requirementsMet": false,
+      "priority": "P1"
+    },
+    {
+      "id": "watchintervals",
+      "name": "WatchIntervals",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/WatchIntervals"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\手表开发"
+      ],
+      "dataPolicy": "cloud_allowed",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "partial",
+        "localEndpoint": "http://127.0.0.1:8768/mcp",
+        "localHealth": "http://127.0.0.1:8768/healthz",
+        "cloudHealth": "https://watch-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+        "localToolCount": 24,
+        "cloudToolCount": 7,
+        "coverage": "Cloud exposes six summary snapshots plus sync overview; plan detail/groups, workout detail, route/heart resources, sync state, and commands are absent."
+      },
+      "sync": {
+        "status": "partial",
+        "mode": "phone_capable_snapshot_push_with_pc_fallback",
+        "legacyIngressRoute": "/sync/push",
+        "pcOffBehavior": "Phone-side push code exists, but remote D1 contained only pc-sync rows during this audit. PC-independent operation is not deployed or verified.",
+        "lastObservedSource": "pc-sync"
+      },
+      "requirementsMet": false,
+      "priority": "P1"
+    },
+    {
+      "id": "suixinyiting",
+      "name": "SuixinYiTing",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/SuixinYiTing-dev",
+        "https://github.com/666poyi666-collab/SuixinYiTing"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\手表音乐软件",
+        "C:\\开发\\手表音乐软件\\publish\\SuixinYiTing"
+      ],
+      "dataPolicy": "cloud_allowed_with_media_exclusions",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "missing",
+        "localEndpoint": null,
+        "localHealth": null,
+        "cloudHealth": null,
+        "localToolCount": 0,
+        "cloudToolCount": 0,
+        "coverage": "No persistent MCP data plane."
+      },
+      "sync": {
+        "status": "missing",
+        "mode": "none",
+        "pcOffBehavior": "Playback cache, session, and application state are device-local."
+      },
+      "requirementsMet": false,
+      "priority": "P3"
+    },
+    {
+      "id": "daylight-journal",
+      "name": "Daylight Journal",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/daylight-journal"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\日记复盘"
+      ],
+      "dataPolicy": "sensitive_cloud_allowed",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "partial",
+        "localEndpoint": "http://127.0.0.1:8780/mcp",
+        "localHealth": "http://127.0.0.1:8780/healthz",
+        "cloudHealth": "https://journal-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+        "localToolCount": 7,
+        "cloudToolCount": 6,
+        "coverage": "Local and cloud tools use different identifiers and operations; append/status are local-only and delete is cloud-only."
+      },
+      "sync": {
+        "status": "partial",
+        "mode": "local_to_cloud_only",
+        "legacyIngressRoute": "/sync/push",
+        "pcOffBehavior": "ChatGPT can create cloud entries while Windows is off, but cloud-created rows are not pulled into the local journal. Local mobile changes require the local sync API or wait for Windows.",
+        "observedCloudRows": {
+          "localMirror": 5,
+          "cloudCreated": 1
+        }
+      },
+      "requirementsMet": false,
+      "priority": "P0"
+    },
+    {
+      "id": "personal-mcp-gateway",
+      "name": "PersonalMcpGateway",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/PersonalMcpGateway"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\mcp开发\\PersonalMcpGateway"
+      ],
+      "dataPolicy": "operational_metadata",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "partial",
+        "localEndpoint": "http://127.0.0.1:8760/mcp",
+        "localHealth": "http://127.0.0.1:8761/healthz",
+        "cloudHealth": null,
+        "localToolCount": 5,
+        "cloudToolCount": 0,
+        "coverage": "Five diagnostics tools are reachable through a Windows-dependent secure tunnel only."
+      },
+      "sync": {
+        "status": "missing",
+        "mode": "none",
+        "pcOffBehavior": "Gateway diagnostics and fleet state disappear when Windows is off."
+      },
+      "requirementsMet": false,
+      "priority": "P2"
+    },
+    {
+      "id": "echodiary",
+      "name": "EchoDiary",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/EchoDiary"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\项目\\EchoDiary\\主项目"
+      ],
+      "dataPolicy": "sensitive_cloud_allowed",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "missing",
+        "localEndpoint": null,
+        "localHealth": null,
+        "cloudHealth": null,
+        "localToolCount": 0,
+        "cloudToolCount": 0,
+        "coverage": "FastAPI AI/weather BFF exists, but no MCP server exists."
+      },
+      "sync": {
+        "status": "missing",
+        "mode": "local_first_only",
+        "pcOffBehavior": "Room/browser data has no verified cloud replication path."
+      },
+      "requirementsMet": false,
+      "priority": "P2"
+    },
+    {
+      "id": "videoflow",
+      "name": "VideoFlow",
+      "lifecycle": "active",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/VideoFlow"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\项目\\VideoFlow"
+      ],
+      "dataPolicy": "metadata_cloud_allowed_binaries_opt_in",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "missing",
+        "localEndpoint": null,
+        "localHealth": null,
+        "cloudHealth": null,
+        "localToolCount": 0,
+        "cloudToolCount": 0,
+        "coverage": "Local HTTP job API exists, but no MCP adapter exists."
+      },
+      "sync": {
+        "status": "missing",
+        "mode": "local_files_only",
+        "pcOffBehavior": "Jobs and outputs remain local. Large videos should not be copied into D1 or MCP JSON."
+      },
+      "requirementsMet": false,
+      "priority": "P3"
+    },
+    {
+      "id": "math-mistake-manager",
+      "name": "Math Mistake Manager",
+      "lifecycle": "inactive_remote_only",
+      "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/math"
+      ],
+      "repositoryPaths": [],
+      "dataPolicy": "unknown_pending_restore",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "missing",
+        "localEndpoint": null,
+        "localHealth": null,
+        "cloudHealth": null,
+        "localToolCount": 0,
+        "cloudToolCount": 0,
+        "coverage": "No local checkout is available for runtime verification and the public repository contains no MCP implementation."
+      },
+      "sync": {
+        "status": "missing",
+        "mode": "unknown",
+        "pcOffBehavior": "No cloud runtime sync implementation was found."
+      },
+      "requirementsMet": false,
+      "priority": "P4"
+    }
+  ],
+  "policyExceptions": [
+    {
+      "id": "do-not-phone",
+      "name": "不做手机控",
+      "path": "C:\\开发\\不做手机控",
+      "dataPolicy": "local_only",
+      "reason": "The product promise explicitly forbids INTERNET permission, accounts, telemetry, and cloud sync. Only user-initiated ADB export is acceptable."
+    },
+    {
+      "id": "chatgpt-branch-map",
+      "name": "ChatGPT Branch Map",
+      "path": "C:\\开发\\项目\\ChatGPT分支图",
+      "dataPolicy": "local_only",
+      "reason": "Source code explicitly states that imported ChatGPT exports remain in browser IndexedDB and are never uploaded."
+    }
+  ],
+  "supportServices": [
+    {
+      "id": "foxlink-cloud-mcp",
+      "path": "C:\\开发\\mcp开发\\foxlink-cloud-mcp",
+      "health": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+      "deployed": true,
+      "remoteBackedUp": false
+    },
+    {
+      "id": "journal-cloud-mcp",
+      "path": "C:\\开发\\mcp开发\\journal-cloud-mcp",
+      "health": "https://journal-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+      "deployed": true,
+      "remoteBackedUp": false
+    },
+    {
+      "id": "watch-cloud-mcp",
+      "path": "C:\\开发\\mcp开发\\watch-cloud-mcp",
+      "health": "https://watch-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+      "deployed": true,
+      "remoteBackedUp": false
+    },
+    {
+      "id": "focuslink-device-sync-worker",
+      "path": "C:\\Users\\poyi\\Desktop\\time1\\FocusLink\\cloudflare",
+      "health": "https://focuslink-sync.pyzzgk.dpdns.org/health",
+      "deployed": true,
+      "remoteBackedUp": true
+    }
+  ],
+  "unregisteredCandidates": [
+    {
+      "path": "C:\\开发\\小工具\\UsbVolumeCurve",
+      "reason": "Executable project marker found but absent from the formal project inventory."
+    },
+    {
+      "path": "C:\\开发\\小工具\\B站下载脚本",
+      "reason": "Standalone local Git repository absent from the formal project inventory."
+    },
+    {
+      "path": "C:\\开发\\工具服务\\ComfyUI代理工具",
+      "reason": "Standalone local Git repository absent from the formal project inventory."
+    },
+    {
+      "path": "C:\\开发\\实验项目\\AI文档实验",
+      "reason": "Standalone local Git repository; classify as product or experiment."
+    },
+    {
+      "path": "C:\\开发\\学习资料\\数学试卷分析",
+      "reason": "Standalone local Git repository; classify as product or data workspace."
+    },
+    {
+      "path": "C:\\开发\\个人anki系统",
+      "reason": "Idea/workspace exists but currently contains no implementation or Git repository."
+    }
+  ]
+}

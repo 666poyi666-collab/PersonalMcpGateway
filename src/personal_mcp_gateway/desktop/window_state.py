@@ -14,6 +14,9 @@ FULL_SIZE = (1160, 760)
 # carrying permanent dead space under the last row.
 COMPACT_SIZE = (392, 520)
 MIN_SIZE = (360, 480)
+PROJECT_LAYOUT_VERSION = 2
+MAX_PROJECT_POSITION = 100_000
+MAX_PROJECT_TILE_SIZE = 20_000
 
 
 def state_dir() -> Path:
@@ -38,6 +41,8 @@ class WindowState:
     on_top: bool = False
     # The operator prefers a light board; dark stays one titlebar click away.
     theme: str = "light"
+    project_layout_version: int = PROJECT_LAYOUT_VERSION
+    desktop_mode: bool = False
     project_layout: dict[str, dict[str, int]] | None = None
 
     def size(self) -> tuple[int, int]:
@@ -55,7 +60,7 @@ def _coerce_int(value: object, fallback: int | None) -> int | None:
 
 
 def normalize_project_layout(value: object) -> dict[str, dict[str, int]]:
-    """Keep bounded freeform geometry while accepting the old grid format."""
+    """Keep bounded absolute geometry while accepting earlier layout formats."""
     if not isinstance(value, dict):
         return {}
     result: dict[str, dict[str, int]] = {}
@@ -68,14 +73,36 @@ def normalize_project_layout(value: object) -> dict[str, dict[str, int]]:
         tile = cast(dict[str, Any], raw_tile)
         order = _coerce_int(tile.get("order"), len(result)) or 0
         if any(key in tile for key in ("x", "y", "w", "h")):
-            width = max(1, min(1000, _coerce_int(tile.get("w"), 500) or 500))
-            x = max(0, min(1000 - width, _coerce_int(tile.get("x"), 0) or 0))
             result[raw_id] = {
-                "x": x,
-                "y": max(0, min(10000, _coerce_int(tile.get("y"), 0) or 0)),
-                "w": width,
-                "h": max(104, min(2400, _coerce_int(tile.get("h"), 360) or 360)),
-                "order": max(0, min(99, order)),
+                "x": max(
+                    0,
+                    min(
+                        MAX_PROJECT_POSITION,
+                        _coerce_int(tile.get("x"), 0) or 0,
+                    ),
+                ),
+                "y": max(
+                    0,
+                    min(
+                        MAX_PROJECT_POSITION,
+                        _coerce_int(tile.get("y"), 0) or 0,
+                    ),
+                ),
+                "w": max(
+                    1,
+                    min(
+                        MAX_PROJECT_TILE_SIZE,
+                        _coerce_int(tile.get("w"), 500) or 500,
+                    ),
+                ),
+                "h": max(
+                    104,
+                    min(
+                        MAX_PROJECT_TILE_SIZE,
+                        _coerce_int(tile.get("h"), 360) or 360,
+                    ),
+                ),
+                "order": max(0, min(999, order)),
             }
             continue
 
@@ -86,7 +113,7 @@ def normalize_project_layout(value: object) -> dict[str, dict[str, int]]:
         result[raw_id] = {
             "cols": max(3, min(12, cols)),
             "rows": max(1, min(3, rows)),
-            "order": max(0, min(99, order)),
+            "order": max(0, min(999, order)),
         }
     return result
 
@@ -104,15 +131,25 @@ def load_state(path: Path | None = None) -> WindowState:
     width = _coerce_int(data.get("width"), FULL_SIZE[0]) or FULL_SIZE[0]
     height = _coerce_int(data.get("height"), FULL_SIZE[1]) or FULL_SIZE[1]
     theme = data.get("theme")
+    layout = normalize_project_layout(data.get("project_layout"))
+    raw_layout_version = _coerce_int(data.get("project_layout_version"), None)
+    layout_version = (
+        PROJECT_LAYOUT_VERSION
+        if not layout
+        else max(1, min(PROJECT_LAYOUT_VERSION, raw_layout_version or 1))
+    )
+    desktop_mode = bool(data.get("desktop_mode", False))
     return WindowState(
         x=_coerce_int(data.get("x"), None),
         y=_coerce_int(data.get("y"), None),
         width=max(width, MIN_SIZE[0]),
         height=max(height, MIN_SIZE[1]),
-        compact=bool(data.get("compact", False)),
-        on_top=bool(data.get("on_top", False)),
+        compact=bool(data.get("compact", False)) and not desktop_mode,
+        on_top=bool(data.get("on_top", False)) and not desktop_mode,
         theme=theme if theme in {"dark", "light"} else "light",
-        project_layout=normalize_project_layout(data.get("project_layout")),
+        project_layout_version=layout_version,
+        desktop_mode=desktop_mode,
+        project_layout=layout,
     )
 
 

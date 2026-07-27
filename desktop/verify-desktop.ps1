@@ -19,8 +19,10 @@ Set-StrictMode -Version Latest
 if (-not ([Management.Automation.PSTypeName]'PoyiWindowProbe').Type) {
     Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 public static class PoyiWindowProbe
 {
@@ -29,6 +31,7 @@ public static class PoyiWindowProbe
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr p);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool IsZoomed(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int count);
     [DllImport("user32.dll")]
@@ -43,6 +46,24 @@ public static class PoyiWindowProbe
     private static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessageW(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT point);
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(
+        uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
@@ -97,6 +118,23 @@ public static class PoyiWindowProbe
 
     public static string ResizeContract(uint processId, string title)
     {
+        // PowerShell is DPI-unaware by default. WM_NCHITTEST and the cursor use
+        // physical screen coordinates, so virtualized rectangles can probe the
+        // wrong pixels on a scaled display while still looking plausible.
+        IntPtr previousDpi = SetThreadDpiAwarenessContext(new IntPtr(-4));
+        try
+        {
+            return ResizeContractDpiAware(processId, title);
+        }
+        finally
+        {
+            if (previousDpi != IntPtr.Zero)
+                SetThreadDpiAwarenessContext(previousDpi);
+        }
+    }
+
+    private static string ResizeContractDpiAware(uint processId, string title)
+    {
         IntPtr found = IntPtr.Zero;
         EnumProc callback = delegate(IntPtr hWnd, IntPtr lParam)
         {
@@ -134,7 +172,84 @@ public static class PoyiWindowProbe
         int frameY = (windowRect.Bottom - windowRect.Top) - (clientRect.Bottom - clientRect.Top);
         if (Math.Abs(frameX) > 1 || Math.Abs(frameY) > 1)
             return "failed:visible-frame=" + frameX + "x" + frameY;
-        return "passed:right=11 corner=17 frame=" + frameX + "x" + frameY;
+
+        string live = "skipped-window-state";
+        if (IsWindowVisible(found) && !IsIconic(found) && !IsZoomed(found))
+        {
+            live = DragBottomRight(found, windowRect);
+            if (live.StartsWith("failed:")) return live;
+        }
+        return "passed:right=11 corner=17 frame=" + frameX + "x" + frameY + " live=" + live;
+    }
+
+    private static string DragBottomRight(IntPtr hWnd, RECT original)
+    {
+        POINT cursor;
+        if (!GetCursorPos(out cursor)) return "failed:cursor-unavailable";
+        int width = original.Right - original.Left;
+        int height = original.Bottom - original.Top;
+        int startX = original.Right - 7;
+        int startY = original.Bottom - 7;
+        const uint LEFT_DOWN = 0x0002;
+        const uint LEFT_UP = 0x0004;
+        const uint RESTORE_FLAGS = 0x0014; // SWP_NOZORDER | SWP_NOACTIVATE
+
+        try
+        {
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+            Thread.Sleep(180);
+            if (GetForegroundWindow() != hWnd)
+            {
+                // Foreground-lock rules can reject SetForegroundWindow for a
+                // verifier process. A plain titlebar tap activates the board
+                // without invoking any command or changing its rectangle.
+                SetCursorPos(original.Left + (width / 2), original.Top + 30);
+                mouse_event(LEFT_DOWN, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(30);
+                mouse_event(LEFT_UP, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(180);
+            }
+            SetCursorPos(startX, startY);
+            Thread.Sleep(120);
+            mouse_event(LEFT_DOWN, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(180);
+            SetCursorPos(startX - 48, startY - 32);
+            HashSet<string> transitionFrames = new HashSet<string>();
+            for (int frame = 0; frame < 16; frame++)
+            {
+                Thread.Sleep(12);
+                RECT sample;
+                if (GetWindowRect(hWnd, out sample))
+                {
+                    transitionFrames.Add(
+                        (sample.Right - sample.Left) + "x" + (sample.Bottom - sample.Top));
+                }
+            }
+            mouse_event(LEFT_UP, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(360);
+
+            RECT changed;
+            if (!GetWindowRect(hWnd, out changed)) return "failed:post-drag-rect";
+            int changedWidth = changed.Right - changed.Left;
+            int changedHeight = changed.Bottom - changed.Top;
+            int deltaWidth = changedWidth - width;
+            int deltaHeight = changedHeight - height;
+            if (deltaWidth > -12 || deltaHeight > -12 || deltaWidth < -96 || deltaHeight < -80)
+                return "failed:live-drag=" + width + "x" + height + "->" +
+                    changedWidth + "x" + changedHeight;
+            if (transitionFrames.Count < 4)
+                return "failed:live-transition-frames=" + transitionFrames.Count;
+            return width + "x" + height + "->" + changedWidth + "x" + changedHeight +
+                " frames=" + transitionFrames.Count;
+        }
+        finally
+        {
+            mouse_event(LEFT_UP, 0, 0, 0, UIntPtr.Zero);
+            SetWindowPos(
+                hWnd, IntPtr.Zero, original.Left, original.Top, width, height, RESTORE_FLAGS);
+            SetCursorPos(cursor.X, cursor.Y);
+        }
     }
 }
 '@

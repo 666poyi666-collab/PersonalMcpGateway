@@ -65,18 +65,49 @@ def test_capture_and_freeform_tile_controls_ship_together() -> None:
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
     assert 'id="btnCapture"' in markup
+    assert 'id="btnDesktop"' in markup
     assert 'id="btnLayout"' in markup
     assert "bridge.capture()" in script
     assert "bridge.set_project_layout(projectLayout)" in script
+    assert "bridge.set_desktop_mode(next)" in script
+    assert "projectLayoutVersion" in script
+    assert "RECOVERY_BANNER_FAILURES = 3" in script
+    assert "function gatewayConsole(target, data)" in script
+    assert '"MCP ROUTING FABRIC"' in script
+    assert '"SERVICE FABRIC"' in script and '"24H TRAFFIC"' in script
+    assert "gateway-data" in script and ".gateway-console" in style
+    assert ".gw-route-node" in style and ".gw-service-matrix" in style
+    assert "startScrollLeft" in script and "updateProjectCanvasSize" in script
+    assert "width: min(1460px, 100%)" not in style
+    assert "body.desktop-mode .window-resize-zone" in style
     assert "pointerdown" in script and "requestAnimationFrame" in script
     assert "ResizeObserver" in script and "snapTileRect" in script
     assert 'window.addEventListener("resize", markWindowResizing)' in script
     assert "body.window-resizing" in style
     assert markup.count('data-window-edge="') == 8
-    assert "bridge.begin_window_resize(zone.dataset.windowEdge)" in script
+    assert "windowResizeEdgeAt" in script
+    assert 'document.addEventListener("pointerdown", requestWindowResize, true)' in script
+    assert "bridge.begin_window_resize(edge)" in script
     assert "window-resize-se::after" in style
     assert "tile-handle-nw" in style and "layout-guide.visible" in style
     assert "dragstart" not in script and "tile-resizer" not in style
+
+
+def test_watch_tile_has_a_responsive_training_and_recovery_instrument() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert 'eyebrow: "INTERVAL ENGINE / OWW221"' in script
+    assert "function watchConsole(target, widgets)" in script
+    assert 'widget.id === "watch_workouts"' in script
+    assert 'widget.id === "watch_sleep"' in script
+    assert 'make("span", null, "TOTAL DISTANCE")' in script
+    assert 'make("span", null, "SLEEP SCORE")' in script
+    assert 'target.id === "watch"' in script and 'classList.add("watch-data")' in script
+    assert ".project-watch" in style and ".watch-console" in style
+    assert ".wi-score-value" in style and "stroke-dashoffset" in style
+    assert ".project-watch.tile-narrow" in style
+    assert '.project-watch[data-height-class="short"]' in style
 
 
 def test_every_status_maps_to_a_distinct_tray_colour() -> None:

@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poyi.local/schemas/project-platform.schema.json",
+  "title": "Poyi Project Platform Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standardVersion",
+    "id",
+    "name",
+    "runtimeProject",
+    "dataPolicy",
+    "dataInventory",
+    "mcp",
+    "sync",
+    "knownGaps"
+  ],
+  "properties": {
+    "standardVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "runtimeProject": {
+      "type": "boolean"
+    },
+    "dataPolicy": {
+      "type": "string",
+      "enum": [
+        "cloud_allowed",
+        "sensitive_cloud_allowed",
+        "cloud_allowed_with_media_exclusions",
+        "metadata_cloud_allowed_binaries_opt_in",
+        "operational_metadata",
+        "local_only"
+      ]
+    },
+    "dataInventory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "classification",
+          "mcpExposure",
+          "coverage",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private",
+              "sensitive",
+              "secret"
+            ]
+          },
+          "mcpExposure": {
+            "type": "string",
+            "enum": [
+              "tool",
+              "resource",
+              "both",
+              "none"
+            ]
+          },
+          "coverage": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "missing",
+              "exempt"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mcp": {
+      "$ref": "#/$defs/capability"
+    },
+    "sync": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "authority",
+        "routes",
+        "supportsPcOff",
+        "supportsBidirectionalDelta"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "authority": {
+          "type": "string",
+          "enum": [
+            "cloud",
+            "device",
+            "hybrid",
+            "none"
+          ]
+        },
+        "routes": {
+          "type": "object",
+          "required": [
+            "exchange",
+            "status"
+          ],
+          "properties": {
+            "exchange": {
+              "const": "/sync/v1/exchange"
+            },
+            "status": {
+              "const": "/sync/v1/status"
+            }
+          }
+        },
+        "supportsPcOff": {
+          "type": "boolean"
+        },
+        "supportsBidirectionalDelta": {
+          "type": "boolean"
+        }
+      }
+    },
+    "knownGaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "missing",
+        "exempt"
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "routes"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "routes": {
+          "type": "object",
+          "required": [
+            "mcp",
+            "health",
+            "ready",
+            "oauthResourceMetadata"
+          ],
+          "properties": {
+            "mcp": {
+              "const": "/mcp"
+            },
+            "health": {
+              "const": "/healthz"
+            },
+            "ready": {
+              "const": "/readyz"
+            },
+            "oauthResourceMetadata": {
+              "const": "/.well-known/oauth-protected-resource/mcp"
+            }
+          }
+        }
+      }
+    }
+  }
+}

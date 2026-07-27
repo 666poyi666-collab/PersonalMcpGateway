@@ -16,6 +16,9 @@ const root = document.documentElement;
 
 const dom = {
   body: document.body,
+  stage: el("stage"),
+  board: el("board"),
+  titlebarDrag: document.querySelector(".tb-drag"),
   tbCount: el("tbCount"),
   tbLabel: el("tbLabel"),
   tbChipDot: document.querySelector("#tbChip .dot"),
@@ -52,6 +55,7 @@ const dom = {
   sbProbe: el("sbProbe"),
   sbGuard: el("sbGuard"),
   btnTop: el("btnTop"),
+  btnDesktop: el("btnDesktop"),
   btnCompact: el("btnCompact"),
   btnRefresh: el("btnRefresh"),
   btnRepair: el("btnRepair"),
@@ -75,8 +79,9 @@ const PROJECT_STYLE = {
   watch: {
     flavor: "sport",
     accent: "#B6FF39",
-    display: "步序 · 间歇跑",
-    tagline: "训练 · 睡眠 · 手表",
+    display: "步序",
+    eyebrow: "INTERVAL ENGINE / OWW221",
+    tagline: "间歇训练 · 睡眠恢复",
     groups: ["步序 · 间歇跑"],
   },
   journal: {
@@ -87,18 +92,26 @@ const PROJECT_STYLE = {
     groups: ["拾光日记"],
   },
   personal: {
-    flavor: "neutral",
-    accent: "#78C9F2",
+    flavor: "gateway",
+    accent: "#63D8FF",
     display: "Personal Gateway",
-    tagline: "总机房 · 隧道与看护",
+    eyebrow: "MCP ROUTING FABRIC",
+    tagline: "本机能力路由 · 连接与自愈",
     groups: [],
   },
 };
 const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
-const LAYOUT_SCALE = 1000;
+const LEGACY_LAYOUT_SCALE = 1000;
+const PROJECT_LAYOUT_VERSION = 2;
 const MIN_TILE_WIDTH = 120;
 const MIN_TILE_HEIGHT = 104;
-const MAX_TILE_HEIGHT = 1600;
+const MAX_TILE_WIDTH = 20000;
+const MAX_TILE_HEIGHT = 20000;
+const MAX_WORKSPACE_POSITION = 100000;
+const CANVAS_PADDING = 18;
+const AUTO_SCROLL_MARGIN = 58;
+const AUTO_SCROLL_MAX = 20;
+const RECOVERY_BANNER_FAILURES = 3;
 const SNAP_DISTANCE = 10;
 const DEFAULT_TILE_LAYOUT = {
   foxlink: { x: 0, y: 0, w: 410, h: 300, order: 0 },
@@ -107,10 +120,13 @@ const DEFAULT_TILE_LAYOUT = {
   personal: { x: 420, y: 372, w: 580, h: 320, order: 3 },
 };
 let projectLayout = {};
+let projectLayoutVersion = PROJECT_LAYOUT_VERSION;
 let layoutMode = false;
 let activeTileInteraction = null;
 let layoutFrame = 0;
+let interactionScrollFrame = 0;
 let projectCanvasWidth = 0;
+let projectViewportWidth = 0;
 let projectResizeObserver = null;
 let sectionsRendered = false;
 let windowResizeTimer = 0;
@@ -135,6 +151,17 @@ function duration(seconds) {
   if (h) return `${h}小时${m}分`;
   if (m) return `${m}分钟`;
   return `${s}秒`;
+}
+
+function briefDuration(seconds) {
+  const s = Math.max(0, Math.floor(num(seconds)));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m`;
+  return `${s}s`;
 }
 
 function clockOf(value) {
@@ -201,7 +228,7 @@ function render(payload) {
   if (!payload.connected || !payload.data) {
     dom.body.classList.add("disconnected");
     dom.body.classList.remove("recovering");
-    dom.offlineScreen.hidden = false;
+    dom.offlineScreen.hidden = num(payload.consecutiveFailures) < RECOVERY_BANNER_FAILURES;
     dom.offlineHint.textContent = payload.consecutiveFailures
       ? `连续 ${payload.consecutiveFailures} 次重试未成功 · ${clockOf(payload.fetchedAt)}`
       : "";
@@ -214,9 +241,11 @@ function render(payload) {
   }
 
   dom.body.classList.remove("disconnected");
-  dom.body.classList.toggle("recovering", Boolean(payload.stale));
-  dom.offlineScreen.hidden = !payload.stale;
-  if (payload.stale) {
+  const recoveryVisible = Boolean(payload.stale)
+    && num(payload.consecutiveFailures) >= RECOVERY_BANNER_FAILURES;
+  dom.body.classList.toggle("recovering", recoveryVisible);
+  dom.offlineScreen.hidden = !recoveryVisible;
+  if (recoveryVisible) {
     dom.offlineHint.textContent = `保留上次有效数据 · 第 ${num(payload.consecutiveFailures)} 次后台重试`;
   }
 
@@ -226,8 +255,12 @@ function render(payload) {
   const online = num(summary.online);
   const total = num(summary.total);
 
-  setStatusChrome(payload.status, `${online}/${total}`, payload.stale ? "同步恢复中" : (payload.statusLabel || ""));
-  if (payload.stale) dom.sbState.textContent = "RECOVERING";
+  setStatusChrome(
+    payload.status,
+    `${online}/${total}`,
+    recoveryVisible ? "同步恢复中" : (payload.statusLabel || ""),
+  );
+  if (recoveryVisible) dom.sbState.textContent = "RECOVERING";
   dom.sbSync.textContent = `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`;
   dom.sbProbe.textContent = `探测 ${num(data.probeDurationMs)}ms`;
   renderGuard(data.fleet || null);
@@ -310,22 +343,324 @@ function probeChip(label, probe) {
   return chip;
 }
 
-function sectionDataCards(target, widgets, gateway, fleet) {
+function gatewayProbeState(probe) {
+  if (probe && probe.ok) return "online";
+  if (probe && probe.service && probe.service.state === "running") return "degraded";
+  return "offline";
+}
+
+function gatewayRouteNode(code, label, value, detail, status) {
+  const node = make("div", "gw-route-node");
+  node.dataset.status = status;
+  node.append(
+    make("span", "gw-node-code", code),
+    make("i", "gw-node-port"),
+    make("strong", null, label),
+    make("b", null, value),
+    make("small", null, detail),
+  );
+  return node;
+}
+
+function gatewayRouteLink(status) {
+  const link = make("i", "gw-route-link");
+  link.dataset.status = status;
+  link.setAttribute("aria-hidden", "true");
+  return link;
+}
+
+function gatewayLatestSignal(data) {
+  const signal = make("div", "gw-signal");
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  const events = Array.isArray(data.events) ? data.events : [];
+  const error = errors[0];
+  const event = events[0];
+  let status = "online";
+  let label = "NO ACTIVE INCIDENTS";
+  let title = "当前链路稳定";
+  let detail = "看护服务持续巡检，无待处理异常";
+  let time = clockOf(data.generatedAt);
+
+  if (error) {
+    status = "offline";
+    label = "LATEST ERROR";
+    title = String(error.code || error.error || "网关异常");
+    detail = String(error.message || error.summary || error.module || "等待下一轮诊断");
+    time = clockOf(error.createdAt || error.created_at);
+  } else if (event) {
+    status = event.toState === "online" ? "online" : event.toState === "degraded" ? "degraded" : "offline";
+    label = status === "online" ? "LATEST RECOVERY" : "LATEST TRANSITION";
+    title = `${event.name || event.target || "链路"} ${status === "online" ? "已恢复" : "状态变化"}`;
+    detail = `${event.fromState || "?"} -> ${event.toState || "?"}`;
+    time = clockOf(event.occurredAt);
+  }
+
+  signal.dataset.status = status;
+  const head = make("div", "gw-signal-head");
+  const dot = make("i", "dot");
+  dot.dataset.status = status;
+  head.append(dot, make("span", null, label), make("time", null, time));
+  signal.append(head, make("strong", null, title), make("p", null, detail));
+
+  const timeline = make("div", "gw-event-list");
+  const entries = [];
+  const remainingErrors = errors.slice(error ? 1 : 0);
+  const remainingEvents = events.slice(event && !error ? 1 : 0);
+  for (const item of remainingErrors) {
+    entries.push({
+      status: "offline",
+      title: String(item.code || item.error || "网关异常"),
+      detail: String(item.module_id || item.module || item.message || "已脱敏错误"),
+      time: clockOf(item.createdAt || item.created_at),
+    });
+  }
+  for (const item of remainingEvents) {
+    entries.push({
+      status: item.toState === "online" ? "online" : item.toState === "degraded" ? "degraded" : "offline",
+      title: String(item.name || item.target || "链路状态"),
+      detail: `${item.fromState || "?"} -> ${item.toState || "?"}`,
+      time: clockOf(item.occurredAt),
+    });
+  }
+  if (!entries.length) {
+    const targets = Array.isArray(data.targets) ? data.targets : [];
+    for (const target of targets) {
+      const style = PROJECT_STYLE[target.id] || {};
+      entries.push({
+        status: target.state || "offline",
+        title: String(style.display || target.name || target.id),
+        detail: `MCP ${target.mcp && target.mcp.ok ? `${num(target.mcp.latencyMs)}ms` : "--"} / LINK ${target.tunnel && target.tunnel.ok ? `${num(target.tunnel.latencyMs)}ms` : "--"}`,
+        time: "LIVE",
+      });
+    }
+  }
+  for (const entry of entries.slice(0, 5)) {
+    const row = make("div", "gw-event-row");
+    row.dataset.status = entry.status;
+    const rowDot = make("i", "dot mini");
+    rowDot.dataset.status = entry.status;
+    const copy = make("div");
+    copy.append(make("strong", null, entry.title), make("small", null, entry.detail));
+    row.append(rowDot, copy, make("time", null, entry.time));
+    timeline.append(row);
+  }
+  signal.append(timeline);
+  return signal;
+}
+
+function gatewayConsole(target, data) {
+  const gateway = data.gateway || {};
+  const summary = data.summary || {};
+  const fleet = data.fleet || {};
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const probes = targets.flatMap((item) => [item.mcp, item.tunnel].filter(Boolean));
+  const runningServices = probes.filter((probe) => probe.service && probe.service.state === "running").length;
+  const totalServices = probes.length;
+  const onlineRoutes = num(summary.online);
+  const totalRoutes = num(summary.total);
+  const fleetState = num(summary.offline) > 0 ? "offline" : num(summary.degraded) > 0 ? "degraded" : "online";
+  const coreState = gatewayProbeState(target.mcp);
+  const relayState = gatewayProbeState(target.tunnel);
+  const guardState = fleet.watchdog && fleet.watchdog.state === "running" ? "online" : "offline";
+
+  const console = make("div", "gateway-console");
+  const route = make("div", "gw-route");
+  route.append(
+    gatewayRouteNode("01", "FLEET", `${onlineRoutes}/${totalRoutes}`, "项目路由", fleetState),
+    gatewayRouteLink(fleetState),
+    gatewayRouteNode("02", "MCP CORE", coreState === "online" ? "READY" : "FAULT", `${num(target.mcp && target.mcp.latencyMs)}ms`, coreState),
+    gatewayRouteLink(coreState === "online" && relayState === "online" ? "online" : "offline"),
+    gatewayRouteNode("03", "SECURE LINK", relayState === "online" ? "OPEN" : "CLOSED", `${num(target.tunnel && target.tunnel.latencyMs)}ms`, relayState),
+    gatewayRouteLink(relayState === "online" && guardState === "online" ? "online" : "offline"),
+    gatewayRouteNode("04", "WATCHDOG", guardState === "online" ? "ARMED" : "CHECK", fleet.repairSupported ? "可自愈" : "仅监控", guardState),
+  );
+
+  const metrics = make("div", "gw-metrics");
+  const metricData = [
+    ["24H CALLS", compact(summary.calls24h), `${compact(summary.failures24h)} 失败`, compact(summary.calls24h)],
+    ["SUCCESS", `${num(summary.successRate, 100).toFixed(1)}%`, "过去 24 小时", `${Math.round(num(summary.successRate, 100))}%`],
+    ["PROBE", `${num(data.probeDurationMs)}ms`, "全链路巡检", `${num(data.probeDurationMs)}ms`],
+    ["UPTIME", duration(gateway.uptimeSeconds), `v${gateway.version || "?"}`, briefDuration(gateway.uptimeSeconds)],
+  ];
+  for (const [label, value, note, compactValue] of metricData) {
+    const metric = make("div", "gw-metric");
+    const reading = make("strong", null, value);
+    reading.dataset.compact = compactValue;
+    metric.append(make("span", null, label), reading, make("small", null, note));
+    metrics.append(metric);
+  }
+
+  const body = make("div", "gw-console-body");
+  const serviceMatrix = make("section", "gw-service-matrix");
+  const matrixHead = make("header");
+  matrixHead.append(
+    make("span", null, "SERVICE FABRIC"),
+    make("b", null, `${runningServices}/${totalServices} RUNNING`),
+  );
+  const rows = make("div", "gw-service-rows");
+  targets.forEach((item, index) => {
+    const style = PROJECT_STYLE[item.id] || {};
+    const row = make("div", "gw-service-row");
+    const state = item.state || "offline";
+    row.dataset.status = state;
+    const dot = make("i", "dot mini");
+    dot.dataset.status = state;
+    row.append(
+      make("span", "gw-service-code", String(index + 1).padStart(2, "0")),
+      dot,
+      make("strong", null, style.display || item.name || item.id),
+      make("span", null, `MCP ${item.mcp && item.mcp.ok ? `${num(item.mcp.latencyMs)}ms` : "--"}`),
+      make("span", null, `LINK ${item.tunnel && item.tunnel.ok ? `${num(item.tunnel.latencyMs)}ms` : "--"}`),
+    );
+    rows.append(row);
+  });
+  serviceMatrix.append(matrixHead, rows);
+
+  const telemetry = make("section", "gw-telemetry");
+  const traffic = make("div", "gw-traffic");
+  const trafficHead = make("header");
+  trafficHead.append(make("span", null, "24H TRAFFIC"), make("b", null, `${compact(summary.calls24h)} REQUESTS`));
+  const bars = make("div", "gw-traffic-bars");
+  const hourly = data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : [];
+  const peak = Math.max(1, ...hourly.map((bucket) => num(bucket.calls)));
+  for (const bucket of hourly) {
+    const bar = make("i", "gw-traffic-bar");
+    bar.style.setProperty("--gw-bar-height", `${Math.max(2, num(bucket.calls) / peak * 100)}%`);
+    bar.dataset.failed = num(bucket.failures) > 0 ? "true" : "false";
+    bar.title = `${hourOf(bucket.bucket)} · ${compact(bucket.calls)} 次 · ${compact(bucket.failures)} 失败`;
+    bars.append(bar);
+  }
+  if (!hourly.length) {
+    for (let index = 0; index < 24; index += 1) bars.append(make("i", "gw-traffic-bar"));
+  }
+  traffic.append(trafficHead, bars);
+  telemetry.append(traffic, gatewayLatestSignal(data));
+  body.append(serviceMatrix, telemetry);
+  console.append(route, metrics, body);
+  return console;
+}
+
+function widgetPairs(widget) {
+  const pairs = new Map();
+  const rows = widget && widget.ok && widget.data && Array.isArray(widget.data.pairs)
+    ? widget.data.pairs
+    : [];
+  for (const pair of rows) {
+    if (!pair || pair.label == null || pair.value == null) continue;
+    pairs.set(String(pair.label), String(pair.value));
+  }
+  return pairs;
+}
+
+function watchMetric(label, value, className = "") {
+  const metric = make("div", `wi-metric${className ? ` ${className}` : ""}`);
+  metric.append(make("span", null, label), make("strong", null, value || "—"));
+  return metric;
+}
+
+function watchScoreDial(rawScore) {
+  const parsed = Number.parseFloat(String(rawScore));
+  const hasScore = Number.isFinite(parsed);
+  const score = hasScore ? clamp(parsed, 0, 100) : 0;
+  const dial = make("div", "wi-score");
+  dial.dataset.available = String(hasScore);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 88 88");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", hasScore ? `睡眠评分 ${score}` : "暂无睡眠评分");
+  const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  track.setAttribute("class", "wi-score-track");
+  track.setAttribute("cx", "44");
+  track.setAttribute("cy", "44");
+  track.setAttribute("r", "35");
+  const value = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  value.setAttribute("class", "wi-score-value");
+  value.setAttribute("cx", "44");
+  value.setAttribute("cy", "44");
+  value.setAttribute("r", "35");
+  value.setAttribute("pathLength", "100");
+  value.style.strokeDasharray = "100";
+  value.style.strokeDashoffset = String(100 - score);
+  svg.append(track, value);
+
+  const reading = make("div", "wi-score-reading");
+  reading.append(make("strong", null, hasScore ? String(Math.round(score)) : "—"), make("span", null, "SLEEP SCORE"));
+  dial.append(svg, reading);
+  return dial;
+}
+
+function watchConsole(target, widgets) {
+  const workouts = widgets.find((widget) => widget.id === "watch_workouts");
+  const sleep = widgets.find((widget) => widget.id === "watch_sleep");
+  const workoutPairs = widgetPairs(workouts);
+  const sleepPairs = widgetPairs(sleep);
+  const workoutReady = Boolean(workouts && workouts.ok);
+  const sleepReady = Boolean(sleep && sleep.ok);
+  const readyCount = Number(workoutReady) + Number(sleepReady);
+  const dataState = readyCount === 2 ? "online" : readyCount === 1 ? "degraded" : "offline";
+  const stateLabel = dataState === "online" ? "DATA LOCKED" : dataState === "degraded" ? "PARTIAL SYNC" : "SYNC WAIT";
+
+  const console = make("div", "watch-console");
+  console.dataset.dataState = dataState;
+  console.setAttribute("aria-label", "步序训练与恢复数据");
+
+  const head = make("header", "wi-console-head");
+  const live = make("div", "wi-live-mark");
+  const dot = make("i", "dot mini");
+  dot.dataset.status = target.state || "offline";
+  live.append(dot, make("span", null, "RUN / RECOVER"));
+  head.append(live, make("b", null, stateLabel));
+
+  const run = make("section", "wi-run");
+  const runPrimary = make("div", "wi-run-primary");
+  runPrimary.append(
+    make("span", null, "TOTAL DISTANCE"),
+    make("strong", null, workoutPairs.get("总距离") || "—"),
+    make("small", null, `${workoutPairs.get("训练次数") || "—"} SESSIONS`),
+  );
+  const runMetrics = make("div", "wi-run-metrics");
+  runMetrics.append(
+    watchMetric("ACTIVE", workoutPairs.get("累计活动")),
+    watchMetric("AVG HEART", workoutPairs.get("平均心率")),
+  );
+  const plan = make("div", "wi-plan");
+  plan.append(
+    make("span", null, "LATEST PLAN"),
+    make("strong", null, workoutPairs.get("最近计划") || (workoutReady ? "暂无最近计划" : "等待训练汇总")),
+  );
+  run.append(runPrimary, runMetrics, plan);
+
+  const recovery = make("section", "wi-recovery");
+  const recoveryHead = make("div", "wi-recovery-head");
+  recoveryHead.append(make("span", null, "RECOVERY"), make("b", null, sleepReady ? "SLEEP READY" : "DEVICE WAIT"));
+  recovery.append(
+    recoveryHead,
+    watchScoreDial(sleepPairs.get("睡眠评分") || "—"),
+    watchMetric("DURATION", sleepPairs.get("睡眠时长"), "wi-sleep-duration"),
+    watchMetric("HEART RANGE", sleepPairs.get("心率区间"), "wi-heart-range"),
+  );
+
+  if (dataState !== "online") {
+    const pending = [];
+    if (!workoutReady) pending.push("训练");
+    if (!sleepReady) pending.push("睡眠");
+    const note = make("p", "wi-sync-note", `${pending.join(" / ")}数据等待手机或手表恢复`);
+    recovery.append(note);
+  }
+
+  console.append(head, run, recovery);
+  return console;
+}
+
+function sectionDataCards(target, widgets, data) {
   const style = PROJECT_STYLE[target.id];
   const cards = [];
   if (target.id === "personal") {
-    const stats = [
-      ["本次在线", duration(gateway.uptimeSeconds)],
-      ["累计调用", compact(gateway.callsTotal)],
-      ["调用失败", compact(gateway.callsFailed)],
-      ["看护服务", fleet && fleet.watchdog && fleet.watchdog.state === "running" ? "在线" : "异常"],
-    ];
-    for (const [label, value] of stats) {
-      const card = make("article", "pd-stat");
-      card.append(make("strong", null, String(value)), make("span", null, label));
-      cards.push(card);
-    }
-    return cards;
+    return [gatewayConsole(target, data)];
+  }
+  if (target.id === "watch") {
+    return [watchConsole(target, widgets)];
   }
   const mine = widgets.filter((w) => style.groups.includes(w.group || ""));
   for (const widget of mine) {
@@ -404,6 +739,7 @@ function renderSections(data) {
 
     const head = make("header", "proj-head");
     const naming = make("div", "proj-naming");
+    if (style.eyebrow) naming.append(make("span", "proj-eyebrow", style.eyebrow));
     naming.append(make("h2", null, style.display));
     const sub = make("p", "proj-tagline");
     sub.textContent = `${style.tagline}${target.version ? ` · v${String(target.version).replace(/^v/, "")}` : ""}`;
@@ -415,14 +751,26 @@ function renderSections(data) {
     state.append(dot, make("b", null, stateText));
     const grip = make("span", "tile-grip");
     grip.setAttribute("aria-hidden", "true");
-    head.append(naming, state, make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
+    head.append(naming, state);
+    if (target.id === "personal") {
+      const identity = make("div", "gw-identity");
+      identity.append(
+        make("span", null, "CORE  /  LOCAL :8761"),
+        make("span", null, `POLL  /  ${num(data.refreshIntervalSeconds, 4)} SEC`),
+        make("span", null, "MODE  /  AUTO RECOVERY"),
+      );
+      head.append(identity);
+    }
+    head.append(make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
 
     const vitals = make("div", "proj-vitals");
     vitals.append(probeChip("MCP", target.mcp));
     if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
 
     const dataZone = make("div", "proj-data");
-    for (const card of sectionDataCards(target, widgets, data.gateway || {}, data.fleet || null)) {
+    if (target.id === "personal") dataZone.classList.add("gateway-data");
+    if (target.id === "watch") dataZone.classList.add("watch-data");
+    for (const card of sectionDataCards(target, widgets, data)) {
       dataZone.append(card);
     }
 
@@ -670,10 +1018,24 @@ function applyView(view) {
   if (view.theme) root.dataset.theme = view.theme;
   if (!layoutMode && view.projectLayout && typeof view.projectLayout === "object") {
     projectLayout = view.projectLayout;
+    const incomingVersion = Number(view.projectLayoutVersion);
+    projectLayoutVersion = Number.isFinite(incomingVersion)
+      ? Math.max(1, incomingVersion)
+      : Object.keys(projectLayout).length ? 1 : PROJECT_LAYOUT_VERSION;
   }
+  const desktopMode = Boolean(view.desktopMode);
   dom.body.classList.toggle("compact", Boolean(view.compact));
+  dom.body.classList.toggle("desktop-mode", desktopMode);
   dom.btnCompact.setAttribute("aria-pressed", String(Boolean(view.compact)));
   dom.btnTop.setAttribute("aria-pressed", String(Boolean(view.onTop)));
+  dom.btnDesktop.setAttribute("aria-pressed", String(desktopMode));
+  dom.btnDesktop.title = desktopMode ? "退出桌面模式" : "固定到桌面";
+  dom.btnDesktop.setAttribute("aria-label", dom.btnDesktop.title);
+  dom.btnCompact.disabled = desktopMode;
+  dom.btnTop.disabled = desktopMode;
+  if (dom.titlebarDrag) {
+    dom.titlebarDrag.classList.toggle("pywebview-drag-region", !desktopMode);
+  }
   dom.body.classList.remove("booting");
 }
 
@@ -681,30 +1043,48 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function geometryForTile(projectId, index) {
-  const saved = projectLayout[projectId] || {};
-  const fallback = DEFAULT_TILE_LAYOUT[projectId] || {
+function defaultGeometryForTile(projectId, index, viewportWidth) {
+  const base = DEFAULT_TILE_LAYOUT[projectId] || {
     x: index % 2 ? 510 : 0,
     y: Math.floor(index / 2) * 372,
     w: 490,
     h: 360,
     order: index,
   };
+  const scale = viewportWidth / LEGACY_LAYOUT_SCALE;
+  return {
+    x: Math.round(base.x * scale),
+    y: base.y,
+    w: Math.round(base.w * scale),
+    h: base.h,
+    order: base.order,
+  };
+}
+
+function geometryForTile(projectId, index, viewportWidth, sourceVersion) {
+  const saved = projectLayout[projectId] || {};
+  const fallback = defaultGeometryForTile(projectId, index, viewportWidth);
   const hasFreeform = ["x", "y", "w", "h"].every((key) => Number.isFinite(Number(saved[key])));
   if (hasFreeform) {
-    const width = clamp(num(saved.w, fallback.w), 80, LAYOUT_SCALE);
+    const legacy = sourceVersion < PROJECT_LAYOUT_VERSION;
+    const width = legacy
+      ? num(saved.w, fallback.w) / LEGACY_LAYOUT_SCALE * viewportWidth
+      : num(saved.w, fallback.w);
+    const left = legacy
+      ? num(saved.x, fallback.x) / LEGACY_LAYOUT_SCALE * viewportWidth
+      : num(saved.x, fallback.x);
     return {
-      x: clamp(num(saved.x, fallback.x), 0, LAYOUT_SCALE - width),
-      y: clamp(num(saved.y, fallback.y), 0, 10000),
-      w: width,
-      h: clamp(num(saved.h, fallback.h), MIN_TILE_HEIGHT, 2400),
-      order: clamp(num(saved.order, fallback.order), 0, 99),
+      x: clamp(left, 0, MAX_WORKSPACE_POSITION),
+      y: clamp(num(saved.y, fallback.y), 0, MAX_WORKSPACE_POSITION),
+      w: clamp(width, MIN_TILE_WIDTH, MAX_TILE_WIDTH),
+      h: clamp(num(saved.h, fallback.h), MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
+      order: clamp(num(saved.order, fallback.order), 0, 999),
     };
   }
   if (Number.isFinite(Number(saved.cols)) || Number.isFinite(Number(saved.rows))) {
     return {
       ...fallback,
-      order: clamp(num(saved.order, fallback.order), 0, 99),
+      order: clamp(num(saved.order, fallback.order), 0, 999),
     };
   }
   return { ...fallback };
@@ -722,6 +1102,7 @@ function rectOfTile(tile) {
 function setTileDensity(tile, width, height) {
   tile.dataset.widthClass = width < 300 ? "small" : width < 500 ? "medium" : "large";
   tile.dataset.heightClass = height < 210 ? "short" : height < 300 ? "medium" : "tall";
+  tile.classList.toggle("tile-narrow", width < 420);
   tile.classList.toggle("tile-tiny", width < 250 || height < 185);
   tile.classList.toggle("tile-micro", width < 180 || height < 140);
 }
@@ -756,30 +1137,48 @@ function installLayoutChrome() {
   dom.projectSections.append(vertical, horizontal, badge);
 }
 
-function updateProjectCanvasHeight(extraRect = null, allowShrink = true) {
+function workspaceViewportWidth() {
+  if (!dom.board) return 0;
+  const style = window.getComputedStyle(dom.board);
+  const horizontalPadding = num(Number.parseFloat(style.paddingLeft)) + num(Number.parseFloat(style.paddingRight));
+  return Math.max(MIN_TILE_WIDTH, Math.floor(dom.board.clientWidth - horizontalPadding));
+}
+
+function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
+  const viewportWidth = workspaceViewportWidth();
+  projectViewportWidth = viewportWidth;
+  let right = extraRect ? extraRect.left + extraRect.width : 0;
   let bottom = extraRect ? extraRect.top + extraRect.height : 0;
   for (const tile of dom.projectSections.querySelectorAll(".proj")) {
     const rect = rectOfTile(tile);
+    right = Math.max(right, rect.left + rect.width);
     bottom = Math.max(bottom, rect.top + rect.height);
   }
-  const wanted = Math.max(260, Math.ceil(bottom + 12));
-  const current = Number.parseFloat(dom.projectSections.style.height) || wanted;
-  dom.projectSections.style.height = `${allowShrink ? wanted : Math.max(current, wanted)}px`;
+  const overflowPadding = right > viewportWidth + 0.5 ? CANVAS_PADDING : 0;
+  const wantedWidth = Math.max(viewportWidth, Math.ceil(right + overflowPadding));
+  const wantedHeight = Math.max(260, Math.ceil(bottom + CANVAS_PADDING));
+  const currentWidth = Number.parseFloat(dom.projectSections.style.width) || wantedWidth;
+  const currentHeight = Number.parseFloat(dom.projectSections.style.height) || wantedHeight;
+  projectCanvasWidth = allowShrink ? wantedWidth : Math.max(currentWidth, wantedWidth);
+  dom.projectSections.style.width = `${projectCanvasWidth}px`;
+  dom.projectSections.style.height = `${allowShrink ? wantedHeight : Math.max(currentHeight, wantedHeight)}px`;
 }
 
 function applyProjectLayout(animate = false) {
-  const canvasWidth = dom.projectSections.clientWidth;
-  if (canvasWidth <= 0) return;
-  projectCanvasWidth = canvasWidth;
+  const viewportWidth = workspaceViewportWidth();
+  if (viewportWidth <= 0) return;
+  projectViewportWidth = viewportWidth;
+  projectCanvasWidth = viewportWidth;
+  dom.projectSections.style.width = `${viewportWidth}px`;
   dom.projectSections.classList.add("free-layout");
   const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+  const sourceVersion = projectLayoutVersion;
   tiles.forEach((tile, index) => {
-    const geometry = geometryForTile(tile.dataset.projectId, index);
-    const width = clamp(geometry.w / LAYOUT_SCALE * canvasWidth, Math.min(MIN_TILE_WIDTH, canvasWidth), canvasWidth);
+    const geometry = geometryForTile(tile.dataset.projectId, index, viewportWidth, sourceVersion);
     const rect = {
-      left: clamp(geometry.x / LAYOUT_SCALE * canvasWidth, 0, canvasWidth - width),
+      left: geometry.x,
       top: geometry.y,
-      width,
+      width: geometry.w,
       height: clamp(geometry.h, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
     };
     tile.style.zIndex = String(geometry.order + 1);
@@ -799,7 +1198,15 @@ function applyProjectLayout(animate = false) {
       );
     }
   });
-  updateProjectCanvasHeight();
+  updateProjectCanvasSize();
+  if (sourceVersion < PROJECT_LAYOUT_VERSION && Object.keys(projectLayout).length) {
+    projectLayoutVersion = PROJECT_LAYOUT_VERSION;
+    projectLayout = tileLayoutFromDom();
+    const bridge = api();
+    if (bridge && bridge.set_project_layout) {
+      bridge.set_project_layout(projectLayout).catch(() => {});
+    }
+  }
 }
 
 function tileLayoutFromDom() {
@@ -807,13 +1214,12 @@ function tileLayoutFromDom() {
   const tiles = [...dom.projectSections.querySelectorAll(".proj")];
   const ranked = [...tiles].sort((first, second) => num(first.style.zIndex) - num(second.style.zIndex));
   const orderByTile = new Map(ranked.map((tile, order) => [tile, order]));
-  const canvasWidth = Math.max(1, dom.projectSections.clientWidth);
   tiles.forEach((tile) => {
     const rect = rectOfTile(tile);
     layout[tile.dataset.projectId] = {
-      x: Math.round(rect.left / canvasWidth * LAYOUT_SCALE),
+      x: Math.round(rect.left),
       y: Math.round(rect.top),
-      w: Math.round(rect.width / canvasWidth * LAYOUT_SCALE),
+      w: Math.round(rect.width),
       h: Math.round(rect.height),
       order: orderByTile.get(tile) || 0,
     };
@@ -823,6 +1229,7 @@ function tileLayoutFromDom() {
 
 async function persistTileLayout() {
   projectLayout = tileLayoutFromDom();
+  projectLayoutVersion = PROJECT_LAYOUT_VERSION;
   const bridge = api();
   if (bridge && bridge.set_project_layout) await bridge.set_project_layout(projectLayout);
 }
@@ -899,7 +1306,7 @@ function closestSnap(sources, guides) {
 }
 
 function snapTileRect(rect, tile, edge) {
-  const verticalGuides = [0, projectCanvasWidth / 2, projectCanvasWidth];
+  const verticalGuides = [0, projectViewportWidth / 2, projectViewportWidth];
   const horizontalGuides = [0];
   for (const other of dom.projectSections.querySelectorAll(".proj")) {
     if (other === tile) continue;
@@ -932,31 +1339,42 @@ function snapTileRect(rect, tile, edge) {
     } else if (edge.includes("s")) snapped.height += ySnap.delta;
   }
   return {
-    rect: constrainTileRect(snapped),
+    rect: constrainTileRect(snapped, edge),
     vertical: xSnap ? xSnap.guide : null,
     horizontal: ySnap ? ySnap.guide : null,
   };
 }
 
-function constrainTileRect(rect) {
-  const width = clamp(rect.width, Math.min(MIN_TILE_WIDTH, projectCanvasWidth), projectCanvasWidth);
+function constrainTileRect(rect, edge = "move") {
+  let left = num(rect.left);
+  let top = num(rect.top);
+  let width = clamp(num(rect.width, MIN_TILE_WIDTH), MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+  let height = clamp(num(rect.height, MIN_TILE_HEIGHT), MIN_TILE_HEIGHT, MAX_TILE_HEIGHT);
+  if (left < 0) {
+    if (edge.includes("w")) width = Math.max(MIN_TILE_WIDTH, width + left);
+    left = 0;
+  }
+  if (top < 0) {
+    if (edge.includes("n")) height = Math.max(MIN_TILE_HEIGHT, height + top);
+    top = 0;
+  }
   return {
-    left: clamp(rect.left, 0, Math.max(0, projectCanvasWidth - width)),
-    top: Math.max(0, rect.top),
+    left: clamp(left, 0, MAX_WORKSPACE_POSITION),
+    top: clamp(top, 0, MAX_WORKSPACE_POSITION),
     width,
-    height: clamp(rect.height, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
+    height,
   };
 }
 
 function interactionRect(event) {
   const active = activeTileInteraction;
-  const dx = event.clientX - active.startX;
-  const dy = event.clientY - active.startY;
+  const dx = event.clientX - active.startX + dom.stage.scrollLeft - active.startScrollLeft;
+  const dy = event.clientY - active.startY + dom.stage.scrollTop - active.startScrollTop;
   const rect = { ...active.startRect };
   if (active.edge === "move") {
     rect.left += dx;
     rect.top += dy;
-    return constrainTileRect(rect);
+    return constrainTileRect(rect, active.edge);
   }
   if (active.edge.includes("e")) rect.width += dx;
   if (active.edge.includes("s")) rect.height += dy;
@@ -976,7 +1394,7 @@ function interactionRect(event) {
       rect.height = MIN_TILE_HEIGHT;
     }
   }
-  return constrainTileRect(rect);
+  return constrainTileRect(rect, active.edge);
 }
 
 function queueInteractionFrame(rect, snap) {
@@ -988,8 +1406,66 @@ function queueInteractionFrame(rect, snap) {
     if (!activeTileInteraction) return;
     setTileRect(activeTileInteraction.tile, activeTileInteraction.pendingRect);
     showAlignmentChrome(activeTileInteraction.pendingSnap, activeTileInteraction.pendingRect);
-    updateProjectCanvasHeight(activeTileInteraction.pendingRect, false);
+    updateProjectCanvasSize(activeTileInteraction.pendingRect, false);
   });
+}
+
+function autoScrollVelocity(position, start, end) {
+  if (position < start + AUTO_SCROLL_MARGIN) {
+    const pressure = clamp((start + AUTO_SCROLL_MARGIN - position) / AUTO_SCROLL_MARGIN, 0, 1);
+    return -Math.ceil(AUTO_SCROLL_MAX * pressure);
+  }
+  if (position > end - AUTO_SCROLL_MARGIN) {
+    const pressure = clamp((position - (end - AUTO_SCROLL_MARGIN)) / AUTO_SCROLL_MARGIN, 0, 1);
+    return Math.ceil(AUTO_SCROLL_MAX * pressure);
+  }
+  return 0;
+}
+
+function runInteractionAutoScroll() {
+  interactionScrollFrame = 0;
+  const active = activeTileInteraction;
+  if (!active || (!active.scrollVelocityX && !active.scrollVelocityY)) return;
+
+  if (active.scrollVelocityX > 0) {
+    const room = dom.stage.scrollLeft + dom.stage.clientWidth + active.scrollVelocityX + CANVAS_PADDING;
+    if (room > projectCanvasWidth) {
+      projectCanvasWidth = room;
+      dom.projectSections.style.width = `${projectCanvasWidth}px`;
+    }
+  }
+  if (active.scrollVelocityY > 0) {
+    const currentHeight = Number.parseFloat(dom.projectSections.style.height) || 260;
+    dom.projectSections.style.height = `${currentHeight + active.scrollVelocityY}px`;
+  }
+
+  const beforeLeft = dom.stage.scrollLeft;
+  const beforeTop = dom.stage.scrollTop;
+  dom.stage.scrollLeft += active.scrollVelocityX;
+  dom.stage.scrollTop += active.scrollVelocityY;
+  if (dom.stage.scrollLeft !== beforeLeft || dom.stage.scrollTop !== beforeTop) {
+    const raw = interactionRect({ clientX: active.pointerX, clientY: active.pointerY });
+    const snap = snapTileRect(raw, active.tile, active.edge);
+    active.pendingRect = snap.rect;
+    active.pendingSnap = snap;
+    setTileRect(active.tile, snap.rect);
+    showAlignmentChrome(snap, snap.rect);
+    updateProjectCanvasSize(snap.rect, false);
+  }
+  interactionScrollFrame = window.requestAnimationFrame(runInteractionAutoScroll);
+}
+
+function updateInteractionAutoScroll(event) {
+  const active = activeTileInteraction;
+  if (!active) return;
+  const bounds = dom.stage.getBoundingClientRect();
+  active.pointerX = event.clientX;
+  active.pointerY = event.clientY;
+  active.scrollVelocityX = autoScrollVelocity(event.clientX, bounds.left, bounds.right);
+  active.scrollVelocityY = autoScrollVelocity(event.clientY, bounds.top, bounds.bottom);
+  if (!interactionScrollFrame && (active.scrollVelocityX || active.scrollVelocityY)) {
+    interactionScrollFrame = window.requestAnimationFrame(runInteractionAutoScroll);
+  }
 }
 
 function beginTileInteraction(event) {
@@ -1007,6 +1483,12 @@ function beginTileInteraction(event) {
     edge: handle ? handle.dataset.edge : "move",
     startX: event.clientX,
     startY: event.clientY,
+    startScrollLeft: dom.stage.scrollLeft,
+    startScrollTop: dom.stage.scrollTop,
+    pointerX: event.clientX,
+    pointerY: event.clientY,
+    scrollVelocityX: 0,
+    scrollVelocityY: 0,
     startRect: rectOfTile(tile),
     pendingRect: rectOfTile(tile),
     pendingSnap: { vertical: null, horizontal: null },
@@ -1021,6 +1503,7 @@ function beginTileInteraction(event) {
 
 function moveTileInteraction(event) {
   if (!activeTileInteraction || event.pointerId !== activeTileInteraction.pointerId) return;
+  updateInteractionAutoScroll(event);
   const raw = interactionRect(event);
   const snap = snapTileRect(raw, activeTileInteraction.tile, activeTileInteraction.edge);
   queueInteractionFrame(snap.rect, snap);
@@ -1031,6 +1514,10 @@ function finishTileInteraction(event) {
   if (layoutFrame) {
     window.cancelAnimationFrame(layoutFrame);
     layoutFrame = 0;
+  }
+  if (interactionScrollFrame) {
+    window.cancelAnimationFrame(interactionScrollFrame);
+    interactionScrollFrame = 0;
   }
   const active = activeTileInteraction;
   setTileRect(active.tile, active.pendingRect);
@@ -1049,18 +1536,22 @@ function finishTileInteraction(event) {
   window.setTimeout(() => active.tile.classList.remove("settling"), 320);
   activeTileInteraction = null;
   hideAlignmentChrome();
-  updateProjectCanvasHeight(null, true);
+  updateProjectCanvasSize(null, true);
   persistTileLayout();
 }
 
 function observeProjectCanvas() {
   if (projectResizeObserver || typeof ResizeObserver === "undefined") return;
-  projectResizeObserver = new ResizeObserver((entries) => {
-    const width = Math.round(entries[0] ? entries[0].contentRect.width : 0);
-    if (width <= 0 || width === Math.round(projectCanvasWidth) || activeTileInteraction) return;
-    applyProjectLayout(false);
+  projectResizeObserver = new ResizeObserver(() => {
+    const width = workspaceViewportWidth();
+    if (width <= 0 || width === Math.round(projectViewportWidth)) return;
+    if (!Object.keys(projectLayout).length && !activeTileInteraction) {
+      applyProjectLayout(false);
+    } else {
+      updateProjectCanvasSize(null, true);
+    }
   });
-  projectResizeObserver.observe(dom.projectSections);
+  projectResizeObserver.observe(dom.stage);
 }
 
 function markWindowResizing() {
@@ -1101,6 +1592,7 @@ function selectView(name) {
     panel.classList.toggle("active", active);
   }
   el("stage").scrollTop = 0;
+  el("stage").scrollLeft = 0;
 }
 
 function updateClock() {
@@ -1168,18 +1660,43 @@ async function requestRepair(button) {
 
 /* ---------- controls ---------- */
 
+function windowResizeEdgeAt(event) {
+  const zone = event.target && event.target.closest
+    ? event.target.closest("[data-window-edge]")
+    : null;
+  if (zone) return zone.dataset.windowEdge;
+
+  const corner = 18;
+  const edge = 10;
+  const west = event.clientX <= corner;
+  const east = event.clientX >= window.innerWidth - corner;
+  const north = event.clientY <= corner;
+  const south = event.clientY >= window.innerHeight - corner;
+  if (north && west) return "nw";
+  if (north && east) return "ne";
+  if (south && west) return "sw";
+  if (south && east) return "se";
+  if (event.clientY <= edge) return "n";
+  if (event.clientY >= window.innerHeight - edge) return "s";
+  if (event.clientX <= edge) return "w";
+  if (event.clientX >= window.innerWidth - edge) return "e";
+  return null;
+}
+
+function requestWindowResize(event) {
+  if (event.button !== 0 || dom.body.classList.contains("desktop-mode")) return;
+  const edge = windowResizeEdgeAt(event);
+  if (!edge) return;
+  const bridge = api();
+  if (!bridge || !bridge.begin_window_resize) return;
+  event.preventDefault();
+  event.stopPropagation();
+  bridge.begin_window_resize(edge).catch(() => {});
+}
+
 function bindControls() {
   bindTileEditing();
-  for (const zone of document.querySelectorAll("[data-window-edge]")) {
-    zone.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      const bridge = api();
-      if (!bridge || !bridge.begin_window_resize) return;
-      event.preventDefault();
-      event.stopPropagation();
-      bridge.begin_window_resize(zone.dataset.windowEdge).catch(() => {});
-    });
-  }
+  document.addEventListener("pointerdown", requestWindowResize, true);
   for (const button of document.querySelectorAll(".view-tab")) {
     button.addEventListener("click", () => selectView(button.dataset.view));
   }
@@ -1195,19 +1712,24 @@ function bindControls() {
     const result = await bridge.capture();
     dom.sbState.textContent = result && result.message ? result.message : "截图失败";
   });
-  dom.btnLayout.addEventListener("click", () => {
+  dom.btnLayout.addEventListener("click", async () => {
     layoutMode = !layoutMode;
     configureTileEditing();
     if (!layoutMode) {
-      persistTileLayout();
+      await persistTileLayout();
       lastDataKey = "";
-      pull(false);
+      await pull(false);
     }
   });
   dom.btnRepair.addEventListener("click", () => requestRepair(dom.btnRepair));
   dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
   el("btnMin").addEventListener("click", () => api() && api().minimize());
   el("btnClose").addEventListener("click", () => api() && api().hide_to_tray());
+  dom.btnDesktop.addEventListener("click", async () => {
+    const next = dom.btnDesktop.getAttribute("aria-pressed") !== "true";
+    const bridge = api();
+    if (bridge && bridge.set_desktop_mode) render(await bridge.set_desktop_mode(next));
+  });
   el("btnTop").addEventListener("click", async () => {
     const next = dom.btnTop.getAttribute("aria-pressed") !== "true";
     const bridge = api();
@@ -1244,4 +1766,5 @@ window.addEventListener("resize", markWindowResizing);
 window.addEventListener("beforeunload", () => {
   if (timer) window.clearInterval(timer);
   if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
+  if (interactionScrollFrame) window.cancelAnimationFrame(interactionScrollFrame);
 });

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from personal_mcp_gateway.desktop.client import STATUS_DISCONNECTED
 from personal_mcp_gateway.desktop.icons import build_tray_image
@@ -35,8 +35,23 @@ def build_tray_icon(controller: DesktopController, actions: dict[str, Any]) -> A
 
     menu = pystray.Menu(
         pystray.MenuItem("显示看板", wrap("show"), default=True),
-        pystray.MenuItem("紧凑模式", wrap("compact"), checked=lambda _i: controller.state.compact),
-        pystray.MenuItem("窗口置顶", wrap("on_top"), checked=lambda _i: controller.state.on_top),
+        pystray.MenuItem(
+            "固定到桌面",
+            wrap("desktop"),
+            checked=lambda _i: controller.state.desktop_mode,
+        ),
+        pystray.MenuItem(
+            "紧凑模式",
+            wrap("compact"),
+            checked=lambda _i: controller.state.compact,
+            enabled=cast(Any, lambda _i: not controller.state.desktop_mode),
+        ),
+        pystray.MenuItem(
+            "窗口置顶",
+            wrap("on_top"),
+            checked=lambda _i: controller.state.on_top,
+            enabled=cast(Any, lambda _i: not controller.state.desktop_mode),
+        ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("打开网页版", wrap("web")),
         pystray.MenuItem("立即刷新", wrap("refresh")),
@@ -104,6 +119,20 @@ def begin_native_resize(window: Any, edge: str) -> bool:
         native.BeginInvoke(action_type(lambda: begin_window_resize(window, edge)))
         return True
     return begin_window_resize(window, edge)
+
+
+def set_native_desktop_mode(window: Any, enabled: bool) -> bool:
+    from personal_mcp_gateway.desktop.native_window import set_desktop_window_mode
+
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    action_type = __import__("System").Action
+    if native.InvokeRequired:
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(set_desktop_window_mode(window, enabled))))
+        return bool(result and result[0])
+    return set_desktop_window_mode(window, enabled)
 
 
 def run_window(on_start: Any, storage: Path) -> None:
