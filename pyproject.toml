@@ -30,6 +30,7 @@ desktop = [
 dev = [
   "build>=1.2,<2",
   "cyclonedx-bom>=7,<8",
+  "jsonschema>=4.26,<5",
   "pip-audit>=2.9,<3",
   "pyright>=1.1.403,<2",
   "pytest>=9.0.3,<10",

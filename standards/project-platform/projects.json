@@ -1,11 +1,12 @@
 {
   "standardVersion": 1,
-  "auditedAt": "2026-07-27T21:45:00+08:00",
+  "auditedAt": "2026-07-28T00:07:00+08:00",
   "scope": {
     "formalInventory": "C:\\开发\\README.md",
     "githubOwner": "666poyi666-collab",
     "officialRepositoryCount": 10,
     "officialProductCount": 9,
+    "activeRuntimeProjectCount": 6,
     "note": "SuixinYiTing has separate development and publication repositories. EchoDiary, VideoFlow, and Math are retained as archived products."
   },
   "securityFindings": [
@@ -15,6 +16,38 @@
       "path": "chatgpt-web-automation/auth.json",
       "finding": "The repository previously exposed a non-empty browser authentication state containing cookies and origins. It was changed to private and archived on 2026-07-27.",
       "requiredAction": "Revoke the affected ChatGPT/browser sessions and purge the secret from Git history before any future unarchive. Changing visibility does not invalidate copied cookies or erase historical exposure."
+    },
+    {
+      "severity": "critical",
+      "projectId": "focuslink",
+      "path": "legacy public FocusLink DO /v1/* and /v2/*",
+      "finding": "STOP-SHIP observed 2026-07-28 00:35+08: a wholly fabricated but format-valid fl2 token received HTTP 200 from GET /v1/tasks (23207 bytes) and GET /v1/live (105 bytes). No response body or real credential was read or recorded.",
+      "requiredAction": "Contain the legacy public routes with Cloudflare Access, route removal, or WAF first; then enforce real credential, scope, deviceId, and account binding on every /v1/* and /v2/* route. Prove fake=401, read-only write=403, spoofed/revoked/expired/cross-account denial, and prevent the legacy endpoint from serving as a second official origin.",
+      "status": "contained_pending_code_fix",
+      "blocksRelease": true,
+      "containment": {
+        "completedAt": "2026-07-28T00:38:49+08:00",
+        "method": "workers_dev disabled, routes cleared, and the exact legacy custom domain removed",
+        "legacyDomainProbes": {
+          "paths": [
+            "/health",
+            "/v1/tasks",
+            "/v1/live",
+            "/v2/sync",
+            "/v2/sync/epoch"
+          ],
+          "noTokenStatus": 530,
+          "fabricatedTokenStatus": 530,
+          "responseBytes": 17
+        },
+        "workersDevBypassProbe": {
+          "path": "/v1/tasks",
+          "noTokenStatus": 404,
+          "fabricatedTokenStatus": 404,
+          "responseBytes": 17
+        },
+        "sensitiveBodyRead": false
+      }
     }
   ],
   "canonicalRoutes": {
@@ -25,6 +58,48 @@
     "syncExchange": "/sync/v1/exchange",
     "syncStatus": "/sync/v1/status"
   },
+  "oauthOwnerTrust": {
+    "repositoryPath": "C:\\开发\\mcp开发\\poyi-oauth-as",
+    "trustRoot": "cloudflare_account_and_local_authenticated_wrangler",
+    "issuerScript": "scripts/issue-owner-code.mjs",
+    "loginCodeAuthority": "d1_owner_login_codes",
+    "grantAuthority": "sqlite_durable_object",
+    "plaintextPolicy": "stdout_once_never_env_argv_sql_or_log",
+    "compatibilityDateMaximum": "2026-07-27",
+    "canonicalScopes": [
+      "journal:read",
+      "journal:write",
+      "focuslink:read",
+      "watch:read"
+    ],
+    "oidc": false,
+    "deploymentStatus": "not_deployed"
+  },
+  "protocolContracts": [
+    {
+      "id": "journal-sync-v1",
+      "projectId": "daylight-journal",
+      "schemaRelativePath": "contracts/journal-sync-v1.schema.json",
+      "requestFixtureRelativePath": "contracts/journal-sync-v1.request.fixture.json",
+      "responseFixtureRelativePath": "contracts/journal-sync-v1.response.fixture.json",
+      "consumers": [
+        {
+          "id": "journal-cloud-worker",
+          "repositoryPath": "C:\\开发\\mcp开发\\journal-cloud-mcp",
+          "schemaRelativePath": "contracts/journal-sync-v1.schema.json",
+          "requestFixtureRelativePath": "contracts/journal-sync-v1.request.fixture.json",
+          "responseFixtureRelativePath": "contracts/journal-sync-v1.response.fixture.json"
+        },
+        {
+          "id": "daylight-journal",
+          "repositoryPath": "C:\\开发\\日记复盘",
+          "schemaRelativePath": "contracts/journal-sync-v1.schema.json",
+          "requestFixtureRelativePath": "contracts/journal-sync-v1.request.fixture.json",
+          "responseFixtureRelativePath": "contracts/journal-sync-v1.response.fixture.json"
+        }
+      ]
+    }
+  ],
   "projects": [
     {
       "id": "focuslink",
@@ -37,24 +112,69 @@
       "repositoryPaths": [
         "C:\\Users\\poyi\\Desktop\\time1"
       ],
+      "manifestRepositoryPath": "C:\\Users\\poyi\\Desktop\\time1",
       "dataPolicy": "cloud_allowed",
       "manifestRelativePath": ".poyi/project-platform.json",
+      "publicCloudBaseUrl": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev",
+      "publicDeploymentBaseline": {
+        "observedAt": "2026-07-27",
+        "status": "not_deployed",
+        "readyzStatus": 404,
+        "syncStatusRouteStatus": 404,
+        "oauthProtectedResourceStatus": 404,
+        "mcpStatus": 404
+      },
+      "internalAuthority": {
+        "id": "focuslink-account-do-v2",
+        "route": "/v2/sync",
+        "exposure": "edge_contained_noncanonical",
+        "publiclyReachable": false,
+        "publicCanonical": false,
+        "private": false,
+        "registeredInManifest": false,
+        "knownGap": "The legacy edge entry is contained, but authorizeV2 credential/scope/device/account binding, canonical service binding, pairing, and negative E2E remain incomplete. Do not claim the upstream is private or complete."
+      },
+      "credentialBoundary": {
+        "mcp": "oauth",
+        "sync": "device_token",
+        "shared": false
+      },
       "mcp": {
         "status": "partial",
+        "dataPlane": "derived_projection",
         "localEndpoint": "http://127.0.0.1:8770/mcp",
         "localHealth": "http://127.0.0.1:8770/healthz",
+        "cloudBaseUrl": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev",
         "cloudHealth": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
         "localToolCount": 9,
         "cloudToolCount": 4,
-        "coverage": "Cloud exposes three no-argument snapshots plus sync overview; current session, one-session detail, resources, complete pagination, and commands are absent."
+        "projection": {
+          "authority": "focuslink-account-do-v2",
+          "mode": "sync_on_read",
+          "requiredDiagnostics": [
+            "epoch",
+            "lag",
+            "degraded"
+          ]
+        },
+        "coverage": "The single public foxlink-cloud-mcp origin must read the authoritative DO v2 feed through a sync-on-read derived projection and expose epoch, lag, and degraded state. It is not a second data authority."
       },
       "sync": {
         "status": "partial",
-        "mode": "pc_snapshot_mirror_plus_separate_device_sync_worker",
-        "cloudHealth": "https://focuslink-sync.pyzzgk.dpdns.org/health",
+        "dataPlane": "cloud_primary",
+        "authority": "cloud",
+        "mode": "public_adapter_to_internal_do_v2",
+        "cloudBaseUrl": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev",
+        "cloudHealth": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+        "canonicalExchangeRoute": "/sync/v1/exchange",
         "legacyIngressRoute": "/sync/push",
-        "pcOffBehavior": "The MCP mirror retains the last Windows snapshot. The installed desktop device-sync endpoint is loopback, so new data reaching the MCP while Windows is off is not proven.",
-        "lastObservedSource": "pc-sync"
+        "legacyIngressStatus": 410,
+        "forbiddenPublicWrites": [
+          "/v1/live",
+          "/tasks",
+          "/write"
+        ],
+        "pcOffBehavior": "The one public origin must proxy canonical exchange writes to the internal authoritative DO /v2/sync and then expose the resulting revision through MCP on that same origin. Direct DO endpoints are not registered publicly."
       },
       "requirementsMet": false,
       "priority": "P1"
@@ -70,10 +190,12 @@
       "repositoryPaths": [
         "C:\\开发\\手表开发"
       ],
+      "manifestRepositoryPath": "C:\\开发\\手表开发",
       "dataPolicy": "cloud_allowed",
       "manifestRelativePath": ".poyi/project-platform.json",
       "mcp": {
         "status": "partial",
+        "dataPlane": "snapshot_mirror",
         "localEndpoint": "http://127.0.0.1:8768/mcp",
         "localHealth": "http://127.0.0.1:8768/healthz",
         "cloudHealth": "https://watch-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
@@ -83,6 +205,7 @@
       },
       "sync": {
         "status": "partial",
+        "dataPlane": "snapshot_mirror",
         "mode": "phone_capable_snapshot_push_with_pc_fallback",
         "legacyIngressRoute": "/sync/push",
         "pcOffBehavior": "Phone-side push code exists, but remote D1 contained only pc-sync rows during this audit. PC-independent operation is not deployed or verified.",
@@ -104,24 +227,27 @@
         "C:\\开发\\手表音乐软件",
         "C:\\开发\\手表音乐软件\\publish\\SuixinYiTing"
       ],
-      "dataPolicy": "cloud_allowed_with_media_exclusions",
+      "manifestRepositoryPath": "C:\\开发\\手表音乐软件",
+      "dataPolicy": "local_only",
       "manifestRelativePath": ".poyi/project-platform.json",
       "mcp": {
-        "status": "missing",
+        "status": "exempt",
+        "dataPlane": "local_only",
         "localEndpoint": null,
         "localHealth": null,
         "cloudHealth": null,
         "localToolCount": 0,
         "cloudToolCount": 0,
-        "coverage": "No persistent MCP data plane."
+        "coverage": "Explicit local-only exemption: credentials, short URLs, playback cache, playback history, and application state stay on the device. NetEase HTTPS/API and media CDN access is an upstream media dependency, not a Poyi MCP data plane."
       },
       "sync": {
-        "status": "missing",
-        "mode": "none",
-        "pcOffBehavior": "Playback cache, session, and application state are device-local."
+        "status": "exempt",
+        "dataPlane": "local_only",
+        "mode": "local_only",
+        "pcOffBehavior": "No product-owned state is uploaded or synchronized. PC power state cannot create a cloud copy; NetEase HTTPS/API and media CDN access remain external media delivery only."
       },
-      "requirementsMet": false,
-      "priority": "P3"
+      "requirementsMet": true,
+      "priority": "exempt"
     },
     {
       "id": "daylight-journal",
@@ -134,10 +260,12 @@
       "repositoryPaths": [
         "C:\\开发\\日记复盘"
       ],
+      "manifestRepositoryPath": "C:\\开发\\日记复盘",
       "dataPolicy": "sensitive_cloud_allowed",
       "manifestRelativePath": ".poyi/project-platform.json",
       "mcp": {
         "status": "partial",
+        "dataPlane": "cloud_primary",
         "localEndpoint": "http://127.0.0.1:8780/mcp",
         "localHealth": "http://127.0.0.1:8780/healthz",
         "cloudHealth": "https://journal-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
@@ -147,6 +275,8 @@
       },
       "sync": {
         "status": "partial",
+        "dataPlane": "cloud_primary",
+        "contractId": "journal-sync-v1",
         "mode": "local_to_cloud_only",
         "legacyIngressRoute": "/sync/push",
         "pcOffBehavior": "ChatGPT can create cloud entries while Windows is off, but cloud-created rows are not pulled into the local journal. Local mobile changes require the local sync API or wait for Windows.",
@@ -169,24 +299,35 @@
       "repositoryPaths": [
         "C:\\开发\\mcp开发\\PersonalMcpGateway"
       ],
+      "manifestRepositoryPath": "C:\\开发\\mcp开发\\PersonalMcpGateway",
       "dataPolicy": "operational_metadata",
       "manifestRelativePath": ".poyi/project-platform.json",
+      "runtimeDiagnostics": {
+        "dataPlane": "local_only",
+        "allowedCloudRecords": [
+          "last-heartbeat",
+          "audit"
+        ],
+        "createsStateWhilePcOff": false
+      },
       "mcp": {
-        "status": "partial",
+        "status": "complete",
+        "dataPlane": "local_only",
         "localEndpoint": "http://127.0.0.1:8760/mcp",
         "localHealth": "http://127.0.0.1:8761/healthz",
         "cloudHealth": null,
         "localToolCount": 5,
         "cloudToolCount": 0,
-        "coverage": "Five diagnostics tools are reachable through a Windows-dependent secure tunnel only."
+        "coverage": "All five approved runtime diagnostics tools are reachable through the authenticated tunnel while Windows is running. The tunnel is transport, not a cloud runtime or durable diagnostics store."
       },
       "sync": {
-        "status": "missing",
-        "mode": "none",
-        "pcOffBehavior": "Gateway diagnostics and fleet state disappear when Windows is off."
+        "status": "exempt",
+        "dataPlane": "local_only",
+        "mode": "local_only_runtime",
+        "pcOffBehavior": "Windows shutdown stops the Gateway runtime and cannot create or advance Gateway status. A cloud control plane may retain only the last observed heartbeat and audit records, marked stale/offline; it is not new runtime state."
       },
-      "requirementsMet": false,
-      "priority": "P2"
+      "requirementsMet": true,
+      "priority": "exempt"
     },
     {
       "id": "do-not-phone",
@@ -199,24 +340,27 @@
       "repositoryPaths": [
         "C:\\开发\\不做手机控"
       ],
-      "dataPolicy": "cloud_allowed_with_local_rules",
+      "manifestRepositoryPath": "C:\\开发\\不做手机控",
+      "dataPolicy": "local_only",
       "manifestRelativePath": ".poyi/project-platform.json",
       "mcp": {
-        "status": "missing",
+        "status": "exempt",
+        "dataPlane": "local_only",
         "localEndpoint": null,
         "localHealth": null,
         "cloudHealth": null,
         "localToolCount": 0,
         "cloudToolCount": 0,
-        "coverage": "No MCP server; local supervision rules and statistics are not exposed to ChatGPT."
+        "coverage": "Explicit local-only exemption: supervision rules, allowlists, and statistics stay on the device and are not exposed through a product MCP server."
       },
       "sync": {
-        "status": "partial",
-        "mode": "focuslink_read_only_cloud_client",
-        "pcOffBehavior": "The app can read FocusLink live state directly from its cloud endpoint, but its own rules and statistics do not synchronize bidirectionally."
+        "status": "exempt",
+        "dataPlane": "local_only",
+        "mode": "local_only_with_focuslink_read_dependency",
+        "pcOffBehavior": "The app may read only FocusLink GET /v1/live and GET /v1/live/wait, but that read-only dependency never uploads or synchronizes this product's rules, allowlists, or statistics."
       },
-      "requirementsMet": false,
-      "priority": "P2"
+      "requirementsMet": true,
+      "priority": "exempt"
     },
     {
       "id": "echodiary",
@@ -339,6 +483,9 @@
       "id": "foxlink-cloud-mcp",
       "path": "C:\\开发\\mcp开发\\foxlink-cloud-mcp",
       "health": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
+      "role": "canonical_public_gateway",
+      "publicCanonical": true,
+      "registeredInManifest": true,
       "deployed": true,
       "remoteBackedUp": true,
       "repositoryUrl": "https://github.com/666poyi666-collab/foxlink-cloud-mcp"
@@ -362,7 +509,20 @@
     {
       "id": "focuslink-device-sync-worker",
       "path": "C:\\Users\\poyi\\Desktop\\time1\\FocusLink\\cloudflare",
-      "health": "https://focuslink-sync.pyzzgk.dpdns.org/health",
+      "role": "internal_authoritative_upstream",
+      "exposure": "edge_contained_noncanonical",
+      "publiclyReachable": false,
+      "publicCanonical": false,
+      "private": false,
+      "registeredInManifest": false,
+      "observedReachability": {
+        "observedAt": "2026-07-28T00:38:49+08:00",
+        "state": "blocked_at_edge",
+        "legacyDomainStatus": 530,
+        "workersDevBypassStatus": 404,
+        "responseBytes": 17,
+        "closureRequired": "code_auth_fix_then_service_binding_pairing_and_negative_e2e"
+      },
       "deployed": true,
       "remoteBackedUp": true
     }

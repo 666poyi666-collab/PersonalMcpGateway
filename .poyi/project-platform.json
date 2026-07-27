@@ -1,0 +1,70 @@
+{
+  "standardVersion": 1,
+  "id": "personal-mcp-gateway",
+  "name": "PersonalMcpGateway",
+  "runtimeProject": true,
+  "dataPolicy": "operational_metadata",
+  "dataInventory": [
+    {
+      "id": "runtime-diagnostics",
+      "classification": "internal",
+      "dataPlane": "local_only",
+      "mcpExposure": "tool",
+      "coverage": "complete",
+      "reason": "The five approved diagnostics tools read live Windows process, module, and fleet state. They are available only while the local Gateway is running, including through its authenticated tunnel."
+    },
+    {
+      "id": "last-heartbeat",
+      "classification": "internal",
+      "dataPlane": "snapshot_mirror",
+      "mcpExposure": "none",
+      "coverage": "exempt",
+      "reason": "A future cloud control plane may retain only the last sanitized observation with observedAt, expiry, stale, and offline semantics; it is never authoritative live state."
+    },
+    {
+      "id": "audit",
+      "classification": "internal",
+      "dataPlane": "snapshot_mirror",
+      "mcpExposure": "none",
+      "coverage": "exempt",
+      "reason": "A future cloud control plane may retain bounded sanitized audit records, but no diagnostics payload, runtime revision, secret, device identifier, or support bundle."
+    }
+  ],
+  "runtimeDiagnostics": {
+    "dataPlane": "local_only",
+    "allowedCloudRecords": [
+      "last-heartbeat",
+      "audit"
+    ],
+    "createsStateWhilePcOff": false
+  },
+  "mcp": {
+    "status": "complete",
+    "dataPlane": "local_only",
+    "localBaseUrl": "http://127.0.0.1:8760",
+    "localHealthBaseUrl": "http://127.0.0.1:8761",
+    "cloudBaseUrl": null,
+    "remoteTransport": "authenticated_tunnel",
+    "routes": {
+      "mcp": "/mcp",
+      "health": "/healthz",
+      "ready": "/readyz",
+      "oauthResourceMetadata": "/.well-known/oauth-protected-resource/mcp"
+    }
+  },
+  "sync": {
+    "status": "exempt",
+    "dataPlane": "local_only",
+    "authority": "none",
+    "routes": {
+      "exchange": "/sync/v1/exchange",
+      "status": "/sync/v1/status"
+    },
+    "supportsPcOff": false,
+    "supportsBidirectionalDelta": false
+  },
+  "knownGaps": [
+    "Windows shutdown stops the Gateway and no new heartbeat, runtime revision, module health, or fleet state may be generated while it is off.",
+    "Any future cloud projection is capped at last-heartbeat and sanitized audit records and must report stale/offline rather than live state."
+  ]
+}

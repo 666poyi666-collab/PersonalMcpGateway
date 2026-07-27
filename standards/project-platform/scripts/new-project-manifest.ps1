@@ -40,8 +40,13 @@ $manifest.dataPolicy = $DataPolicy
 
 if ($DataPolicy -eq 'local_only') {
     $manifest.mcp.status = 'exempt'
+    $manifest.mcp.dataPlane = 'local_only'
     $manifest.sync.status = 'exempt'
+    $manifest.sync.dataPlane = 'local_only'
     $manifest.sync.authority = 'none'
+    $manifest.sync.supportsPcOff = $false
+    $manifest.sync.supportsBidirectionalDelta = $false
+    $manifest.dataInventory[0].dataPlane = 'local_only'
     $manifest.dataInventory[0].mcpExposure = 'none'
     $manifest.dataInventory[0].coverage = 'exempt'
     $manifest.dataInventory[0].reason = 'Local-only product policy; replace with the approved product reason.'

@@ -44,12 +44,14 @@
     },
     "dataInventory": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "id",
           "classification",
+          "dataPlane",
           "mcpExposure",
           "coverage",
           "reason"
@@ -68,6 +70,9 @@
               "sensitive",
               "secret"
             ]
+          },
+          "dataPlane": {
+            "$ref": "#/$defs/dataPlane"
           },
           "mcpExposure": {
             "type": "string",
@@ -88,8 +93,57 @@
             ]
           },
           "reason": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
+        }
+      }
+    },
+    "runtimeDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataPlane",
+        "allowedCloudRecords",
+        "createsStateWhilePcOff"
+      ],
+      "properties": {
+        "dataPlane": {
+          "const": "local_only"
+        },
+        "allowedCloudRecords": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 2,
+          "items": {
+            "enum": [
+              "last-heartbeat",
+              "audit"
+            ]
+          }
+        },
+        "createsStateWhilePcOff": {
+          "const": false
+        }
+      }
+    },
+    "credentialBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mcp",
+        "sync",
+        "shared"
+      ],
+      "properties": {
+        "mcp": {
+          "const": "oauth"
+        },
+        "sync": {
+          "const": "device_token"
+        },
+        "shared": {
+          "const": false
         }
       }
     },
@@ -101,6 +155,7 @@
       "additionalProperties": true,
       "required": [
         "status",
+        "dataPlane",
         "authority",
         "routes",
         "supportsPcOff",
@@ -109,6 +164,9 @@
       "properties": {
         "status": {
           "$ref": "#/$defs/status"
+        },
+        "dataPlane": {
+          "$ref": "#/$defs/dataPlane"
         },
         "authority": {
           "type": "string",
@@ -142,6 +200,115 @@
         }
       }
     },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "implementationCommit",
+        "deployedRevision",
+        "evidenceFiles",
+        "testCommands",
+        "remoteProbes"
+      ],
+      "properties": {
+        "implementationCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,40}$"
+        },
+        "deployedRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceFiles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "path",
+              "sha256"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              }
+            }
+          }
+        },
+        "testCommands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "executable",
+              "arguments",
+              "expectedExitCode"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "executable": {
+                "type": "string",
+                "minLength": 1
+              },
+              "arguments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expectedExitCode": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "remoteProbes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "url",
+              "expectedStatus"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https://"
+              },
+              "expectedStatus": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 599
+              }
+            }
+          }
+        }
+      }
+    },
     "knownGaps": {
       "type": "array",
       "items": {
@@ -149,7 +316,78 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "dataPolicy"
+        ],
+        "properties": {
+          "dataPolicy": {
+            "const": "local_only"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "mcp": {
+            "properties": {
+              "status": {
+                "const": "exempt"
+              },
+              "dataPlane": {
+                "const": "local_only"
+              }
+            }
+          },
+          "sync": {
+            "properties": {
+              "status": {
+                "const": "exempt"
+              },
+              "dataPlane": {
+                "const": "local_only"
+              },
+              "authority": {
+                "const": "none"
+              },
+              "supportsPcOff": {
+                "const": false
+              },
+              "supportsBidirectionalDelta": {
+                "const": false
+              }
+            }
+          },
+          "dataInventory": {
+            "items": {
+              "properties": {
+                "dataPlane": {
+                  "const": "local_only"
+                },
+                "mcpExposure": {
+                  "const": "none"
+                },
+                "coverage": {
+                  "const": "exempt"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
+    "dataPlane": {
+      "type": "string",
+      "enum": [
+        "cloud_primary",
+        "derived_projection",
+        "snapshot_mirror",
+        "local_only"
+      ]
+    },
     "status": {
       "type": "string",
       "enum": [
@@ -164,11 +402,15 @@
       "additionalProperties": true,
       "required": [
         "status",
+        "dataPlane",
         "routes"
       ],
       "properties": {
         "status": {
           "$ref": "#/$defs/status"
+        },
+        "dataPlane": {
+          "$ref": "#/$defs/dataPlane"
         },
         "routes": {
           "type": "object",

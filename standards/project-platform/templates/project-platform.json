@@ -8,6 +8,7 @@
     {
       "id": "example-entity",
       "classification": "private",
+      "dataPlane": "cloud_primary",
       "mcpExposure": "resource",
       "coverage": "missing",
       "reason": ""
@@ -15,6 +16,7 @@
   ],
   "mcp": {
     "status": "missing",
+    "dataPlane": "cloud_primary",
     "localBaseUrl": "http://127.0.0.1:0",
     "cloudBaseUrl": null,
     "routes": {
@@ -26,6 +28,7 @@
   },
   "sync": {
     "status": "missing",
+    "dataPlane": "cloud_primary",
     "authority": "cloud",
     "routes": {
       "exchange": "/sync/v1/exchange",

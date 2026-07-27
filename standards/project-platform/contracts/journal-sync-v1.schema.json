@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:poyi:project-platform:journal-sync:v1",
+  "title": "Journal canonical sync v1 wire contract",
+  "description": "The only accepted request and response envelopes for POST /sync/v1/exchange.",
+  "oneOf": [
+    { "$ref": "#/$defs/exchangeRequest" },
+    { "$ref": "#/$defs/exchangeResponse" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "operation": {
+      "enum": ["upsert", "delete"]
+    },
+    "writeStop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionIndex", "offset", "at"],
+      "properties": {
+        "sessionIndex": { "type": "integer", "minimum": 0 },
+        "offset": { "type": "integer", "minimum": 0 },
+        "at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content", "writeTimes", "writeStops", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "content": { "type": "string", "maxLength": 100000 },
+        "writeTimes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/timestamp" }
+        },
+        "writeStops": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/writeStop" }
+        },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "journalEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "date", "title", "content", "blocks", "mood", "tags", "createdAt", "updatedAt"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "date": { "$ref": "#/$defs/date" },
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 100000 },
+        "blocks": {
+          "type": "array",
+          "maxItems": 300,
+          "items": { "$ref": "#/$defs/block" }
+        },
+        "mood": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 5 },
+            { "type": "null" }
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string", "maxLength": 80 }
+        },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "journalPayload": {
+      "oneOf": [
+        { "$ref": "#/$defs/journalEntry" },
+        { "type": "null" }
+      ]
+    },
+    "mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["opId", "entityType", "entityId", "baseRevision", "operation", "payload"],
+      "properties": {
+        "opId": { "$ref": "#/$defs/uuid" },
+        "entityType": { "const": "journal_entry" },
+        "entityId": { "$ref": "#/$defs/date" },
+        "baseRevision": { "$ref": "#/$defs/revision" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "payload": { "$ref": "#/$defs/journalPayload" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "upsert" } }, "required": ["operation"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/journalEntry" } } },
+          "else": { "properties": { "payload": { "type": "null" } } }
+        }
+      ]
+    },
+    "acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "opId", "entityId", "operation", "revision"],
+      "properties": {
+        "outcome": { "const": "acknowledged" },
+        "opId": { "$ref": "#/$defs/uuid" },
+        "entityId": { "$ref": "#/$defs/date" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "replayed": { "type": "boolean" }
+      }
+    },
+    "syncEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityId", "revision", "operation", "payload", "deletedAt", "updatedAt"],
+      "properties": {
+        "entityId": { "$ref": "#/$defs/date" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "payload": { "$ref": "#/$defs/journalPayload" },
+        "deletedAt": {
+          "oneOf": [
+            { "$ref": "#/$defs/timestamp" },
+            { "type": "null" }
+          ]
+        },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "opId", "entityId", "operation", "error", "retryable", "current", "candidate"],
+      "properties": {
+        "outcome": { "const": "conflict" },
+        "opId": { "$ref": "#/$defs/uuid" },
+        "entityId": { "$ref": "#/$defs/date" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "error": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" },
+        "current": {
+          "oneOf": [
+            { "$ref": "#/$defs/syncEntity" },
+            { "type": "null" }
+          ]
+        },
+        "candidate": { "$ref": "#/$defs/journalPayload" }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityType", "entityId", "revision", "operation", "payload", "changedAt", "originDeviceId", "operationId"],
+      "properties": {
+        "entityType": { "const": "journal_entry" },
+        "entityId": { "$ref": "#/$defs/date" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "payload": { "$ref": "#/$defs/journalPayload" },
+        "changedAt": { "$ref": "#/$defs/timestamp" },
+        "originDeviceId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$" },
+        "operationId": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "exchangeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "deviceId", "cursor", "mutations"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "deviceId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$" },
+        "cursor": {
+          "oneOf": [
+            { "type": "string", "pattern": "^c[0-9a-z]+$" },
+            { "type": "null" }
+          ]
+        },
+        "mutations": {
+          "type": "array",
+          "maxItems": 25,
+          "items": { "$ref": "#/$defs/mutation" }
+        }
+      }
+    },
+    "exchangeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acknowledged", "conflicts", "changes", "nextCursor", "hasMore", "serverTime"],
+      "properties": {
+        "acknowledged": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acknowledgement" }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/conflict" }
+        },
+        "changes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/change" }
+        },
+        "nextCursor": { "type": "string", "pattern": "^c[0-9a-z]+$" },
+        "hasMore": { "type": "boolean" },
+        "serverTime": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

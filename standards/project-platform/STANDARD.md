@@ -31,6 +31,9 @@ weakening that definition:
 
 - `cloud_primary`: a durable cloud database remains available while Windows is
   off; this alone does not prove device synchronization or later reconciliation;
+- `derived_projection`: a non-authoritative query model is refreshed from an
+  explicitly named authority; it must expose its source epoch, lag, and degraded
+  state and must never accept independent writes;
 - `snapshot_mirror`: the cloud retains the last successful Windows/device
   snapshot; this is remote read availability, not continued synchronization;
 - `local_only`: the runtime or data requires the Windows PC.
@@ -67,6 +70,36 @@ http://127.0.0.1:<allocated-port>/readyz
 The cloud hostname is project-specific; route names and payload contracts are
 not.
 
+### FocusLink public-origin rule
+
+FocusLink has exactly one public canonical origin: `foxlink-cloud-mcp`. That
+origin serves `/sync/v1/exchange`, `/mcp`, `/readyz`, and OAuth protected-resource
+metadata. Its exchange adapter transparently forwards writes to the internal
+FocusLink Account Durable Object `/v2/sync` authority. The direct Worker/DO is an
+implementation dependency, not a second official MCP, `cloudBaseUrl`, or
+canonical route, and it must not appear in the project manifest. Its legacy
+custom domain may remain network-reachable during migration; that reachability
+must be reported honestly and does not make it canonical. Production closure
+requires a service binding, equivalent access restriction, or retirement of the
+legacy public domain after the adapter is proven.
+
+The 2026-07-28 emergency containment disabled `workers_dev`, cleared routes,
+and removed the exact legacy custom-domain binding. Anonymous and fabricated
+token probes now stop at the edge (`530` on the retired domain and `404` on the
+workers.dev bypass, 17-byte responses). This is `edge_contained_noncanonical`,
+not proof that the DO is private or that application authorization is fixed.
+`authorizeV2`, service binding, pairing, and canonical/negative E2E remain
+release blockers.
+
+Any foxlink D1 model used for MCP reads is a `derived_projection`, refreshed
+from the DO on read and reporting `epoch`, `lag`, and `degraded`. All writes pass
+through to the DO. Legacy snapshot `/sync/push` and snapshot-write routes return
+`410 Gone` with the canonical base URL and migration guidance; public
+`/v1/live`, task, or projection-write endpoints are forbidden. Device sync
+credentials are accepted only by exchange and its upstream; MCP uses a separate
+OAuth token. End-to-end proof uses the same public origin for exchange write and
+MCP read, then verifies that the internal DO revision advanced.
+
 ## 3. Authentication boundaries
 
 - MCP clients use OAuth 2.1 Authorization Code + PKCE with narrow scopes.
@@ -75,8 +108,58 @@ not.
 - APKs and desktop packages do not contain owner/admin secrets.
 - Secrets are never stored in Git, manifests, reports, URLs, screenshots, or
   support bundles.
+- Random 256-bit owner login tickets, authorization codes, and refresh tokens
+  are stored as domain-separated HMAC-SHA-256 fingerprints with a secret pepper
+  (or an explicitly justified SHA-256 fingerprint). PBKDF2 and Argon are for
+  low-entropy human passwords, not high-entropy tokens. Comparison remains
+  constant-time and authorization codes are consumed exactly once atomically.
+- The owner trust root is the Cloudflare account plus an already authenticated
+  local Wrangler session. `scripts/issue-owner-code.mjs` generates 32 random
+  bytes locally and uses a Wrangler D1 command to insert only a domain-separated
+  fingerprint, `user_id: poyi-owner`, issue time, and a five-minute expiry. The
+  plaintext is printed once to stdout and is never stored in source, environment
+  variables, or log files. No owner password/PBKDF2 path, DO issuance RPC, or
+  test-only issuance backdoor may coexist.
+- `owner_login_codes` are consumed by one atomic D1 update guarded by
+  `consumed_at IS NULL` and `expires_at > now`, returning the user id. Owner
+  login is POST-only and creates a 15-minute `__Host-oauth_session` cookie with
+  Secure, HttpOnly, SameSite=Lax, and Path=/ plus CSRF, rotation, logout, and DO
+  rate limiting. The rate limiter cannot issue codes. OAuth grants, authorization
+  codes, refresh tokens, and access-token state remain authoritative in the
+  SQLite Durable Object, separate from owner-login-code D1 state.
 - Write tools require a stable `requestId`; device commands also require
   `commandId`, `expectedRevision`, `expectedState`, and `expiresAt`.
+
+OAuth documentation uses the accurate description “OAuth 2.1 draft-15 with an
+RFC 9700, RFC 7636, RFC 8707, RFC 8414, RFC 9728, and RFC 9068 profile”; it must
+not claim final OAuth 2.1 RFC conformance. Deployment evidence includes a real
+Cloudflare login → authorize → code exchange smoke with wall time, Worker CPU,
+and confirmation that no `1102` limit error occurred. Miniflare alone is not a
+deployment gate.
+
+The authorization-server Worker uses a released compatibility date no later
+than `2026-07-27`. `src/index.ts` actually exports `OAuthState`; production,
+test, and Wrangler dry-run configurations bind that exact Durable Object class.
+Canonical metadata advertises exactly `journal:read`, `journal:write`,
+`focuslink:read`, and `watch:read`; `watch:write`, `foxlink:read`, `openid`, and
+`id_token` are forbidden. Unless OIDC is deliberately implemented and tested,
+`/.well-known/openid-configuration` remains `404`, OAuth discovery remains
+`200`, and the service does not describe itself as an OIDC provider.
+
+Until the authorization server and resource metadata are deployed, protected
+business routes and `/readyz` fail closed with `503`; a local implementation or
+Miniflare success is not remote deployment. The remote OAuth gate requires:
+
+- authorization-server `/healthz`, RFC 8414 metadata, and JWKS return `200`;
+- OpenID discovery may return `404` only when OIDC is intentionally unsupported
+  and RFC 8414 metadata does not advertise it;
+- Journal, FocusLink, and Watch protected-resource metadata return `200`, name
+  their exact canonical `/mcp` resource, and list precisely the configured
+  issuer in `authorization_servers`;
+- authorization-server resource policy and each protected-resource document
+  agree in both directions;
+- remote valid, expired, wrong-audience, wrong-scope, and revoked-token probes
+  produce their expected allow/deny outcomes.
 
 ## 4. Synchronization contract
 
@@ -123,6 +206,29 @@ Required behavior:
 Large binary artifacts belong in object storage with integrity hashes and
 short-lived scoped access. They do not belong in MCP JSON or D1 rows.
 
+### Journal canonical sync v1
+
+Journal has one wire contract for `POST /sync/v1/exchange`:
+
+- [`contracts/journal-sync-v1.schema.json`](contracts/journal-sync-v1.schema.json)
+- [`contracts/journal-sync-v1.request.fixture.json`](contracts/journal-sync-v1.request.fixture.json)
+- [`contracts/journal-sync-v1.response.fixture.json`](contracts/journal-sync-v1.response.fixture.json)
+
+The request field is `mutations`; every mutation explicitly carries
+`entityType: journal_entry`, `opId`, `entityId`, `baseRevision`, `operation`, and
+`payload`. Mutation and change operation ids are UUIDs; journal entity ids use
+the `YYYY-MM-DD` date key accepted by the Worker. The response contains exactly
+`acknowledged`, `conflicts`, `changes`, `nextCursor`, `hasMore`, and `serverTime`;
+it does not add `protocolVersion` or `authority`. `operations`, `kind`,
+`journalEntry`, `entityType: journal`,
+`acknowledgedOpIds`, `rejectedOperations`, and nested change envelopes are
+incompatible drafts and must be rejected, not dual-served.
+
+The Worker, `sync-protocol.mjs`, application `src/journal/sync.ts`, local
+replicator, and power-off E2E harness validate the same schema and fixtures.
+Their checked-in copies must be byte-identical to these canonical artifacts.
+Contract tests must pass before deployment.
+
 ## 5. Repository declaration
 
 Every active runtime project must contain:
@@ -136,9 +242,28 @@ health endpoints, and known gaps. Source code stays in each stack's native
 layout; this standard deliberately does not force Java, Python, TypeScript,
 and .NET into one directory structure.
 
-Projects that intentionally never upload data use `dataPolicy: local_only`
-and `status: exempt`, with the product reason written in the manifest. Drafts,
-archives, research folders, and third-party clones are not runtime projects.
+The central registry names one `manifestRepositoryPath` for each active runtime
+project. That canonical implementation root is mandatory. A generated publish
+mirror cannot hide a missing implementation manifest; SuixinYiTing therefore
+uses its development repository, not the derived publication repository, as
+its manifest root.
+
+Products whose owned state intentionally has no Poyi cloud data plane use
+`dataPolicy: local_only` and both MCP/sync `status: exempt`, with the product
+reason written in the manifest. This does not mean the application is offline:
+an upstream media API/CDN or a read-only dependency may still be used, but it
+does not convert local credentials, rules, history, cache, or statistics into a
+Poyi synchronization plane. Drafts, archives, research folders, and third-party
+clones are not runtime projects.
+
+PersonalMcpGateway keeps project-level `operational_metadata`, but its
+`runtime-diagnostics` inventory is `local_only`. Its authenticated tunnel can
+transport live results only while Windows and the Gateway are running. A future
+cloud control plane may retain no more than sanitized `last-heartbeat` and
+`audit` records. Such records are historical observations with timestamps,
+expiry, stale, and offline semantics; they are not live diagnostics. With the
+PC off, the Gateway cannot create or advance heartbeat, runtime revision,
+module health, fleet state, or any other Gateway status.
 
 ## 6. Acceptance gates
 
@@ -163,13 +288,14 @@ does not satisfy gates 5-7.
 
 ## 7. Migration order
 
-1. Fix Journal bidirectional synchronization and align local/cloud tool
-   identity first; it currently has two authorities.
+1. Fix Journal bidirectional synchronization against the single canonical v1
+   schema and align local/cloud tool identity.
 2. Connect Watch phone-originated sync operationally and prove a `phone`
    source while Windows is off.
-3. Connect FocusLink's production device-sync data to its cloud MCP instead of
-   relying on the Windows snapshot mirror.
-4. Move Personal Gateway diagnostics to a small cloud control-plane MCP.
-5. Add scoped MCP and sync adapters to SuixinYiTing and other active products
-   according to their data inventories. EchoDiary, VideoFlow, and Math are
-   archived and excluded unless they are explicitly restored.
+3. Make `foxlink-cloud-mcp` the only FocusLink public origin, adapt canonical
+   exchange to the internal DO `/v2/sync` authority, and retire legacy snapshot
+   writes with `410 Gone`.
+4. Preserve Personal Gateway runtime diagnostics as `local_only`; if a cloud
+   control plane is added, cap it at last-heartbeat and sanitized audit records.
+5. Preserve SuixinYiTing and 不做手机控 as explicit `local_only` exemptions.
+   EchoDiary, VideoFlow, and Math remain archived unless explicitly restored.
