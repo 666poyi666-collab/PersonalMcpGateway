@@ -82,6 +82,23 @@ def test_fetch_counts_consecutive_failures_and_never_raises() -> None:
 
 
 @respx.mock
+def test_fetch_keeps_the_last_good_snapshot_during_a_transient_failure() -> None:
+    route = respx.get(URL)
+    route.mock(return_value=httpx.Response(200, json=_payload()))
+    client = GatewayClient()
+    good = client.fetch()
+
+    route.mock(side_effect=httpx.ConnectError("refused"))
+    recovering = client.fetch()
+
+    assert recovering.connected is True
+    assert recovering.status == STATUS_DEGRADED
+    assert recovering.stale is True
+    assert recovering.data == good.data
+    assert recovering.consecutive_failures == 1
+
+
+@respx.mock
 def test_fetch_rejects_non_object_payloads() -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, json=[1, 2, 3]))
     snapshot = GatewayClient().fetch()
@@ -99,3 +116,4 @@ def test_fetch_recovers_after_a_failure() -> None:
     recovered = client.fetch()
     assert recovered.connected is True
     assert recovered.consecutive_failures == 0
+    assert recovered.stale is False

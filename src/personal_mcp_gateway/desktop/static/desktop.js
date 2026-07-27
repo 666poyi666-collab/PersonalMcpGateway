@@ -56,6 +56,7 @@ const dom = {
   btnRefresh: el("btnRefresh"),
   btnRepair: el("btnRepair"),
   btnRepairOffline: el("btnRepairOffline"),
+  viewClock: el("viewClock"),
 };
 
 /* Per-project art direction: the section carries the source project's own
@@ -85,7 +86,7 @@ const PROJECT_STYLE = {
   },
   personal: {
     flavor: "neutral",
-    accent: "#7c6cff",
+    accent: "#78C9F2",
     display: "Personal Gateway",
     tagline: "总机房 · 隧道与看护",
     groups: [],
@@ -178,6 +179,7 @@ function render(payload) {
 
   if (!payload.connected || !payload.data) {
     dom.body.classList.add("disconnected");
+    dom.body.classList.remove("recovering");
     dom.offlineScreen.hidden = false;
     dom.offlineHint.textContent = payload.consecutiveFailures
       ? `连续 ${payload.consecutiveFailures} 次重试未成功 · ${clockOf(payload.fetchedAt)}`
@@ -191,7 +193,11 @@ function render(payload) {
   }
 
   dom.body.classList.remove("disconnected");
-  dom.offlineScreen.hidden = true;
+  dom.body.classList.toggle("recovering", Boolean(payload.stale));
+  dom.offlineScreen.hidden = !payload.stale;
+  if (payload.stale) {
+    dom.offlineHint.textContent = `保留上次有效数据 · 第 ${num(payload.consecutiveFailures)} 次后台重试`;
+  }
 
   const data = payload.data;
   const summary = data.summary || {};
@@ -199,7 +205,8 @@ function render(payload) {
   const online = num(summary.online);
   const total = num(summary.total);
 
-  setStatusChrome(payload.status, `${online}/${total}`, payload.statusLabel || "");
+  setStatusChrome(payload.status, `${online}/${total}`, payload.stale ? "同步恢复中" : (payload.statusLabel || ""));
+  if (payload.stale) dom.sbState.textContent = "RECOVERING";
   dom.sbSync.textContent = `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`;
   dom.sbProbe.textContent = `探测 ${num(data.probeDurationMs)}ms`;
   renderGuard(data.fleet || null);
@@ -352,7 +359,7 @@ function renderSections(data) {
   for (const id of SECTION_ORDER) if (byId.has(id)) ordered.push(byId.get(id));
   for (const t of targets) if (!SECTION_ORDER.includes(t.id)) ordered.push(t);
 
-  const sections = ordered.map((target) => {
+  const sections = ordered.map((target, index) => {
     const style = PROJECT_STYLE[target.id] || {
       flavor: "neutral",
       accent: target.accent || "#8878ff",
@@ -360,7 +367,7 @@ function renderSections(data) {
       tagline: target.description || "",
       groups: [],
     };
-    const section = make("section", `proj proj-${style.flavor}`);
+    const section = make("section", `proj proj-${style.flavor} project-${target.id}`);
     section.style.setProperty("--p-accent", style.accent);
     section.dataset.state = target.state || "offline";
 
@@ -375,7 +382,7 @@ function renderSections(data) {
     dot.dataset.status = target.state || "offline";
     const stateText = { online: "正常", degraded: "降级", offline: "离线" }[target.state] || "未知";
     state.append(dot, make("b", null, stateText));
-    head.append(naming, state);
+    head.append(naming, state, make("span", "proj-index", String(index + 1).padStart(2, "0")));
 
     const vitals = make("div", "proj-vitals");
     vitals.append(probeChip("MCP", target.mcp));
@@ -610,6 +617,28 @@ function applyView(view) {
   dom.body.classList.remove("booting");
 }
 
+function selectView(name) {
+  const target = ["overview", "activity", "extensions"].includes(name) ? name : "overview";
+  for (const button of document.querySelectorAll(".view-tab")) {
+    button.classList.toggle("active", button.dataset.view === target);
+  }
+  for (const panel of document.querySelectorAll(".view-panel")) {
+    const active = panel.dataset.panel === target;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  }
+  el("stage").scrollTop = 0;
+}
+
+function updateClock() {
+  if (!dom.viewClock) return;
+  dom.viewClock.textContent = new Date().toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /* ---------- chart tooltip ---------- */
 
 dom.plot.addEventListener("mouseover", (event) => {
@@ -667,6 +696,9 @@ async function requestRepair(button) {
 /* ---------- controls ---------- */
 
 function bindControls() {
+  for (const button of document.querySelectorAll(".view-tab")) {
+    button.addEventListener("click", () => selectView(button.dataset.view));
+  }
   el("btnRefresh").addEventListener("click", async () => {
     dom.btnRefresh.classList.add("spinning");
     await pull(true);
@@ -701,8 +733,10 @@ function start() {
   if (bridgeReady) return;
   bridgeReady = true;
   bindControls();
+  updateClock();
   pull(false);
   timer = window.setInterval(() => pull(false), POLL_MS);
+  window.setInterval(updateClock, 30000);
 }
 
 window.addEventListener("pywebviewready", start);

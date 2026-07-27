@@ -44,6 +44,7 @@ class DesktopSnapshot:
     data: dict[str, Any] | None = None
     error: str | None = None
     consecutive_failures: int = 0
+    stale: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -54,6 +55,7 @@ class DesktopSnapshot:
             "data": self.data,
             "error": self.error,
             "consecutiveFailures": self.consecutive_failures,
+            "stale": self.stale,
         }
 
 
@@ -95,6 +97,27 @@ class GatewayClient:
     base_url: str = field(default_factory=admin_base_url)
     timeout: float = 4.0
     _failures: int = field(default=0, init=False)
+    _last_good: dict[str, Any] | None = field(default=None, init=False)
+
+    def _failure(self, now: str, error: str) -> DesktopSnapshot:
+        self._failures += 1
+        if self._last_good is not None:
+            return DesktopSnapshot(
+                connected=True,
+                status=STATUS_DEGRADED,
+                fetched_at=now,
+                data=self._last_good,
+                error=error,
+                consecutive_failures=self._failures,
+                stale=True,
+            )
+        return DesktopSnapshot(
+            connected=False,
+            status=STATUS_DISCONNECTED,
+            fetched_at=now,
+            error=error,
+            consecutive_failures=self._failures,
+        )
 
     def fetch(self, *, force: bool = False) -> DesktopSnapshot:
         now = datetime.now(UTC).isoformat()
@@ -106,25 +129,12 @@ class GatewayClient:
                 response.raise_for_status()
                 payload: object = response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            self._failures += 1
-            return DesktopSnapshot(
-                connected=False,
-                status=STATUS_DISCONNECTED,
-                fetched_at=now,
-                error=type(exc).__name__,
-                consecutive_failures=self._failures,
-            )
+            return self._failure(now, type(exc).__name__)
         if not isinstance(payload, dict):
-            self._failures += 1
-            return DesktopSnapshot(
-                connected=False,
-                status=STATUS_DISCONNECTED,
-                fetched_at=now,
-                error="InvalidPayload",
-                consecutive_failures=self._failures,
-            )
+            return self._failure(now, "InvalidPayload")
         self._failures = 0
         data = cast(dict[str, Any], payload)
+        self._last_good = data
         return DesktopSnapshot(
             connected=True,
             status=derive_status(data),

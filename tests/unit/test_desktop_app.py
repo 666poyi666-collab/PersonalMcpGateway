@@ -196,6 +196,7 @@ def test_snapshot_payload_carries_the_view_preferences() -> None:
         "theme": "light",
         "adminUrl": "http://127.0.0.1:8761",
     }
+    assert payload["stale"] is False
 
 
 def test_compact_mode_resizes_and_restores_the_remembered_size() -> None:
