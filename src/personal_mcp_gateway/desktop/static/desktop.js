@@ -94,6 +94,14 @@ const PROJECT_STYLE = {
     tagline: "记录 · 回看 · 复盘",
     groups: ["拾光日记"],
   },
+  bzsjk: {
+    flavor: "discipline",
+    accent: "#FF5C4D",
+    display: "不做手机控",
+    eyebrow: "LOCAL DISCIPLINE / FOCUSLINK",
+    tagline: "监督锁机 · 本地维护",
+    groups: [],
+  },
   personal: {
     flavor: "gateway",
     accent: "#63D8FF",
@@ -103,7 +111,7 @@ const PROJECT_STYLE = {
     groups: [],
   },
 };
-const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
+const SECTION_ORDER = ["foxlink", "watch", "journal", "personal", "bzsjk"];
 const LAYOUT_SCALE = 1000;
 const PROJECT_LAYOUT_VERSION = 3;
 const MIN_TILE_WIDTH = 120;
@@ -119,10 +127,11 @@ const AUTO_SCROLL_MAX = 20;
 const RECOVERY_BANNER_FAILURES = 3;
 const SNAP_DISTANCE = 10;
 const DEFAULT_TILE_LAYOUT = {
-  foxlink: { x: 0, y: 0, w: 390, h: 470, order: 0 },
-  watch: { x: 400, y: 0, w: 600, h: 470, order: 1 },
-  journal: { x: 0, y: 480, w: 390, h: 520, order: 2 },
-  personal: { x: 400, y: 480, w: 600, h: 520, order: 3 },
+  foxlink: { x: 0, y: 0, w: 280, h: 440, order: 0 },
+  watch: { x: 288, y: 0, w: 380, h: 440, order: 1 },
+  journal: { x: 676, y: 0, w: 324, h: 440, order: 2 },
+  personal: { x: 0, y: 450, w: 720, h: 550, order: 3 },
+  bzsjk: { x: 730, y: 450, w: 270, h: 550, order: 4 },
 };
 let projectLayout = {};
 let projectLayoutVersion = PROJECT_LAYOUT_VERSION;
@@ -700,6 +709,127 @@ function watchConsole(target, widgets) {
   return console;
 }
 
+function focusConsole(widgets) {
+  const widget = widgets.find((item) => item.id === "focus_today");
+  const ready = Boolean(widget && widget.ok && widget.data);
+  const value = ready && widget.data.value ? String(widget.data.value) : "—";
+  const label = ready && widget.data.label ? String(widget.data.label) : "等待今日专注数据";
+  const note = ready && widget.data.note ? String(widget.data.note) : "本机恢复后自动刷新";
+  const console = make("div", "focus-console");
+  console.dataset.dataState = ready ? "online" : "offline";
+
+  const head = make("header", "fl-head");
+  head.append(make("span", null, "TEMPORAL FIELD / TODAY"), make("b", null, ready ? "FLOW LOCKED" : "DATA WAIT"));
+  const reading = make("div", "fl-reading");
+  reading.append(make("strong", null, value), make("span", null, label), make("small", null, note));
+  const ribbon = make("div", "fl-ribbon");
+  ribbon.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 18; index += 1) {
+    const segment = make("i");
+    segment.style.setProperty("--segment", String(index));
+    ribbon.append(segment);
+  }
+  const foot = make("footer", "fl-foot");
+  foot.append(make("span", null, "ACTIVE WINDOW"), make("b", null, ready ? "LIVE CACHE" : "NO SAMPLE"));
+  console.append(head, reading, ribbon, foot);
+  return console;
+}
+
+function journalConsole(widgets) {
+  const recent = widgets.find((item) => item.id === "journal_recent");
+  const count = widgets.find((item) => item.id === "journal_count");
+  const items = recent && recent.ok && recent.data && Array.isArray(recent.data.items)
+    ? recent.data.items.slice(0, 4)
+    : [];
+  const total = count && count.ok && count.data && count.data.value != null
+    ? String(count.data.value)
+    : "—";
+  const console = make("div", "journal-console");
+  console.dataset.dataState = items.length ? "online" : "offline";
+
+  const head = make("header", "jr-head");
+  const headCopy = make("div");
+  headCopy.append(make("span", null, "REVIEW LEDGER"), make("strong", null, "最近记录"));
+  const countBlock = make("div", "jr-count");
+  countBlock.append(make("b", null, total), make("small", null, "TOTAL ENTRIES"));
+  head.append(headCopy, countBlock);
+
+  const ledger = make("div", "jr-ledger");
+  if (!items.length) {
+    ledger.append(make("p", "jr-empty", "云端与本机均未返回最近记录"));
+  }
+  items.forEach((item, index) => {
+    const row = make("article", "jr-entry");
+    row.dataset.entryIndex = String(index);
+    const date = make("time", null, item.value || "—");
+    const copy = make("div");
+    copy.append(make("strong", null, item.title || "未命名记录"));
+    if (item.subtitle) copy.append(make("small", null, item.subtitle));
+    row.append(date, copy);
+    ledger.append(row);
+  });
+  const foot = make("footer", "jr-foot");
+  const note = count && count.ok && count.data && count.data.note ? String(count.data.note) : "等待同步状态";
+  foot.append(make("span", null, "LAST REVISION"), make("b", null, note));
+  console.append(head, ledger, foot);
+  return console;
+}
+
+function bzsjkTargetFromWidgets(widgets) {
+  const projects = widgets.find((item) => item.id === "projects");
+  const items = projects && projects.ok && projects.data && Array.isArray(projects.data.items)
+    ? projects.data.items
+    : [];
+  const projectItem = items.find((item) => String(item.title || "").trim() === "不做手机控");
+  if (!projectItem) return null;
+  return {
+    id: "bzsjk",
+    name: "不做手机控",
+    description: "本地监督与锁机维护项目",
+    state: "local",
+    version: null,
+    mcp: null,
+    tunnel: null,
+    projectItem,
+    sync: {
+      compliance: "exempt",
+      dataPlane: "local_only",
+      pcOff: { readAvailable: false, writeAvailable: false, continuedSync: false },
+      snapshotState: "not_applicable",
+      observation: { result: "unknown" },
+    },
+  };
+}
+
+function bzsjkConsole(target, widgets) {
+  const item = target.projectItem || {};
+  const focus = widgets.find((widget) => widget.id === "focus_today");
+  const focusReady = Boolean(focus && focus.ok);
+  const status = String(item.value || "状态待读取");
+  const subtitle = String(item.subtitle || "本地源码 · 未声明云端运行时");
+  const branch = subtitle.split("·")[0].trim() || "LOCAL";
+  const console = make("div", "bz-console");
+  const head = make("header", "bz-head");
+  head.append(make("span", null, "DISCIPLINE CORE / LOCAL"), make("b", null, "NO CLOUD CLAIM"));
+  const main = make("section", "bz-main");
+  main.append(make("span", null, "RUNTIME POLICY"), make("strong", null, "LOCAL"), make("small", null, "关机后无云同步"));
+  const metrics = make("div", "bz-metrics");
+  const rows = [
+    ["REPOSITORY", status],
+    ["BRANCH", branch],
+    ["FOCUSLINK", focusReady ? "数据可读" : "等待恢复"],
+  ];
+  for (const [label, value] of rows) {
+    const metric = make("div", "bz-metric");
+    metric.append(make("span", null, label), make("strong", null, value));
+    metrics.append(metric);
+  }
+  const foot = make("footer", "bz-foot");
+  foot.append(make("span", null, "NETWORK BOUNDARY"), make("b", null, "仅本机 / 用户指定链路"));
+  console.append(head, main, metrics, foot);
+  return console;
+}
+
 function projectCore(target, widgets, data) {
   const core = make("div", "proj-core");
   let label = "LIVE STATE";
@@ -722,6 +852,9 @@ function projectCore(target, widgets, data) {
     const count = widgets.find((widget) => widget.id === "journal_count");
     label = "TOTAL ENTRIES";
     if (count && count.ok && count.data && count.data.value != null) value = String(count.data.value);
+  } else if (target.id === "bzsjk") {
+    label = "LOCAL PROJECT";
+    value = target.projectItem && target.projectItem.value ? String(target.projectItem.value) : "LOCAL";
   }
 
   core.append(make("span", null, label), make("strong", null, value));
@@ -736,6 +869,15 @@ function sectionDataCards(target, widgets, data) {
   }
   if (target.id === "watch") {
     return [watchConsole(target, widgets)];
+  }
+  if (target.id === "foxlink") {
+    return [focusConsole(widgets)];
+  }
+  if (target.id === "journal") {
+    return [journalConsole(widgets)];
+  }
+  if (target.id === "bzsjk") {
+    return [bzsjkConsole(target, widgets)];
   }
   const mine = widgets.filter((w) => style.groups.includes(w.group || ""));
   for (const widget of mine) {
@@ -783,8 +925,10 @@ function sectionTail(target, data) {
 }
 
 function renderSections(data) {
-  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const targets = Array.isArray(data.targets) ? [...data.targets] : [];
   const widgets = Array.isArray(data.widgets) ? data.widgets : [];
+  const bzsjk = bzsjkTargetFromWidgets(widgets);
+  if (bzsjk && !targets.some((target) => target.id === "bzsjk")) targets.push(bzsjk);
   const byId = new Map(targets.map((t) => [t.id, t]));
   const ordered = [];
   for (const id of SECTION_ORDER) if (byId.has(id)) ordered.push(byId.get(id));
@@ -822,7 +966,7 @@ function renderSections(data) {
     const state = make("div", "proj-state");
     const dot = make("i", "dot");
     dot.dataset.status = target.state || "offline";
-    const stateText = { online: "正常", degraded: "降级", offline: "离线" }[target.state] || "未知";
+    const stateText = { online: "正常", degraded: "降级", offline: "离线", local: "本机" }[target.state] || "未知";
     state.append(dot, make("b", null, stateText));
     const grip = make("span", "tile-grip");
     grip.setAttribute("aria-hidden", "true");
@@ -839,7 +983,7 @@ function renderSections(data) {
     head.append(make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
 
     const vitals = make("div", "proj-vitals");
-    vitals.append(probeChip("MCP", target.mcp));
+    if (target.mcp) vitals.append(probeChip("MCP", target.mcp));
     if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
     if (target.id !== "personal") vitals.append(syncChip(target.sync));
 
@@ -1141,6 +1285,17 @@ function layoutBounds(layout) {
   return { right: Math.max(1, right), bottom: Math.max(1, bottom) };
 }
 
+function legacyTileIsAloneInRow(projectId, saved) {
+  const top = num(saved.y);
+  const bottom = top + num(saved.h);
+  return Object.entries(projectLayout).every(([otherId, other]) => {
+    if (otherId === projectId || !other || typeof other !== "object") return true;
+    const otherTop = num(other.y);
+    const otherBottom = otherTop + num(other.h);
+    return otherBottom <= top + 1 || otherTop >= bottom - 1;
+  });
+}
+
 function geometryFromUnits(units, viewportWidth, viewportHeight) {
   const horizontalScale = viewportWidth / LAYOUT_SCALE;
   const verticalScale = viewportHeight / LAYOUT_SCALE;
@@ -1166,13 +1321,24 @@ function geometryForTile(projectId, index, viewportWidth, viewportHeight, source
     // the whole saved canvas once so every tile, including off-screen tiles, is
     // brought into the current window without losing its relative arrangement.
     const bounds = layoutBounds(projectLayout);
-    return geometryFromUnits({
+    const units = {
       x: num(saved.x) / bounds.right * LAYOUT_SCALE,
       y: num(saved.y) / bounds.bottom * LAYOUT_SCALE,
       w: num(saved.w) / bounds.right * LAYOUT_SCALE,
       h: num(saved.h) / bounds.bottom * LAYOUT_SCALE,
       order: num(saved.order, fallback.order),
-    }, viewportWidth, viewportHeight);
+    };
+    // The old free canvas often left a single second-row tile stranded at its
+    // absolute pixel width. It is safe to fill that otherwise empty row while
+    // keeping multi-tile rows and all ordering intact.
+    const hasBzsjkTile = Boolean(dom.projectSections.querySelector('[data-project-id="bzsjk"]'));
+    if (projectId === "personal" && hasBzsjkTile) {
+      Object.assign(units, DEFAULT_TILE_LAYOUT.personal);
+    } else if (units.x < 12 && units.w < 900 && legacyTileIsAloneInRow(projectId, saved)) {
+      units.x = 0;
+      units.w = LAYOUT_SCALE;
+    }
+    return geometryFromUnits(units, viewportWidth, viewportHeight);
   }
   return geometryFromUnits({
     ...fallback,
@@ -1191,7 +1357,9 @@ function rectOfTile(tile) {
 
 function setTileDensity(tile, width, height) {
   const area = width * height;
-  const summaryOnly = (width < 185 && height < 165) || area < 24000;
+  const summaryOnly = (width < 185 && height < 165)
+    || (projectViewportWidth < 500 && height < 165 && width < 450)
+    || area < 24000;
   const micro = (width < 145 && height < 125) || area < 15500;
   tile.dataset.widthClass = width < 280 ? "small" : width < 480 ? "medium" : "large";
   tile.dataset.heightClass = height < 150 ? "short" : height < 225 ? "medium" : "tall";
@@ -1244,7 +1412,18 @@ function workspaceViewportHeight() {
   const verticalPadding = num(Number.parseFloat(boardStyle.paddingTop)) + num(Number.parseFloat(boardStyle.paddingBottom));
   const railHeight = dom.overviewRail ? dom.overviewRail.getBoundingClientRect().height : 92;
   const headingHeight = dom.matrixHeading ? dom.matrixHeading.getBoundingClientRect().height : 38;
-  return Math.max(260, Math.floor(dom.stage.clientHeight - verticalPadding - railHeight - headingHeight));
+  const deck = dom.overviewRail ? dom.overviewRail.parentElement : null;
+  const deckStyle = deck ? window.getComputedStyle(deck) : null;
+  const deckBorders = deckStyle
+    ? num(Number.parseFloat(deckStyle.borderTopWidth)) + num(Number.parseFloat(deckStyle.borderBottomWidth))
+    : 0;
+  // Keep the last row inside the locked overview after borders and subpixel
+  // layout values are rounded by the browser.
+  const available = Math.floor(
+    dom.stage.clientHeight - verticalPadding - railHeight - headingHeight - deckBorders,
+  ) - 6;
+  dom.body.classList.toggle("overview-fits", available >= 260);
+  return Math.max(260, available);
 }
 
 function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
@@ -1259,9 +1438,15 @@ function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
     right = Math.max(right, rect.left + rect.width);
     bottom = Math.max(bottom, rect.top + rect.height);
   }
-  const overflowPadding = right > viewportWidth + 0.5 ? CANVAS_PADDING : 0;
-  const wantedWidth = Math.max(viewportWidth, Math.ceil(right + overflowPadding));
-  const wantedHeight = Math.max(viewportHeight, Math.ceil(bottom + (bottom > viewportHeight + 0.5 ? CANVAS_PADDING : 0)));
+  const widthOverflow = right > viewportWidth + 2;
+  const heightOverflow = bottom > viewportHeight + 2;
+  const wantedWidth = layoutMode && widthOverflow
+    ? Math.ceil(right + CANVAS_PADDING)
+    : Math.max(viewportWidth, widthOverflow ? Math.ceil(right) : viewportWidth);
+  const wantedHeight = Math.max(
+    viewportHeight,
+    heightOverflow ? Math.ceil(bottom + (layoutMode ? CANVAS_PADDING : 0)) : viewportHeight,
+  );
   const currentWidth = Number.parseFloat(dom.projectSections.style.width) || wantedWidth;
   const currentHeight = Number.parseFloat(dom.projectSections.style.height) || wantedHeight;
   projectCanvasWidth = allowShrink ? wantedWidth : Math.max(currentWidth, wantedWidth);
@@ -1692,6 +1877,7 @@ function bindTileEditing() {
 
 function selectView(name) {
   const target = ["overview", "activity", "extensions"].includes(name) ? name : "overview";
+  dom.body.dataset.view = target;
   for (const button of document.querySelectorAll(".view-tab")) {
     button.classList.toggle("active", button.dataset.view === target);
   }

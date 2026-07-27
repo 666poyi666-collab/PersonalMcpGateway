@@ -59,6 +59,98 @@ def test_renderer_never_makes_its_own_network_calls() -> None:
     assert "pywebview.api" in script
 
 
+def test_unified_shell_keeps_live_status_with_the_board() -> None:
+    markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert '<body class="booting" data-view="overview">' in markup
+    assert '<span class="view-live">' in markup
+    status_nodes = ("sbDot", "sbState", "sbGuard", "sbSync", "sbProbe")
+    assert all(f'id="{node}"' in markup for node in status_nodes)
+    assert '<footer class="statusbar">' not in markup
+    shell_rows = "grid-template-rows: var(--titlebar) var(--viewbar) minmax(0, 1fr);"
+    assert "display: grid;" in style and shell_rows in style
+    assert "#stage { min-width: 0; min-height: 0; overflow: auto;" in style
+    assert ".overview-deck" in style and ".overview-rail" in style
+    assert 'id="overviewRail"' in markup and 'id="matrixHeading"' in markup
+
+
+def test_layout_v3_normalizes_legacy_geometry_once_and_persists_units() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+
+    assert "const PROJECT_LAYOUT_VERSION = 3;" in script
+    assert "function geometryFromUnits(units, viewportWidth, viewportHeight)" in script
+    assert "if (sourceVersion >= PROJECT_LAYOUT_VERSION)" in script
+    assert "const bounds = layoutBounds(projectLayout);" in script
+    assert "x: num(saved.x) / bounds.right * LAYOUT_SCALE" in script
+    assert "w: num(saved.w) / bounds.right * LAYOUT_SCALE" in script
+    migration_guard = (
+        "if (sourceVersion < PROJECT_LAYOUT_VERSION && Object.keys(projectLayout).length)"
+    )
+    assert migration_guard in script
+    assert "projectLayoutVersion = PROJECT_LAYOUT_VERSION;" in script
+    assert "bridge.set_project_layout(projectLayout).catch(() => {});" in script
+    assert "x: Math.round(rect.left / viewportWidth * LAYOUT_SCALE)" in script
+    assert "y: Math.round(rect.top / viewportHeight * LAYOUT_SCALE)" in script
+    assert "w: Math.round(rect.width / viewportWidth * LAYOUT_SCALE)" in script
+    assert "h: Math.round(rect.height / viewportHeight * LAYOUT_SCALE)" in script
+
+
+def test_sync_chips_distinguish_cloud_snapshot_and_local_semantics() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert "function syncChip(sync)" in script
+    assert 'plane === "cloud_primary"' in script
+    assert 'plane === "snapshot_mirror"' in script
+    assert 'plane === "local_only"' in script
+    assert script.count('"多端持续同步"') == 1
+    assert '"本机副本暂停上行"' in script
+    assert '"云端快照"' in script and "关机后不再更新" in script
+    assert '"本机数据"' in script and '"关机后离线"' in script
+    assert "chip.dataset.plane = plane;" in script
+    assert "chip.dataset.state = sync && sync.compliance" in script
+    assert "observation.lastSuccessfulPushAt" in script
+    assert 'vitals.append(syncChip(target.sync))' in script
+    assert 'continuity.classList.add("gw-sync-chip")' in script
+    assert '.sync-chip[data-plane="snapshot_mirror"]' in style
+    assert '.sync-chip[data-plane="local_only"]' in style
+
+
+def test_every_project_has_a_dedicated_console_and_responsive_contract() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    contracts = (
+        ("personal", "gatewayConsole", "gateway-console", "MCP ROUTING FABRIC"),
+        ("watch", "watchConsole", "watch-console", "TOTAL DISTANCE"),
+        ("foxlink", "focusConsole", "focus-console", "TEMPORAL FIELD / TODAY"),
+        ("journal", "journalConsole", "journal-console", "REVIEW LEDGER"),
+        ("bzsjk", "bzsjkConsole", "bz-console", "DISCIPLINE CORE / LOCAL"),
+    )
+    for project_id, function_name, class_name, identity in contracts:
+        assert f"function {function_name}(" in script
+        assert f'if (target.id === "{project_id}")' in script
+        assert f'"{class_name}"' in script
+        assert f".{class_name}" in style
+        assert identity in script
+
+    assert 'display: "不做手机控"' in script
+    assert 'String(item.title || "").trim() === "不做手机控"' in script
+    assert 'dataPlane: "local_only"' in script
+    assert 'make("small", null, "关机后无云同步")' in script
+    assert '"NO CLOUD CLAIM"' in script
+    assert '.project-personal[data-height-class="short"]' in style
+    assert '.project-watch[data-height-class="short"]' in style
+    assert '.project-foxlink[data-height-class="short"]' in style
+    assert '.project-journal[data-height-class="short"]' in style
+    assert '.project-bzsjk[data-height-class="short"]' in style
+    assert '[data-width-class="small"][data-height-class="medium"]' in style
+    assert ".proj.tile-summary .proj-head { position: relative" in style
+    assert ".proj-head { grid-row: 1 / 4;" in style and "overflow: hidden;" in style
+    assert ".proj.tile-summary" in style
+
+
 def test_capture_and_freeform_tile_controls_ship_together() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
