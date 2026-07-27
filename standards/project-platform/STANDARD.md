@@ -51,8 +51,10 @@ New implementations use these exact routes:
 | `GET` | `/readyz` | Storage/binding readiness; sanitized |
 | `POST` | `/mcp` | MCP Streamable HTTP endpoint |
 | `GET` | `/.well-known/oauth-protected-resource/mcp` | MCP OAuth resource metadata |
-| `POST` | `/sync/v1/exchange` | Bidirectional delta exchange |
-| `GET` | `/sync/v1/status` | Authenticated device sync status |
+| `POST` | `/sync/v2/exchange` | `SyncEnvelopeV1` encrypted bidirectional delta exchange |
+| `GET` | `/sync/v2/status` | Authenticated encrypted device sync status |
+| `POST` | `/sync/v1/pair/offers` | Owner-authenticated one-time device-pair offer |
+| `POST` | `/sync/v1/pair/exchange` | Exchange a one-time pair nonce for device identity |
 
 Current `/<ACCESS_KEY>/mcp` and `/sync/push` routes are legacy migration
 routes. They may remain during compatibility windows, but new projects must
@@ -99,6 +101,19 @@ through to the DO. Legacy snapshot `/sync/push` and snapshot-write routes return
 credentials are accepted only by exchange and its upstream; MCP uses a separate
 OAuth token. End-to-end proof uses the same public origin for exchange write and
 MCP read, then verifies that the internal DO revision advanced.
+
+FocusLink pairing never introduces OAuth scopes. The authorization server
+advertises only the four canonical scopes; `focuslink:pair` and
+`devices:manage` are permanently forbidden. `/sync/v1/pair/offers` accepts only
+an internal Cloudflare service-binding call caused by the AS owner-session +
+CSRF flow. Its service credential is bound to audience and action, is not an
+OAuth access token, is never returned to the browser, and is rejected by `/mcp`
+and normal sync. Public OAuth or device tokens receive `403`/`404` on the offer
+route. `/sync/v1/pair/exchange` is public only when enabled and accepts a
+high-entropy one-time nonce plus allowlisted device metadata, with rate limiting,
+atomic consume, expiry/replay rejection, and a server-assigned device id; it
+accepts neither Bearer credentials nor a caller-selected device id. Both pairing
+routes remain closed until AS binding and joint E2E pass.
 
 ## 3. Authentication boundaries
 
@@ -163,25 +178,32 @@ Miniflare success is not remote deployment. The remote OAuth gate requires:
 
 ## 4. Synchronization contract
 
-`POST /sync/v1/exchange` is the only required sync operation. A request carries
-the caller's cursor and an outbox batch; the response acknowledges mutations
-and returns remote changes.
+`POST /sync/v2/exchange` is the only required sync operation. It implements
+`SyncEnvelopeV1`: a request carries the caller's strict `c<base36>` cursor and
+an encrypted outbox batch; the response acknowledges mutations and returns
+encrypted remote changes.
 
 Minimum logical envelope:
 
 ```json
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
+  "envelopeVersion": 1,
+  "product": "journal",
   "deviceId": "opaque-device-id",
-  "cursor": "opaque-cursor-or-null",
+  "cursor": "c2z-or-null",
   "mutations": [
     {
       "opId": "stable-idempotency-id",
-      "entityType": "session",
+      "entityType": "journal_entry",
       "entityId": "opaque-entity-id",
       "baseRevision": 7,
       "operation": "upsert",
-      "payload": {}
+      "keyVersion": 1,
+      "ciphertext": "base64url-aes-gcm-ciphertext",
+      "nonce": "base64url-12-byte-nonce",
+      "aadHash": "sha256-hex",
+      "objects": []
     }
   ]
 }
@@ -206,28 +228,22 @@ Required behavior:
 Large binary artifacts belong in object storage with integrity hashes and
 short-lived scoped access. They do not belong in MCP JSON or D1 rows.
 
-### Journal canonical sync v1
+### SyncEnvelopeV1
 
-Journal has one wire contract for `POST /sync/v1/exchange`:
+All encrypted products consume these byte-identical artifacts:
 
-- [`contracts/journal-sync-v1.schema.json`](contracts/journal-sync-v1.schema.json)
-- [`contracts/journal-sync-v1.request.fixture.json`](contracts/journal-sync-v1.request.fixture.json)
-- [`contracts/journal-sync-v1.response.fixture.json`](contracts/journal-sync-v1.response.fixture.json)
+- [`contracts/sync-envelope-v1.schema.json`](contracts/sync-envelope-v1.schema.json)
+- [`contracts/sync-envelope-v1.request.fixture.json`](contracts/sync-envelope-v1.request.fixture.json)
+- [`contracts/sync-envelope-v1.response.fixture.json`](contracts/sync-envelope-v1.response.fixture.json)
 
-The request field is `mutations`; every mutation explicitly carries
-`entityType: journal_entry`, `opId`, `entityId`, `baseRevision`, `operation`, and
-`payload`. Mutation and change operation ids are UUIDs; journal entity ids use
-the `YYYY-MM-DD` date key accepted by the Worker. The response contains exactly
-`acknowledged`, `conflicts`, `changes`, `nextCursor`, `hasMore`, and `serverTime`;
-it does not add `protocolVersion` or `authority`. `operations`, `kind`,
-`journalEntry`, `entityType: journal`,
-`acknowledgedOpIds`, `rejectedOperations`, and nested change envelopes are
-incompatible drafts and must be rejected, not dual-served.
-
-The Worker, `sync-protocol.mjs`, application `src/journal/sync.ts`, local
-replicator, and power-off E2E harness validate the same schema and fixtures.
-Their checked-in copies must be byte-identical to these canonical artifacts.
-Contract tests must pass before deployment.
+Mutation and change operation ids are UUIDs. Each client atomically writes its
+local entity, outbox and cursor/flight state before I/O; it deletes an outbox
+item only after the returned changes materialize and its acknowledgement commits
+in the same local persistence boundary. AES-256-GCM AAD binds product, entity,
+revision, operation and key version. Clouds hold ciphertext, nonce, object
+manifest metadata, tombstones and cursors only. Plaintext business `payload`
+fields, third-party credentials, cookies, media bytes, raw diagnostics and
+unwrapped keys are prohibited.
 
 ## 5. Repository declaration
 
@@ -295,7 +311,14 @@ does not satisfy gates 5-7.
 3. Make `foxlink-cloud-mcp` the only FocusLink public origin, adapt canonical
    exchange to the internal DO `/v2/sync` authority, and retire legacy snapshot
    writes with `410 Gone`.
-4. Preserve Personal Gateway runtime diagnostics as `local_only`; if a cloud
-   control plane is added, cap it at last-heartbeat and sanitized audit records.
-5. Preserve SuixinYiTing and 不做手机控 as explicit `local_only` exemptions.
-   EchoDiary, VideoFlow, and Math remain archived unless explicitly restored.
+4. Add an encrypted Personal Gateway dashboard-profile entity for layout,
+   density, pinned projects and non-sensitive preferences; keep runtime
+   diagnostics `local_only` and never turn historical heartbeat/audit records
+   into claims of live PC state.
+5. Give SuixinYiTing a minimal encrypted state plane for playback preferences,
+   queue references, favorites/progress and configuration while excluding
+   NetEase cookies/tokens, media URLs, audio bytes and caches. Let 不做手机控
+   reuse FocusLink's account/device authority for encrypted rules, completion
+   state and configuration; it must not create a second cloud authority or
+   restore vendor services. EchoDiary, VideoFlow, and Math remain archived
+   unless explicitly restored.

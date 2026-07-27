@@ -158,6 +158,8 @@
         "dataPlane",
         "authority",
         "routes",
+        "contractId",
+        "envelopeVersion",
         "supportsPcOff",
         "supportsBidirectionalDelta"
       ],
@@ -185,12 +187,24 @@
           ],
           "properties": {
             "exchange": {
-              "const": "/sync/v1/exchange"
+              "const": "/sync/v2/exchange"
             },
             "status": {
-              "const": "/sync/v1/status"
+              "const": "/sync/v2/status"
+            },
+            "pairOffers": {
+              "const": "/sync/v1/pair/offers"
+            },
+            "pairExchange": {
+              "const": "/sync/v1/pair/exchange"
             }
           }
+        },
+        "contractId": {
+          "const": "sync-envelope-v1"
+        },
+        "envelopeVersion": {
+          "const": 1
         },
         "supportsPcOff": {
           "type": "boolean"
@@ -350,6 +364,12 @@
               },
               "authority": {
                 "const": "none"
+              },
+              "contractId": {
+                "const": "sync-envelope-v1"
+              },
+              "envelopeVersion": {
+                "const": 1
               },
               "supportsPcOff": {
                 "const": false

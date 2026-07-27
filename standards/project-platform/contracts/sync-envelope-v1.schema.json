@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:poyi:project-platform:sync-envelope:v1",
+  "title": "Poyi encrypted SyncEnvelopeV1",
+  "description": "Versioned E2E encrypted mutation exchange. Business payloads never appear outside ciphertext fields.",
+  "oneOf": [
+    { "$ref": "#/$defs/exchangeRequest" },
+    { "$ref": "#/$defs/exchangeResponse" }
+  ],
+  "$defs": {
+    "base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "deviceId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+    },
+    "entityType": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_:-]{0,63}$"
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$"
+    },
+    "product": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    },
+    "cursor": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^c[0-9a-z]+$" }
+      ]
+    },
+    "nextCursor": {
+      "type": "string",
+      "pattern": "^c[0-9a-z]+$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "operation": {
+      "enum": ["upsert", "delete"]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "keyVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "encryptedObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectKey", "ciphertextSha256", "ciphertextBytes", "nonce", "aadHash", "keyVersion"],
+      "properties": {
+        "objectKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$"
+        },
+        "ciphertextSha256": { "$ref": "#/$defs/sha256" },
+        "ciphertextBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16}$"
+        },
+        "aadHash": { "$ref": "#/$defs/sha256" },
+        "keyVersion": { "$ref": "#/$defs/keyVersion" }
+      }
+    },
+    "encryptedMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "opId",
+        "entityType",
+        "entityId",
+        "baseRevision",
+        "operation",
+        "keyVersion",
+        "ciphertext",
+        "nonce",
+        "aadHash",
+        "objects"
+      ],
+      "properties": {
+        "opId": { "$ref": "#/$defs/uuid" },
+        "entityType": { "$ref": "#/$defs/entityType" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "baseRevision": { "$ref": "#/$defs/revision" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "keyVersion": { "$ref": "#/$defs/keyVersion" },
+        "ciphertext": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/base64url", "maxLength": 1398104 }
+          ]
+        },
+        "nonce": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z0-9_-]{16}$" }
+          ]
+        },
+        "aadHash": { "$ref": "#/$defs/sha256" },
+        "objects": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/encryptedObject" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "operation": { "const": "upsert" } },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {
+              "ciphertext": { "$ref": "#/$defs/base64url", "maxLength": 1398104 },
+              "nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16}$" }
+            }
+          },
+          "else": {
+            "properties": {
+              "ciphertext": { "type": "null" },
+              "nonce": { "type": "null" },
+              "objects": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "encryptedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityType",
+        "entityId",
+        "revision",
+        "operation",
+        "keyVersion",
+        "ciphertext",
+        "nonce",
+        "aadHash",
+        "objects",
+        "deletedAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "entityType": { "$ref": "#/$defs/entityType" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "keyVersion": { "$ref": "#/$defs/keyVersion" },
+        "ciphertext": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/base64url", "maxLength": 1398104 }
+          ]
+        },
+        "nonce": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z0-9_-]{16}$" }
+          ]
+        },
+        "aadHash": { "$ref": "#/$defs/sha256" },
+        "objects": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/encryptedObject" }
+        },
+        "deletedAt": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/timestamp" }
+          ]
+        },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "opId", "entityType", "entityId", "operation", "revision"],
+      "properties": {
+        "outcome": { "const": "acknowledged" },
+        "opId": { "$ref": "#/$defs/uuid" },
+        "entityType": { "$ref": "#/$defs/entityType" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "replayed": { "type": "boolean" }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "opId", "entityType", "entityId", "operation", "error", "current", "candidate"],
+      "properties": {
+        "outcome": { "const": "conflict" },
+        "opId": { "$ref": "#/$defs/uuid" },
+        "entityType": { "$ref": "#/$defs/entityType" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "error": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "retryable": { "type": "boolean" },
+        "current": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/encryptedState" }
+          ]
+        },
+        "candidate": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/encryptedMutation" }
+          ]
+        }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityType",
+        "entityId",
+        "revision",
+        "operation",
+        "keyVersion",
+        "ciphertext",
+        "nonce",
+        "aadHash",
+        "objects",
+        "changedAt",
+        "originDeviceId",
+        "operationId"
+      ],
+      "properties": {
+        "entityType": { "$ref": "#/$defs/entityType" },
+        "entityId": { "$ref": "#/$defs/entityId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "keyVersion": { "$ref": "#/$defs/keyVersion" },
+        "ciphertext": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/base64url", "maxLength": 1398104 }
+          ]
+        },
+        "nonce": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z0-9_-]{16}$" }
+          ]
+        },
+        "aadHash": { "$ref": "#/$defs/sha256" },
+        "objects": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/encryptedObject" }
+        },
+        "changedAt": { "$ref": "#/$defs/timestamp" },
+        "originDeviceId": { "$ref": "#/$defs/deviceId" },
+        "operationId": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "exchangeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "envelopeVersion", "product", "deviceId", "cursor", "mutations"],
+      "properties": {
+        "protocolVersion": { "const": 2 },
+        "envelopeVersion": { "const": 1 },
+        "product": { "$ref": "#/$defs/product" },
+        "deviceId": { "$ref": "#/$defs/deviceId" },
+        "cursor": { "$ref": "#/$defs/cursor" },
+        "mutations": {
+          "type": "array",
+          "maxItems": 25,
+          "items": { "$ref": "#/$defs/encryptedMutation" }
+        }
+      }
+    },
+    "exchangeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "envelopeVersion",
+        "product",
+        "acknowledged",
+        "conflicts",
+        "changes",
+        "nextCursor",
+        "hasMore",
+        "serverTime"
+      ],
+      "properties": {
+        "protocolVersion": { "const": 2 },
+        "envelopeVersion": { "const": 1 },
+        "product": { "$ref": "#/$defs/product" },
+        "acknowledged": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acknowledgement" }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/conflict" }
+        },
+        "changes": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/change" }
+        },
+        "nextCursor": { "$ref": "#/$defs/nextCursor" },
+        "hasMore": { "type": "boolean" },
+        "serverTime": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

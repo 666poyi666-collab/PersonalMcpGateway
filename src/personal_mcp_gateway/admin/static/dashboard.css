@@ -80,6 +80,11 @@ main { margin-left: var(--sidebar-w); min-height: 100vh; }
 .icon-button { border: 1px solid var(--line); background: rgba(255,255,255,.035); color: var(--muted); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 16px; }
 .icon-button:hover { border-color: var(--line-bright); color: var(--text); }
 .icon-button.loading { animation: spin .75s linear infinite; color: var(--violet-2); }
+.density-toggle { display: inline-grid; grid-template-columns: repeat(3, 30px); height: 30px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; }
+.density-toggle button { min-width: 0; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font: 700 10px ui-monospace, "Cascadia Mono", monospace; }
+.density-toggle button:last-child { border-right: 0; }
+.density-toggle button:hover { color: var(--text); background: rgba(255,255,255,.05); }
+.density-toggle button[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--violet) 25%, transparent); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .clock { padding-left: 16px; border-left: 1px solid var(--line); display: flex; flex-direction: column; text-align: right; }
 .clock strong { font: 600 15px ui-monospace; }
@@ -326,11 +331,14 @@ footer b.guard-bad { color: #d03b3b; }
 .pv-chip .dot, .proj-state .dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 0; display: inline-block; background: var(--status-crit); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 .pv-chip .dot[data-status="online"], .proj-state .dot[data-status="online"] { background: var(--status-good); border-radius: 50%; clip-path: none; animation: state-breathe 2.8s ease-in-out infinite; }
 .pv-chip .dot[data-status="degraded"], .proj-state .dot[data-status="degraded"] { background: var(--status-warn); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.sync-chip[data-sync-state="stale"] .dot, .sync-chip[data-sync-state="blocked"] .dot { background: var(--status-warn); clip-path: polygon(50% 0, 100% 100%, 0 100%); border-radius: 0; }
+.sync-chip[data-sync-state="unknown"] .dot { background: var(--faint); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); border-radius: 0; }
 .proj-data { grid-area: data; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr)); gap: 8px; align-content: start; min-width: 0; }
 .pd-stat, .pd-widget { min-width: 0; border-radius: 6px; padding: 10px 12px; background: color-mix(in srgb, var(--panel-solid) 90%, var(--p-accent) 10%); border: 1px solid var(--line); }
 .pd-stat { display: flex; flex-direction: column; gap: 2px; }
 .pd-stat strong { font-size: 17px; font-weight: 750; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .pd-stat span { font-size: 10px; color: var(--muted); letter-spacing: 0; }
+.sync-fact:first-child strong { color: var(--p-accent); }
 .pd-widget.error { border-color: rgba(208,59,59,.4); }
 .pd-widget-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; min-width: 0; }
 .pd-widget-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
@@ -394,6 +402,17 @@ body:not(.light) .proj-paper .proj-tagline, body:not(.light) .proj-paper .pv-chi
   .pd-widget-head small, .pd-widget .widget-row-info small, .pd-widget .widget-row:nth-child(n+3) { display: none; }
 }
 
+body[data-density="compact"] .proj { min-height: 128px; padding-block: 13px; row-gap: 7px; }
+body[data-density="compact"] .proj-data { gap: 6px; }
+body[data-density="compact"] .pd-stat, body[data-density="compact"] .pd-widget { padding: 8px 10px; }
+body[data-density="compact"] .pd-stat strong { font-size: 15px; }
+body[data-density="minimal"] .proj { min-height: 112px; padding-block: 11px; row-gap: 6px; }
+body[data-density="minimal"] .proj-tagline,
+body[data-density="minimal"] .proj-data > [data-priority="secondary"],
+body[data-density="minimal"] .proj-vitals > :not(.sync-chip),
+body[data-density="minimal"] .pd-widget { display: none; }
+body[data-density="minimal"] .proj-data { grid-template-columns: minmax(0, 1fr); }
+
 /* A 27-inch QHD display split into quadrants is typically 1280 x 720. At this
    footprint navigation collapses into the header and vertical chrome tightens. */
 @media (max-width: 1280px) {
@@ -408,6 +427,7 @@ body:not(.light) .proj-paper .proj-tagline, body:not(.light) .proj-paper .pv-chi
 @media (max-width: 760px) {
   .topbar { padding: 0 14px; }
   .topbar-actions { gap: 9px; }
+  .density-toggle { grid-template-columns: repeat(3, 27px); }
   .sync-state b, .clock small { display: none; }
   .clock { padding-left: 10px; }
   .content { padding: 12px 12px 16px; }

@@ -28,6 +28,14 @@
       "mcpExposure": "none",
       "coverage": "exempt",
       "reason": "A future cloud control plane may retain bounded sanitized audit records, but no diagnostics payload, runtime revision, secret, device identifier, or support bundle."
+    },
+    {
+      "id": "dashboard-profile",
+      "classification": "private",
+      "dataPlane": "cloud_primary",
+      "mcpExposure": "none",
+      "coverage": "missing",
+      "reason": "The encrypted profile for dashboard layout, tile sizing, pinned projects and preferences is not connected to a cloud SyncEnvelopeV1 authority yet. Runtime diagnostics remain local-only."
     }
   ],
   "runtimeDiagnostics": {
@@ -53,18 +61,20 @@
     }
   },
   "sync": {
-    "status": "exempt",
-    "dataPlane": "local_only",
-    "authority": "none",
+    "status": "missing",
+    "dataPlane": "cloud_primary",
+    "authority": "cloud",
     "routes": {
-      "exchange": "/sync/v1/exchange",
-      "status": "/sync/v1/status"
+      "exchange": "/sync/v2/exchange",
+      "status": "/sync/v2/status"
     },
+    "contractId": "sync-envelope-v1",
+    "envelopeVersion": 1,
     "supportsPcOff": false,
     "supportsBidirectionalDelta": false
   },
   "knownGaps": [
     "Windows shutdown stops the Gateway and no new heartbeat, runtime revision, module health, or fleet state may be generated while it is off.",
-    "Any future cloud projection is capped at last-heartbeat and sanitized audit records and must report stale/offline rather than live state."
+    "The encrypted dashboard profile is not connected to an authority, so this project cannot claim PC-off dashboard-profile synchronization."
   ]
 }

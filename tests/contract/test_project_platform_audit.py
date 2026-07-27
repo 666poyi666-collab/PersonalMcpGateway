@@ -101,9 +101,11 @@ def manifest(
             "dataPlane": data_plane,
             "authority": authority,
             "routes": {
-                "exchange": "/sync/v1/exchange",
-                "status": "/sync/v1/status",
+                "exchange": "/sync/v2/exchange",
+                "status": "/sync/v2/status",
             },
+            "contractId": "sync-envelope-v1",
+            "envelopeVersion": 1,
             "supportsPcOff": supports_pc_off,
             "supportsBidirectionalDelta": supports_pc_off,
         },
@@ -163,8 +165,10 @@ def fixture_registry(tmp_path: Path) -> tuple[JsonObject, list[Path], Path]:
             "health": "/healthz",
             "ready": "/readyz",
             "oauthResourceMetadata": "/.well-known/oauth-protected-resource/mcp",
-            "syncExchange": "/sync/v1/exchange",
-            "syncStatus": "/sync/v1/status",
+            "syncExchange": "/sync/v2/exchange",
+            "syncStatus": "/sync/v2/status",
+            "pairOffers": "/sync/v1/pair/offers",
+            "pairExchange": "/sync/v1/pair/exchange",
         },
         "projects": projects,
         "securityFindings": [],
@@ -184,7 +188,29 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
     schema = load_json(PLATFORM / "project-platform.schema.json")
     gateway_manifest = load_json(ROOT / ".poyi" / "project-platform.json")
     Draft202012Validator.check_schema(schema)
-    cast(JsonValidator, Draft202012Validator(schema)).validate(gateway_manifest)
+    validator = cast(JsonValidator, Draft202012Validator(schema))
+    validator.validate(gateway_manifest)
+
+    local_manifest = manifest("local-fixture", "Local Fixture")
+    validator.validate(local_manifest)
+    bad_mcp_plane = copy.deepcopy(local_manifest)
+    cast(JsonObject, bad_mcp_plane["mcp"])["dataPlane"] = "cloud_primary"
+    bad_sync_plane = copy.deepcopy(local_manifest)
+    cast(JsonObject, bad_sync_plane["sync"])["dataPlane"] = "snapshot_mirror"
+    bad_inventory_plane = copy.deepcopy(local_manifest)
+    cast(list[JsonObject], bad_inventory_plane["dataInventory"])[0]["dataPlane"] = "cloud_primary"
+    bad_inventory_exposure = copy.deepcopy(local_manifest)
+    cast(list[JsonObject], bad_inventory_exposure["dataInventory"])[0]["mcpExposure"] = "resource"
+    bad_inventory_coverage = copy.deepcopy(local_manifest)
+    cast(list[JsonObject], bad_inventory_coverage["dataInventory"])[0]["coverage"] = "complete"
+    local_only_violations = [
+        bad_mcp_plane,
+        bad_sync_plane,
+        bad_inventory_plane,
+        bad_inventory_exposure,
+        bad_inventory_coverage,
+    ]
+    assert all(not validator.is_valid(candidate) for candidate in local_only_violations)
 
     active = [
         project
@@ -196,12 +222,12 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
 
     by_id = {project["id"]: project for project in active}
     assert by_id["suixinyiting"]["manifestRepositoryPath"] == "C:\\开发\\手表音乐软件"
-    assert by_id["suixinyiting"]["dataPolicy"] == "local_only"
-    assert by_id["suixinyiting"]["mcp"]["status"] == "exempt"
-    assert by_id["suixinyiting"]["sync"]["status"] == "exempt"
-    assert by_id["do-not-phone"]["dataPolicy"] == "local_only"
-    assert by_id["do-not-phone"]["mcp"]["status"] == "exempt"
-    assert by_id["do-not-phone"]["sync"]["status"] == "exempt"
+    assert by_id["suixinyiting"]["dataPolicy"] == "cloud_allowed_with_media_exclusions"
+    assert by_id["suixinyiting"]["mcp"]["status"] == "missing"
+    assert by_id["suixinyiting"]["sync"]["status"] == "missing"
+    assert by_id["do-not-phone"]["dataPolicy"] == "sensitive_cloud_allowed"
+    assert by_id["do-not-phone"]["mcp"]["status"] == "partial"
+    assert by_id["do-not-phone"]["sync"]["status"] == "missing"
 
     gateway = by_id["personal-mcp-gateway"]
     assert gateway["runtimeDiagnostics"] == {
@@ -229,16 +255,18 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
     }
     assert support["foxlink-cloud-mcp"]["publicCanonical"] is True
     assert support["foxlink-cloud-mcp"]["registeredInManifest"] is True
+    assert support["foxlink-cloud-mcp"]["canonicalContractDeployed"] is False
+    assert support["foxlink-cloud-mcp"]["deployed"] is False
     assert support["focuslink-device-sync-worker"]["publicCanonical"] is False
     assert support["focuslink-device-sync-worker"]["private"] is False
     assert support["focuslink-device-sync-worker"]["registeredInManifest"] is False
     assert "health" not in support["focuslink-device-sync-worker"]
 
 
-def test_journal_canonical_wire_contract_rejects_all_old_drafts() -> None:
-    schema = load_json(PLATFORM / "contracts" / "journal-sync-v1.schema.json")
-    request = load_json(PLATFORM / "contracts" / "journal-sync-v1.request.fixture.json")
-    response = load_json(PLATFORM / "contracts" / "journal-sync-v1.response.fixture.json")
+def test_sync_envelope_v1_rejects_plaintext_and_legacy_drafts() -> None:
+    schema = load_json(PLATFORM / "contracts" / "sync-envelope-v1.schema.json")
+    request = load_json(PLATFORM / "contracts" / "sync-envelope-v1.request.fixture.json")
+    response = load_json(PLATFORM / "contracts" / "sync-envelope-v1.response.fixture.json")
     Draft202012Validator.check_schema(schema)
     validator = cast(
         JsonValidator,
@@ -246,16 +274,15 @@ def test_journal_canonical_wire_contract_rejects_all_old_drafts() -> None:
     )
     validator.validate(request)
     validator.validate(response)
-    assert set(response) == {
-        "acknowledged",
-        "conflicts",
-        "changes",
-        "nextCursor",
-        "hasMore",
-        "serverTime",
-    }
+    assert response["protocolVersion"] == 2
+    assert response["envelopeVersion"] == 1
+    assert response["product"] == request["product"]
 
     invalid: list[JsonObject] = []
+
+    plaintext = copy.deepcopy(request)
+    plaintext["mutations"][0]["payload"] = {"must": "not reach cloud"}
+    invalid.append(plaintext)
 
     old_operations = copy.deepcopy(request)
     old_operations["operations"] = old_operations.pop("mutations")
@@ -266,39 +293,17 @@ def test_journal_canonical_wire_contract_rejects_all_old_drafts() -> None:
     mutation["kind"] = mutation.pop("operation")
     invalid.append(old_kind)
 
-    old_entry_wrapper = copy.deepcopy(request)
-    old_entry_wrapper["mutations"][0]["journalEntry"] = {}
-    invalid.append(old_entry_wrapper)
+    bad_cursor = copy.deepcopy(request)
+    bad_cursor["cursor"] = "opaque-cursor"
+    invalid.append(bad_cursor)
 
-    old_entity_type = copy.deepcopy(request)
-    old_entity_type["mutations"][0]["entityType"] = "journal"
-    invalid.append(old_entity_type)
-
-    old_ack_ids = copy.deepcopy(response)
-    old_ack_ids["acknowledgedOpIds"] = ["op-upsert-acknowledged"]
-    old_ack_ids.pop("acknowledged")
-    invalid.append(old_ack_ids)
-
-    rejected_operations = copy.deepcopy(response)
-    rejected_operations["rejectedOperations"] = []
-    invalid.append(rejected_operations)
-
-    nested_changes = copy.deepcopy(response)
-    nested_changes["changes"] = {"changes": nested_changes["changes"]}
-    invalid.append(nested_changes)
+    unencrypted_response = copy.deepcopy(response)
+    unencrypted_response["authority"] = "remote_authoritative"
+    invalid.append(unencrypted_response)
 
     invalid_operation_id = copy.deepcopy(request)
     invalid_operation_id["mutations"][0]["opId"] = "op-not-a-uuid"
     invalid.append(invalid_operation_id)
-
-    invalid_entity_id = copy.deepcopy(request)
-    invalid_entity_id["mutations"][0]["entityId"] = "entry-not-a-date"
-    invalid.append(invalid_entity_id)
-
-    response_with_old_envelope_fields = copy.deepcopy(response)
-    response_with_old_envelope_fields["protocolVersion"] = 1
-    response_with_old_envelope_fields["authority"] = "remote_authoritative"
-    invalid.append(response_with_old_envelope_fields)
 
     assert all(not validator.is_valid(candidate) for candidate in invalid)
 

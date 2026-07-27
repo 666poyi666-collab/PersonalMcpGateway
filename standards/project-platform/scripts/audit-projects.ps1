@@ -128,6 +128,16 @@ function Test-ManifestRoutes(
             "sync.routes.status must be $($ExpectedRoutes.syncStatus)"
         )
     }
+    if ($ProjectId -eq 'focuslink') {
+        foreach ($name in @('pairOffers', 'pairExchange')) {
+            if (-not (Test-HasProperty $syncRoutes $name) -or
+                $syncRoutes.$name -ne $ExpectedRoutes[$name]) {
+                Add-ManifestIssue $IssueList $ProjectId (
+                    "sync.routes.$name must be $($ExpectedRoutes[$name])"
+                )
+            }
+        }
+    }
 }
 
 function Test-ManifestInventory(
@@ -257,11 +267,18 @@ function Test-GatewayManifest(
     if ($null -ne $Manifest.mcp.cloudBaseUrl) {
         Add-ManifestIssue $IssueList $ProjectId 'runtime diagnostics cannot register a cloudBaseUrl'
     }
-    if ($Manifest.sync.status -ne 'exempt' -or $Manifest.sync.authority -ne 'none' -or
+    $profileItem = @($Manifest.dataInventory | Where-Object id -eq 'dashboard-profile')
+    if ($profileItem.Count -ne 1 -or $profileItem[0].dataPlane -ne 'cloud_primary' -or
+        $profileItem[0].mcpExposure -ne 'none') {
+        Add-ManifestIssue $IssueList $ProjectId (
+            'dashboard-profile inventory must exist exactly once as cloud_primary with no MCP exposure'
+        )
+    }
+    if ($Manifest.sync.status -ne 'missing' -or $Manifest.sync.authority -ne 'cloud' -or
         $Manifest.sync.supportsPcOff -ne $false -or
         $Manifest.sync.supportsBidirectionalDelta -ne $false) {
         Add-ManifestIssue $IssueList $ProjectId (
-            'Gateway sync must be exempt/none with both PC-off capabilities false'
+            'Gateway dashboard profile sync must remain missing/cloud with both PC-off capabilities false'
         )
     }
 }
@@ -311,6 +328,29 @@ function Test-FocusLinkManifest(
         $Manifest.credentialBoundary.shared -ne $false) {
         Add-ManifestIssue $IssueList $ProjectId (
             'MCP OAuth and device exchange credentials must be declared separate'
+        )
+    }
+    if ($ManifestRaw -match 'focuslink:pair' -or $ManifestRaw -match 'devices:manage') {
+        Add-ManifestIssue $IssueList $ProjectId (
+            'pairing permissions must never be registered as OAuth scopes'
+        )
+    }
+    $pairing = $Manifest.sync.pairing
+    if ($pairing.status -ne 'closed_pending_as_binding_and_joint_e2e' -or
+        $pairing.offers.access -ne 'internal_service_binding_only' -or
+        $pairing.offers.ownerAuthorization -ne 'as_owner_session_plus_csrf' -or
+        $pairing.offers.serviceCredential -ne 'aud_action_bound_non_oauth' -or
+        $pairing.offers.publicOAuthStatus -ne 403 -or
+        $pairing.offers.publicDeviceTokenStatus -ne 403 -or
+        $pairing.offers.credentialReturnedToBrowser -ne $false -or
+        $pairing.exchange.authorization -ne 'high_entropy_one_time_nonce' -or
+        $pairing.exchange.acceptsBearer -ne $false -or
+        $pairing.exchange.acceptsCallerDeviceId -ne $false -or
+        $pairing.exchange.serverAssignedDeviceId -ne $true -or
+        $pairing.exchange.requiresAtomicConsume -ne $true -or
+        $pairing.exchange.requiresRateLimit -ne $true) {
+        Add-ManifestIssue $IssueList $ProjectId (
+            'pairing must stay closed and use the fixed service-binding/one-time-nonce contract'
         )
     }
 }
@@ -545,8 +585,19 @@ function Test-OAuthOwnerTrust(
         $GapList.Add('oauth-owner-trust: scripts/issue-owner-code.mjs is missing')
     } else {
         $issuerSource = Get-Content -LiteralPath $issuerScript -Raw -Encoding UTF8
-        if ($issuerSource -notmatch 'randomBytes\s*\(\s*32\s*\)' -and
-            $issuerSource -notmatch 'getRandomValues') {
+        $randomProof = $issuerSource -match 'randomBytes\s*\(\s*32\s*\)' -or
+            $issuerSource -match 'getRandomValues'
+        if (-not $randomProof -and $issuerSource -match 'createOwnerCode') {
+            $helper = Join-Path (Split-Path -Parent $issuerScript) 'owner-code-lib.mjs'
+            if (Test-Path -LiteralPath $helper -PathType Leaf) {
+                $helperSource = Get-Content -LiteralPath $helper -Raw -Encoding UTF8
+                $randomProof = (
+                    $helperSource -match 'randomBytes' -and
+                    $helperSource -match 'random\s*\(\s*32\s*\)'
+                )
+            }
+        }
+        if (-not $randomProof) {
             $GapList.Add('oauth-owner-trust: issuer script does not generate 32 random bytes')
         }
         if ($issuerSource -match 'process\.env\.[A-Z0-9_]*(CODE|TICKET)' -or
@@ -590,7 +641,10 @@ function Test-OAuthOwnerTrust(
         if ($indexSource -notmatch 'export[\s\S]{0,120}\bOAuthState\b') {
             $GapList.Add('oauth-conformance: src/index.ts does not export OAuthState')
         }
-        if ($indexSource -match 'watch:write' -or $indexSource -match 'foxlink:read') {
+        if ($indexSource -match 'watch:write' -or
+            $indexSource -match 'foxlink:read' -or
+            $indexSource -match 'focuslink:pair' -or
+            $indexSource -match 'devices:manage') {
             $GapList.Add('oauth-conformance: forbidden scope is present in authorization metadata')
         }
     }
@@ -653,11 +707,21 @@ function Test-ProtocolContracts(
             $canonicalHashes[$field] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
         }
 
-        $project = @($Registry.projects | Where-Object id -eq $contract.projectId)
-        if ($project.Count -ne 1 -or $project[0].sync.contractId -ne $contract.id) {
-            $IssueList.Add(
-                "$($contract.id): project $($contract.projectId) must register sync.contractId"
-            )
+        $projectIds = if (Test-HasProperty $contract 'projectIds') {
+            @($contract.projectIds)
+        } else {
+            @($contract.projectId)
+        }
+        if ($projectIds.Count -lt 1 -or @($projectIds | Where-Object { $_ -isnot [string] -or $_.Length -lt 1 }).Count -gt 0) {
+            $IssueList.Add("$($contract.id): projectIds must contain one or more project ids")
+        }
+        foreach ($projectId in $projectIds) {
+            $project = @($Registry.projects | Where-Object id -eq $projectId)
+            if ($project.Count -ne 1 -or $project[0].sync.contractId -ne $contract.id) {
+                $IssueList.Add(
+                    "$($contract.id): project $projectId must register sync.contractId"
+                )
+            }
         }
 
         foreach ($consumer in @($contract.consumers)) {
@@ -719,8 +783,10 @@ $expectedRoutes = @{
     health = '/healthz'
     ready = '/readyz'
     oauthResourceMetadata = '/.well-known/oauth-protected-resource/mcp'
-    syncExchange = '/sync/v1/exchange'
-    syncStatus = '/sync/v1/status'
+    syncExchange = '/sync/v2/exchange'
+    syncStatus = '/sync/v2/status'
+    pairOffers = '/sync/v1/pair/offers'
+    pairExchange = '/sync/v1/pair/exchange'
 }
 foreach ($routeName in $expectedRoutes.Keys) {
     if ($registry.canonicalRoutes.$routeName -ne $expectedRoutes[$routeName]) {
@@ -887,16 +953,34 @@ if ($focusProject.Count -eq 1) {
             'focuslink: upstream must remain honestly edge-contained, noncanonical, and not private'
         )
     }
+    if ($focus.sync.pairing.status -ne 'closed_pending_as_binding_and_joint_e2e' -or
+        $focus.sync.pairing.offers.access -ne 'internal_service_binding_only' -or
+        $focus.sync.pairing.offers.serviceCredential -ne 'aud_action_bound_non_oauth' -or
+        $focus.sync.pairing.exchange.acceptsBearer -ne $false -or
+        $focus.sync.pairing.exchange.acceptsCallerDeviceId -ne $false) {
+        $issues.Add('focuslink: registry pairing contract has drifted from the fixed closed state')
+    }
     $foxlinkService = @($registry.supportServices | Where-Object id -eq 'foxlink-cloud-mcp')
     $upstreamService = @(
         $registry.supportServices | Where-Object id -eq 'focuslink-device-sync-worker'
     )
+    $focusManifestValid = @(
+        $manifestRows | Where-Object { $_.Id -eq 'focuslink' -and $_.Valid }
+    ).Count -eq 1
+    $focusContractComplete = (
+        $focus.mcp.status -eq 'complete' -and $focus.sync.status -eq 'complete'
+    )
     if ($foxlinkService.Count -ne 1 -or
         $foxlinkService[0].role -ne 'canonical_public_gateway' -or
         $foxlinkService[0].publicCanonical -ne $true -or
-        $foxlinkService[0].registeredInManifest -ne $true -or
+        $foxlinkService[0].registrationTarget -ne $true -or
+        $foxlinkService[0].registeredInManifest -ne $focusManifestValid -or
+        $foxlinkService[0].canonicalContractDeployed -ne $focusContractComplete -or
+        $foxlinkService[0].deployed -ne $focusContractComplete -or
         $foxlinkService[0].health -ne "$fixedFoxlinkOrigin/healthz") {
-        $issues.Add('focuslink: foxlink-cloud-mcp must be the one canonical public service')
+        $issues.Add(
+            'focuslink: foxlink canonical registration/deployment flags do not match evidence'
+        )
     }
     if ($upstreamService.Count -ne 1 -or
         $upstreamService[0].role -ne 'internal_authoritative_upstream' -or
@@ -910,6 +994,27 @@ if ($focusProject.Count -eq 1) {
         $upstreamService[0].observedReachability.workersDevBypassStatus -ne 404) {
         $issues.Add(
             'focuslink: DO support entry must stay noncanonical and must not register a health URL'
+        )
+    }
+}
+
+$watchProject = @($registry.projects | Where-Object id -eq 'watchintervals')
+if ($watchProject.Count -eq 1) {
+    $watch = $watchProject[0]
+    if ($watch.sync.status -eq 'partial' -and (
+        $watch.sync.dataPlane -ne 'cloud_primary' -or
+        $watch.sync.contractId -ne 'sync-envelope-v1' -or
+        $watch.sync.envelopeVersion -ne 1 -or
+        $watch.sync.mode -ne 'encrypted_entity_exchange_local_staged_remote_unverified' -or
+        $watch.sync.canonicalExchangeRoute -ne '/sync/v2/exchange' -or
+        $watch.sync.localImplementationStatus -ne 'android_and_worker_implemented_unverified' -or
+        $watch.sync.remoteVerificationStatus -ne 'missing' -or
+        $watch.sync.supportsPcOff -ne $false -or
+        $watch.sync.supportsBidirectionalDelta -ne $false -or
+        $watch.sync.legacyIngressTargetStatus -ne 410)) {
+        $issues.Add(
+            'watchintervals: registry must remain local-staged/remote-unverified partial ' +
+            'until verifiable remote and restart evidence exists'
         )
     }
 }

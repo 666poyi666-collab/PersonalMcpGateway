@@ -58,6 +58,20 @@ SyncFailureReason = Literal[
     "no_local_entries",
 ]
 
+SyncTruthState = Literal["fresh", "stale", "offline", "blocked", "unknown"]
+SyncBlockerReason = Literal[
+    "authority_not_observed",
+    "implementation_incomplete",
+    "pc_off_acceptance_pending",
+    "pc_runtime_required",
+    "snapshot_incomplete",
+    "local_mcp_unreachable",
+    "cloud_push_failed",
+    "local_data_unavailable",
+    "local_items_unavailable",
+    "no_local_entries",
+]
+
 
 def _require_aware(value: datetime | None) -> datetime | None:
     if value is not None and value.tzinfo is None:
@@ -88,7 +102,7 @@ class CloudSyncObservation(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     result: Literal["success", "partial", "failed", "no_changes"]
-    source: Literal["pc-sync"]
+    source: Literal["pc-sync", "product-authority"]
     last_attempt_at: datetime = Field(alias="lastAttemptAt")
     last_successful_push_at: datetime | None = Field(
         default=None, alias="lastSuccessfulPushAt"
@@ -98,10 +112,14 @@ class CloudSyncObservation(BaseModel):
     skipped_items: int = Field(default=0, alias="skippedItems", ge=0)
     total_items: int = Field(default=0, alias="totalItems", ge=0)
     reason: SyncFailureReason | None = None
+    last_verified_at: datetime | None = Field(default=None, alias="lastVerifiedAt")
+    pending_count: int | None = Field(default=None, alias="pendingCount", ge=0)
+    blocker_reason: SyncBlockerReason | None = Field(default=None, alias="blockerReason")
     items: dict[str, CloudSyncItemObservation] = Field(default_factory=_empty_sync_items)
 
     _timestamps_are_aware = field_validator(
-        "last_attempt_at", "last_successful_push_at", "last_complete_push_at"
+        "last_attempt_at", "last_successful_push_at", "last_complete_push_at",
+        "last_verified_at"
     )(_require_aware)
 
 
@@ -112,7 +130,7 @@ def _empty_sync_projects() -> dict[str, CloudSyncObservation]:
 class CloudSyncStatusDocument(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    schema_version: Literal[1] = Field(alias="schemaVersion")
+    schema_version: Literal[1, 2] = Field(alias="schemaVersion")
     generated_at: datetime = Field(alias="generatedAt")
     projects: dict[str, CloudSyncObservation] = Field(default_factory=_empty_sync_projects)
 
@@ -287,10 +305,82 @@ def _snapshot_state(
     return "fresh"
 
 
+def _last_verified_at(observation: CloudSyncObservation | None) -> datetime | None:
+    if observation is None:
+        return None
+    if observation.last_verified_at is not None:
+        return observation.last_verified_at
+    successful = [
+        item.last_successful_push_at
+        for item in observation.items.values()
+        if item.last_successful_push_at is not None
+    ]
+    if successful:
+        return min(successful)
+    return observation.last_complete_push_at or observation.last_successful_push_at
+
+
+def _sync_truth(
+    profile: DashboardSyncProfile,
+    observation: CloudSyncObservation | None,
+    target_state: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Produce only a conservative, evidence-backed dashboard sync state."""
+    verified_at = _last_verified_at(observation)
+    pending_count = observation.pending_count if observation else None
+    if observation and pending_count is None:
+        pending_count = max(0, observation.total_items - sum(
+            1
+            for item in observation.items.values()
+            if item.last_successful_push_at is not None
+        ))
+
+    def result(
+        state: SyncTruthState,
+        blocker: SyncBlockerReason | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "state": state,
+            "lastVerifiedAt": verified_at.isoformat() if verified_at else None,
+            "pendingCount": pending_count,
+            "blockerReason": blocker,
+        }
+
+    if profile.data_plane == "local_only":
+        return result("blocked", "pc_runtime_required")
+    if target_state == "offline":
+        return result("offline", "local_mcp_unreachable")
+    if profile.compliance == "missing":
+        return result("blocked", "implementation_incomplete")
+    if profile.compliance != "complete":
+        return result("blocked", "pc_off_acceptance_pending")
+    if observation is None:
+        return result("unknown", "authority_not_observed")
+    if observation.result == "failed":
+        blocker = (
+            observation.blocker_reason
+            or observation.reason
+            or "cloud_push_failed"
+        )
+        return result("offline", blocker)
+    if observation.blocker_reason:
+        return result("blocked", observation.blocker_reason)
+    if observation.result == "partial" or (pending_count is not None and pending_count > 0):
+        return result("blocked", "snapshot_incomplete")
+    if verified_at is None:
+        return result("unknown", "authority_not_observed")
+    threshold = profile.stale_after_seconds
+    if threshold is not None and (now - verified_at).total_seconds() > threshold:
+        return result("stale")
+    return result("fresh")
+
+
 def _sync_payload(
     profile: DashboardSyncProfile,
     observation: CloudSyncObservation | None,
     now: datetime,
+    target_state: str,
 ) -> dict[str, Any]:
     runtime: dict[str, Any]
     if observation is None:
@@ -308,6 +398,7 @@ def _sync_payload(
         "localDependency": profile.local_dependency,
         "staleAfterSeconds": profile.stale_after_seconds,
         "snapshotState": _snapshot_state(profile, observation, now),
+        "truth": _sync_truth(profile, observation, target_state, now),
         "observation": runtime,
     }
 
@@ -427,7 +518,14 @@ class DashboardMonitor:
                     "state": service_states.get(target.tunnel_service, "unknown"),
                 }
             payload["sync"] = (
-                _sync_payload(target.sync, observed.get(target.id), now) if target.sync else None
+                _sync_payload(
+                    target.sync,
+                    observed.get(target.id),
+                    now,
+                    str(payload.get("state", "unknown")),
+                )
+                if target.sync
+                else None
             )
         return probed
 

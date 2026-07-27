@@ -3,7 +3,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from personal_mcp_gateway.admin.dashboard import (
+    CloudSyncObservation,
     DashboardMonitor,
+    DashboardSyncProfile,
+    PcOffCapability,
+    _sync_truth,
     load_cloud_sync_observations,
 )
 from personal_mcp_gateway.core.registry import ModuleRegistry
@@ -199,5 +203,47 @@ def test_sync_status_is_sanitized_and_attached_with_conservative_freshness(
         "continuedSync": False,
     }
     assert payload["sync"]["snapshotState"] == "stale"
+    assert payload["sync"]["truth"] == {
+        "state": "blocked",
+        "lastVerifiedAt": (now - timedelta(hours=4)).isoformat(),
+        "pendingCount": 0,
+        "blockerReason": "pc_off_acceptance_pending",
+    }
     assert payload["sync"]["observation"]["source"] == "pc-sync"
     assert "privateError" not in payload["sync"]["observation"]
+
+
+def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
+    now = datetime.now(UTC)
+    profile = DashboardSyncProfile(
+        compliance="complete",
+        data_plane="cloud_primary",
+        pc_off=PcOffCapability(
+            read_available=True,
+            write_available=True,
+            continued_sync=True,
+        ),
+        local_dependency="none",
+        stale_after_seconds=60,
+    )
+    fresh = CloudSyncObservation(
+        result="success",
+        source="product-authority",
+        lastAttemptAt=now,
+        lastVerifiedAt=now,
+        pendingCount=0,
+    )
+
+    assert _sync_truth(profile, fresh, "online", now)["state"] == "fresh"
+    assert _sync_truth(profile, fresh, "offline", now)["state"] == "offline"
+    assert _sync_truth(profile, None, "online", now) == {
+        "state": "unknown",
+        "lastVerifiedAt": None,
+        "pendingCount": None,
+        "blockerReason": "authority_not_observed",
+    }
+
+    stale = fresh.model_copy(update={"last_verified_at": now - timedelta(seconds=61)})
+    assert _sync_truth(profile, stale, "online", now)["state"] == "stale"
+    blocked = fresh.model_copy(update={"pending_count": 2})
+    assert _sync_truth(profile, blocked, "online", now)["state"] == "blocked"

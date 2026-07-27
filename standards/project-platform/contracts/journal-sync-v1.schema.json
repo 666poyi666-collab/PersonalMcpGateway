@@ -146,7 +146,7 @@
     "conflict": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["outcome", "opId", "entityId", "operation", "error", "retryable", "current", "candidate"],
+      "required": ["outcome", "opId", "entityId", "operation", "error", "current", "candidate"],
       "properties": {
         "outcome": { "const": "conflict" },
         "opId": { "$ref": "#/$defs/uuid" },

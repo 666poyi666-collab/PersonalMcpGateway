@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 2,
+  "envelopeVersion": 1,
+  "product": "journal",
+  "deviceId": "fixture-device",
+  "cursor": null,
+  "mutations": [
+    {
+      "opId": "11111111-1111-4111-8111-111111111111",
+      "entityType": "journal_entry",
+      "entityId": "2026-07-28",
+      "baseRevision": 0,
+      "operation": "upsert",
+      "keyVersion": 1,
+      "ciphertext": "Q2lwaGVydGV4dC1pc19ub3RfcGxhaW50ZXh0",
+      "nonce": "MDEyMzQ1Njc4OWFi",
+      "aadHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "objects": []
+    },
+    {
+      "opId": "22222222-2222-4222-8222-222222222222",
+      "entityType": "journal_entry",
+      "entityId": "2026-07-27",
+      "baseRevision": 3,
+      "operation": "delete",
+      "keyVersion": 1,
+      "ciphertext": null,
+      "nonce": null,
+      "aadHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "objects": []
+    }
+  ]
+}

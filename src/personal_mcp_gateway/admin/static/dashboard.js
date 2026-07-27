@@ -31,6 +31,24 @@
     return `${Math.floor(seconds / 86400)} 天前`;
   }
   function stateLabel(state) { return ({ online: "ONLINE", degraded: "ATTENTION", offline: "OFFLINE" })[state] || "UNKNOWN"; }
+  function syncLabel(state) {
+    return ({ fresh: "已验证", stale: "已过期", offline: "离线", blocked: "受阻", unknown: "未知" })[state] || "未知";
+  }
+  function syncBlocker(reason) {
+    return ({
+      authority_not_observed: "未取得权威验证",
+      implementation_incomplete: "实现尚未完成",
+      pc_off_acceptance_pending: "PC-off 验收未通过",
+      pc_runtime_required: "需要本机运行",
+      snapshot_incomplete: "存在未完成同步",
+      local_mcp_unreachable: "本地服务不可达",
+      cloud_push_failed: "云端写入失败",
+      local_data_unavailable: "本地数据不可用",
+      local_items_unavailable: "部分项目不可用",
+      no_local_entries: "暂无可同步数据",
+    })[reason] || "未提供阻断原因";
+  }
+  function verifiedLabel(value) { return value ? relative(value) : "未验证"; }
   function component(label, data) {
     const row = document.createElement("div");
     row.className = `component ${data && data.ok ? "ok" : ""}`;
@@ -73,6 +91,25 @@
     chip.append(dot, name, em);
     return chip;
   }
+  function syncChip(sync) {
+    const truth = sync && sync.truth ? sync.truth : { state: "unknown", lastVerifiedAt: null };
+    const chip = document.createElement("div"); chip.className = "pv-chip sync-chip";
+    chip.dataset.syncState = truth.state || "unknown";
+    const dot = document.createElement("i"); dot.className = "dot";
+    dot.dataset.status = truth.state === "fresh" ? "online" : truth.state === "stale" ? "degraded" : "offline";
+    const name = document.createElement("span"); name.textContent = "同步";
+    const detail = document.createElement("em"); detail.textContent = syncLabel(truth.state);
+    chip.title = truth.blockerReason ? syncBlocker(truth.blockerReason) : `最后验证 ${verifiedLabel(truth.lastVerifiedAt)}`;
+    chip.append(dot, name, detail);
+    return chip;
+  }
+  function syncFact(label, value, priority = "secondary") {
+    const card = document.createElement("article"); card.className = "pd-stat sync-fact"; card.dataset.priority = priority;
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const span = document.createElement("span"); span.textContent = label;
+    card.append(strong, span);
+    return card;
+  }
   function renderProjects(targets, widgets, data) {
     const grid = $("projectGrid");
     const key = JSON.stringify([targets, widgets, data.events, data.gateway, data.fleet]);
@@ -105,8 +142,18 @@
       const vitals = document.createElement("div"); vitals.className = "proj-vitals";
       vitals.append(probeChip("MCP", target.mcp));
       if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
+      if (target.sync) vitals.append(syncChip(target.sync));
 
       const dataZone = document.createElement("div"); dataZone.className = "proj-data";
+      if (target.sync) {
+        const truth = target.sync.truth || {};
+        dataZone.append(
+          syncFact("同步状态", syncLabel(truth.state), "primary"),
+          syncFact("最后验证", verifiedLabel(truth.lastVerifiedAt)),
+          syncFact("待同步", truth.pendingCount == null ? "—" : String(truth.pendingCount)),
+          syncFact("阻断原因", truth.blockerReason ? syncBlocker(truth.blockerReason) : "无"),
+        );
+      }
       if (target.id === "personal") {
         const gw = data.gateway || {};
         const fleet = data.fleet || {};
@@ -351,7 +398,23 @@
       localStorage.setItem("poyi-dashboard-theme", document.body.classList.contains("light") ? "light" : "dark");
     });
   }
+  function setupDensity() {
+    const allowed = ["full", "compact", "minimal"];
+    const stored = localStorage.getItem("poyi-dashboard-density");
+    const apply = (value) => {
+      const density = allowed.includes(value) ? value : "full";
+      document.body.dataset.density = density;
+      localStorage.setItem("poyi-dashboard-density", density);
+      document.querySelectorAll("[data-density-mode]").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.densityMode === density));
+      });
+    };
+    document.querySelectorAll("[data-density-mode]").forEach((button) => {
+      button.addEventListener("click", () => apply(button.dataset.densityMode));
+    });
+    apply(stored);
+  }
   $("refreshNow").addEventListener("click", () => refresh(true));
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-  setupTheme(); updateClock(); setInterval(updateClock, 1000); refresh();
+  setupTheme(); setupDensity(); updateClock(); setInterval(updateClock, 1000); refresh();
 })();
