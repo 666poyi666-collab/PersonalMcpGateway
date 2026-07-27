@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from personal_mcp_gateway.desktop import capture as capture_module
 from personal_mcp_gateway.desktop.app import (
     DesktopApi,
     DesktopController,
@@ -195,6 +196,7 @@ def test_snapshot_payload_carries_the_view_preferences() -> None:
         "onTop": False,
         "theme": "light",
         "adminUrl": "http://127.0.0.1:8761",
+        "projectLayout": {},
     }
     assert payload["stale"] is False
 
@@ -237,6 +239,67 @@ def test_an_unknown_theme_falls_back_to_light() -> None:
     api = DesktopApi(_controller())
     assert api.set_theme("dark")["view"]["theme"] == "dark"
     assert api.set_theme("neon")["view"]["theme"] == "light"
+
+
+def test_project_layout_is_validated_and_persisted() -> None:
+    controller = _controller()
+    api = DesktopApi(controller)
+
+    payload = api.set_project_layout({"watch": {"x": 422, "y": 18, "w": 560, "h": 344, "order": 1}})
+
+    assert payload["view"]["projectLayout"]["watch"] == {
+        "x": 422,
+        "y": 18,
+        "w": 560,
+        "h": 344,
+        "order": 1,
+    }
+    assert load_state(state_path()).project_layout == payload["view"]["projectLayout"]
+
+    assert api.reset_project_layout()["view"]["projectLayout"] == {}
+
+
+def test_capture_uses_the_native_window_without_activating_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = _controller()
+    window = FakeWindow()
+    controller.window = window
+    target = tmp_path / "board.png"
+    captured: list[int] = []
+
+    def handle(_candidate: Any) -> int:
+        return 42
+
+    def capture(hwnd: int) -> Path:
+        captured.append(hwnd)
+        return target
+
+    monkeypatch.setattr(capture_module, "native_handle", handle)
+    monkeypatch.setattr(capture_module, "capture_hwnd", capture)
+
+    assert DesktopApi(controller).capture() == {
+        "ok": True,
+        "message": "截图已保存",
+        "path": str(target),
+    }
+    assert captured == [42]
+    assert window.events == []
+
+
+def test_capture_failure_is_reported_without_breaking_the_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(_candidate: Any) -> int:
+        return 42
+
+    def fail(_hwnd: int) -> Path:
+        raise OSError("capture unavailable")
+
+    monkeypatch.setattr(capture_module, "native_handle", handle)
+    monkeypatch.setattr(capture_module, "capture_hwnd", fail)
+
+    assert DesktopApi(_controller()).capture() == {"ok": False, "message": "截图失败"}
 
 
 def test_minimize_and_hide_reach_the_window() -> None:

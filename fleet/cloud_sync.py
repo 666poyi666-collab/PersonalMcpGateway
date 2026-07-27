@@ -127,9 +127,7 @@ def sync_journal(project: dict) -> None:
         cursor = ""
         entries: list[dict] = []
         while True:
-            ok, text = client.call_tool(
-                "journal_list_recent", {"limit": 100, "cursor": cursor}
-            )
+            ok, text = client.call_tool("journal_list_recent", {"limit": 100, "cursor": cursor})
             if not ok:
                 raise ValueError(text)
             page = _tool_data(text)
@@ -205,8 +203,10 @@ def sync_project(project: dict) -> None:
         return
     try:
         result = push(project["cloudBase"], project["syncKey"], "pc-sync", snapshots)
-        print(f"[{name}] pushed {result.get('stored')} snapshot(s) at {result.get('syncedAt')}"
-              + (f"; skipped {len(skipped)}: {'; '.join(skipped)}" if skipped else ""))
+        print(
+            f"[{name}] pushed {result.get('stored')} snapshot(s) at {result.get('syncedAt')}"
+            + (f"; skipped {len(skipped)}: {'; '.join(skipped)}" if skipped else "")
+        )
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"[{name}] cloud push failed: {exc}")
 

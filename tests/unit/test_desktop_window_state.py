@@ -9,6 +9,7 @@ from personal_mcp_gateway.desktop.window_state import (
     MIN_SIZE,
     WindowState,
     load_state,
+    normalize_project_layout,
     save_state,
     state_dir,
 )
@@ -17,7 +18,14 @@ from personal_mcp_gateway.desktop.window_state import (
 def test_state_round_trips(tmp_path: Path) -> None:
     target = tmp_path / "window-state.json"
     saved = WindowState(
-        x=120, y=64, width=1200, height=800, compact=True, on_top=True, theme="dark"
+        x=120,
+        y=64,
+        width=1200,
+        height=800,
+        compact=True,
+        on_top=True,
+        theme="dark",
+        project_layout={"watch": {"x": 420, "y": 0, "w": 580, "h": 360, "order": 0}},
     )
     assert save_state(saved, target) is True
     loaded = load_state(target)
@@ -63,3 +71,23 @@ def test_save_reports_failure_instead_of_raising(tmp_path: Path) -> None:
 def test_state_dir_honours_an_explicit_home(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERSONAL_MCP_DESKTOP_HOME", r"C:\tmp\poyi-desktop")
     assert state_dir() == Path(r"C:\tmp\poyi-desktop")
+
+
+def test_project_layout_is_bounded_and_drops_invalid_entries() -> None:
+    assert normalize_project_layout(
+        {
+            "watch": {"x": 999, "y": -4, "w": 300, "h": 99, "order": -2},
+            "journal": {"x": 40.9, "y": 220.8, "w": 420.2, "h": 280.9, "order": 3},
+            "": {"cols": 6},
+            "bad": "not-a-tile",
+        }
+    ) == {
+        "watch": {"x": 700, "y": 0, "w": 300, "h": 104, "order": 0},
+        "journal": {"x": 40, "y": 220, "w": 420, "h": 280, "order": 3},
+    }
+
+
+def test_legacy_grid_layout_is_kept_for_renderer_migration() -> None:
+    assert normalize_project_layout({"watch": {"cols": 99, "rows": 0, "order": 2}}) == {
+        "watch": {"cols": 12, "rows": 1, "order": 2}
+    }

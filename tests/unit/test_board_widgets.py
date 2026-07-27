@@ -292,11 +292,20 @@ widgets:
     assert "options.tool" in by_id["toolless"]["error"]
 
 
-async def test_mcp_device_offline_is_an_honest_neutral_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("PHONE_OFFLINE", "手机当前离线"),
+        ("PHONE_TIMEOUT", "手机响应超时"),
+        ("WATCH_OFFLINE", "手表当前离线"),
+        ("WATCH_TIMEOUT", "手表响应超时"),
+    ],
+)
+async def test_mcp_device_unavailable_is_an_honest_neutral_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str, expected: str
 ) -> None:
     async def offline(*_args: object, **_kwargs: object) -> dict[str, Any]:
-        return {"isError": True, "error": {"code": "PHONE_OFFLINE"}}
+        return {"isError": True, "error": {"code": code}}
 
     monkeypatch.setattr(widget_module, "_call_mcp_tool", offline)
     write_config(
@@ -313,7 +322,7 @@ widgets:
     widget = (await build_hub(tmp_path).snapshot())[0]
     assert widget["ok"] is True
     assert widget["kind"] == "text"
-    assert "离线" in widget["data"]["body"]
+    assert expected in widget["data"]["body"]
 
 
 def test_mcp_presenters_shape_the_real_payloads() -> None:

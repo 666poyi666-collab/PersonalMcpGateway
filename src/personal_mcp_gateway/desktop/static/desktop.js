@@ -2,10 +2,10 @@
    All gateway I/O happens in Python and arrives through pywebview.api, so this
    file never performs a network request of its own.
 
-   Layout: a slim fleet strip on top, then one full-width peer section per
-   project — each keeping its source project's own art (instrument / paper /
-   sport / neutral) — then the global activity chart, event center and the
-   extension widgets. Sections re-render only when their data actually changed. */
+   Layout: a slim fleet strip on top, then a freeform project canvas where
+   each project keeps its own art (instrument / paper / sport / neutral),
+   followed by the global activity and extension views. Sections re-render
+   only when their data actually changed. */
 "use strict";
 
 const POLL_MS = 4000;
@@ -57,6 +57,8 @@ const dom = {
   btnRepair: el("btnRepair"),
   btnRepairOffline: el("btnRepairOffline"),
   viewClock: el("viewClock"),
+  btnCapture: el("btnCapture"),
+  btnLayout: el("btnLayout"),
 };
 
 /* Per-project art direction: the section carries the source project's own
@@ -93,6 +95,25 @@ const PROJECT_STYLE = {
   },
 };
 const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
+const LAYOUT_SCALE = 1000;
+const MIN_TILE_WIDTH = 120;
+const MIN_TILE_HEIGHT = 104;
+const MAX_TILE_HEIGHT = 1600;
+const SNAP_DISTANCE = 10;
+const DEFAULT_TILE_LAYOUT = {
+  foxlink: { x: 0, y: 0, w: 410, h: 300, order: 0 },
+  watch: { x: 420, y: 0, w: 580, h: 360, order: 1 },
+  journal: { x: 0, y: 372, w: 410, h: 320, order: 2 },
+  personal: { x: 420, y: 372, w: 580, h: 320, order: 3 },
+};
+let projectLayout = {};
+let layoutMode = false;
+let activeTileInteraction = null;
+let layoutFrame = 0;
+let projectCanvasWidth = 0;
+let projectResizeObserver = null;
+let sectionsRendered = false;
+let windowResizeTimer = 0;
 
 /* ---------- helpers ---------- */
 
@@ -227,7 +248,7 @@ function render(payload) {
   lastDataKey = key;
 
   renderStrip(payload, online, total, gateway, summary, data);
-  renderSections(data);
+  if (!layoutMode) renderSections(data);
   renderChart(data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : []);
   renderEvents(data);
   renderExtensionWidgets(Array.isArray(data.widgets) ? data.widgets : []);
@@ -358,6 +379,14 @@ function renderSections(data) {
   const ordered = [];
   for (const id of SECTION_ORDER) if (byId.has(id)) ordered.push(byId.get(id));
   for (const t of targets) if (!SECTION_ORDER.includes(t.id)) ordered.push(t);
+  const sourceOrder = new Map(ordered.map((target, index) => [target.id, index]));
+  ordered.sort((first, second) => {
+    const a = projectLayout[first.id] && Number.isFinite(Number(projectLayout[first.id].order))
+      ? Number(projectLayout[first.id].order) : sourceOrder.get(first.id);
+    const b = projectLayout[second.id] && Number.isFinite(Number(projectLayout[second.id].order))
+      ? Number(projectLayout[second.id].order) : sourceOrder.get(second.id);
+    return a - b;
+  });
 
   const sections = ordered.map((target, index) => {
     const style = PROJECT_STYLE[target.id] || {
@@ -369,7 +398,9 @@ function renderSections(data) {
     };
     const section = make("section", `proj proj-${style.flavor} project-${target.id}`);
     section.style.setProperty("--p-accent", style.accent);
+    section.style.setProperty("--tile-index", String(index));
     section.dataset.state = target.state || "offline";
+    section.dataset.projectId = target.id;
 
     const head = make("header", "proj-head");
     const naming = make("div", "proj-naming");
@@ -382,7 +413,9 @@ function renderSections(data) {
     dot.dataset.status = target.state || "offline";
     const stateText = { online: "正常", degraded: "降级", offline: "离线" }[target.state] || "未知";
     state.append(dot, make("b", null, stateText));
-    head.append(naming, state, make("span", "proj-index", String(index + 1).padStart(2, "0")));
+    const grip = make("span", "tile-grip");
+    grip.setAttribute("aria-hidden", "true");
+    head.append(naming, state, make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
 
     const vitals = make("div", "proj-vitals");
     vitals.append(probeChip("MCP", target.mcp));
@@ -401,10 +434,34 @@ function renderSections(data) {
       tail.append(make("p", "pt-quiet", "近期安静，无状态变化"));
     }
 
-    section.append(head, vitals, dataZone, tail);
+    const sizeBadge = make("span", "tile-size-badge");
+    sizeBadge.setAttribute("aria-hidden", "true");
+    section.append(head, vitals, dataZone, tail, sizeBadge);
+    const handleLabels = {
+      n: "调整磁贴上边缘",
+      ne: "调整磁贴右上角",
+      e: "调整磁贴右边缘",
+      se: "调整磁贴右下角",
+      s: "调整磁贴下边缘",
+      sw: "调整磁贴左下角",
+      w: "调整磁贴左边缘",
+      nw: "调整磁贴左上角",
+    };
+    for (const [edge, label] of Object.entries(handleLabels)) {
+      const handle = make("button", `tile-handle tile-handle-${edge}`);
+      handle.type = "button";
+      handle.dataset.edge = edge;
+      handle.title = label;
+      handle.setAttribute("aria-label", label);
+      section.append(handle);
+    }
     return section;
   });
   replace(dom.projectSections, sections);
+  installLayoutChrome();
+  applyProjectLayout(!sectionsRendered);
+  configureTileEditing();
+  sectionsRendered = true;
 }
 
 function renderCompact(data, payload) {
@@ -611,10 +668,426 @@ function renderExtensionWidgets(widgets) {
 
 function applyView(view) {
   if (view.theme) root.dataset.theme = view.theme;
+  if (!layoutMode && view.projectLayout && typeof view.projectLayout === "object") {
+    projectLayout = view.projectLayout;
+  }
   dom.body.classList.toggle("compact", Boolean(view.compact));
   dom.btnCompact.setAttribute("aria-pressed", String(Boolean(view.compact)));
   dom.btnTop.setAttribute("aria-pressed", String(Boolean(view.onTop)));
   dom.body.classList.remove("booting");
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function geometryForTile(projectId, index) {
+  const saved = projectLayout[projectId] || {};
+  const fallback = DEFAULT_TILE_LAYOUT[projectId] || {
+    x: index % 2 ? 510 : 0,
+    y: Math.floor(index / 2) * 372,
+    w: 490,
+    h: 360,
+    order: index,
+  };
+  const hasFreeform = ["x", "y", "w", "h"].every((key) => Number.isFinite(Number(saved[key])));
+  if (hasFreeform) {
+    const width = clamp(num(saved.w, fallback.w), 80, LAYOUT_SCALE);
+    return {
+      x: clamp(num(saved.x, fallback.x), 0, LAYOUT_SCALE - width),
+      y: clamp(num(saved.y, fallback.y), 0, 10000),
+      w: width,
+      h: clamp(num(saved.h, fallback.h), MIN_TILE_HEIGHT, 2400),
+      order: clamp(num(saved.order, fallback.order), 0, 99),
+    };
+  }
+  if (Number.isFinite(Number(saved.cols)) || Number.isFinite(Number(saved.rows))) {
+    return {
+      ...fallback,
+      order: clamp(num(saved.order, fallback.order), 0, 99),
+    };
+  }
+  return { ...fallback };
+}
+
+function rectOfTile(tile) {
+  return {
+    left: num(tile.dataset.left),
+    top: num(tile.dataset.top),
+    width: num(tile.dataset.width, MIN_TILE_WIDTH),
+    height: num(tile.dataset.height, MIN_TILE_HEIGHT),
+  };
+}
+
+function setTileDensity(tile, width, height) {
+  tile.dataset.widthClass = width < 300 ? "small" : width < 500 ? "medium" : "large";
+  tile.dataset.heightClass = height < 210 ? "short" : height < 300 ? "medium" : "tall";
+  tile.classList.toggle("tile-tiny", width < 250 || height < 185);
+  tile.classList.toggle("tile-micro", width < 180 || height < 140);
+}
+
+function setTileRect(tile, rect) {
+  const clean = (value) => Math.round(value * 10) / 10;
+  const left = clean(rect.left);
+  const top = clean(rect.top);
+  const width = clean(rect.width);
+  const height = clean(rect.height);
+  tile.dataset.left = String(left);
+  tile.dataset.top = String(top);
+  tile.dataset.width = String(width);
+  tile.dataset.height = String(height);
+  tile.style.left = `${left}px`;
+  tile.style.top = `${top}px`;
+  tile.style.width = `${width}px`;
+  tile.style.height = `${height}px`;
+  const badge = tile.querySelector(".tile-size-badge");
+  if (badge) badge.textContent = `${Math.round(width)} × ${Math.round(height)}`;
+  setTileDensity(tile, width, height);
+}
+
+function installLayoutChrome() {
+  const vertical = make("i", "layout-guide layout-guide-v");
+  vertical.setAttribute("aria-hidden", "true");
+  const horizontal = make("i", "layout-guide layout-guide-h");
+  horizontal.setAttribute("aria-hidden", "true");
+  const badge = make("span", "layout-snap-badge", "对齐 OK");
+  badge.setAttribute("role", "status");
+  badge.setAttribute("aria-live", "polite");
+  dom.projectSections.append(vertical, horizontal, badge);
+}
+
+function updateProjectCanvasHeight(extraRect = null, allowShrink = true) {
+  let bottom = extraRect ? extraRect.top + extraRect.height : 0;
+  for (const tile of dom.projectSections.querySelectorAll(".proj")) {
+    const rect = rectOfTile(tile);
+    bottom = Math.max(bottom, rect.top + rect.height);
+  }
+  const wanted = Math.max(260, Math.ceil(bottom + 12));
+  const current = Number.parseFloat(dom.projectSections.style.height) || wanted;
+  dom.projectSections.style.height = `${allowShrink ? wanted : Math.max(current, wanted)}px`;
+}
+
+function applyProjectLayout(animate = false) {
+  const canvasWidth = dom.projectSections.clientWidth;
+  if (canvasWidth <= 0) return;
+  projectCanvasWidth = canvasWidth;
+  dom.projectSections.classList.add("free-layout");
+  const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+  tiles.forEach((tile, index) => {
+    const geometry = geometryForTile(tile.dataset.projectId, index);
+    const width = clamp(geometry.w / LAYOUT_SCALE * canvasWidth, Math.min(MIN_TILE_WIDTH, canvasWidth), canvasWidth);
+    const rect = {
+      left: clamp(geometry.x / LAYOUT_SCALE * canvasWidth, 0, canvasWidth - width),
+      top: geometry.y,
+      width,
+      height: clamp(geometry.h, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
+    };
+    tile.style.zIndex = String(geometry.order + 1);
+    setTileRect(tile, rect);
+    if (animate && typeof tile.animate === "function") {
+      tile.animate(
+        [
+          { opacity: 0, transform: "translateY(14px) scale(.985)" },
+          { opacity: 1, transform: "translateY(0) scale(1)" },
+        ],
+        {
+          duration: 360,
+          delay: index * 45,
+          easing: "cubic-bezier(.2,.8,.2,1)",
+          fill: "both",
+        }
+      );
+    }
+  });
+  updateProjectCanvasHeight();
+}
+
+function tileLayoutFromDom() {
+  const layout = {};
+  const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+  const ranked = [...tiles].sort((first, second) => num(first.style.zIndex) - num(second.style.zIndex));
+  const orderByTile = new Map(ranked.map((tile, order) => [tile, order]));
+  const canvasWidth = Math.max(1, dom.projectSections.clientWidth);
+  tiles.forEach((tile) => {
+    const rect = rectOfTile(tile);
+    layout[tile.dataset.projectId] = {
+      x: Math.round(rect.left / canvasWidth * LAYOUT_SCALE),
+      y: Math.round(rect.top),
+      w: Math.round(rect.width / canvasWidth * LAYOUT_SCALE),
+      h: Math.round(rect.height),
+      order: orderByTile.get(tile) || 0,
+    };
+  });
+  return layout;
+}
+
+async function persistTileLayout() {
+  projectLayout = tileLayoutFromDom();
+  const bridge = api();
+  if (bridge && bridge.set_project_layout) await bridge.set_project_layout(projectLayout);
+}
+
+function configureTileEditing() {
+  const changed = dom.body.classList.contains("layout-mode") !== layoutMode;
+  dom.body.classList.toggle("layout-mode", layoutMode);
+  dom.btnLayout.setAttribute("aria-pressed", String(layoutMode));
+  if (!layoutMode) hideAlignmentChrome();
+  if (changed) {
+    const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+    tiles.forEach((tile, index) => {
+      if (typeof tile.animate !== "function") return;
+      tile.animate(
+        layoutMode
+          ? [
+              { transform: "translateY(0) scale(1)" },
+              { transform: "translateY(-3px) scale(1.008)" },
+              { transform: "translateY(0) scale(1)" },
+            ]
+          : [
+              { transform: "scale(1.006)" },
+              { transform: "scale(1)" },
+            ],
+        {
+          duration: layoutMode ? 320 : 220,
+          delay: index * 35,
+          easing: "cubic-bezier(.2,.8,.2,1)",
+        }
+      );
+    });
+  }
+}
+
+function hideAlignmentChrome() {
+  for (const node of dom.projectSections.querySelectorAll(".layout-guide, .layout-snap-badge")) {
+    node.classList.remove("visible");
+  }
+}
+
+function showAlignmentChrome(snap, rect) {
+  const vertical = dom.projectSections.querySelector(".layout-guide-v");
+  const horizontal = dom.projectSections.querySelector(".layout-guide-h");
+  const badge = dom.projectSections.querySelector(".layout-snap-badge");
+  if (vertical) {
+    vertical.classList.toggle("visible", snap.vertical != null);
+    if (snap.vertical != null) vertical.style.left = `${snap.vertical}px`;
+  }
+  if (horizontal) {
+    horizontal.classList.toggle("visible", snap.horizontal != null);
+    if (snap.horizontal != null) horizontal.style.top = `${snap.horizontal}px`;
+  }
+  if (badge) {
+    const visible = snap.vertical != null || snap.horizontal != null;
+    badge.classList.toggle("visible", visible);
+    if (visible) {
+      badge.style.left = `${clamp(rect.left + 10, 4, Math.max(4, projectCanvasWidth - 74))}px`;
+      badge.style.top = `${Math.max(4, rect.top - 27)}px`;
+    }
+  }
+}
+
+function closestSnap(sources, guides) {
+  let best = null;
+  for (const source of sources) {
+    for (const guide of guides) {
+      const delta = guide - source;
+      if (Math.abs(delta) <= SNAP_DISTANCE && (!best || Math.abs(delta) < Math.abs(best.delta))) {
+        best = { delta, guide };
+      }
+    }
+  }
+  return best;
+}
+
+function snapTileRect(rect, tile, edge) {
+  const verticalGuides = [0, projectCanvasWidth / 2, projectCanvasWidth];
+  const horizontalGuides = [0];
+  for (const other of dom.projectSections.querySelectorAll(".proj")) {
+    if (other === tile) continue;
+    const candidate = rectOfTile(other);
+    verticalGuides.push(candidate.left, candidate.left + candidate.width / 2, candidate.left + candidate.width);
+    horizontalGuides.push(candidate.top, candidate.top + candidate.height / 2, candidate.top + candidate.height);
+  }
+  const moving = edge === "move";
+  const xSources = moving
+    ? [rect.left, rect.left + rect.width / 2, rect.left + rect.width]
+    : edge.includes("w") ? [rect.left] : edge.includes("e") ? [rect.left + rect.width] : [];
+  const ySources = moving
+    ? [rect.top, rect.top + rect.height / 2, rect.top + rect.height]
+    : edge.includes("n") ? [rect.top] : edge.includes("s") ? [rect.top + rect.height] : [];
+  const xSnap = closestSnap(xSources, verticalGuides);
+  const ySnap = closestSnap(ySources, horizontalGuides);
+  const snapped = { ...rect };
+  if (xSnap) {
+    if (moving) snapped.left += xSnap.delta;
+    else if (edge.includes("w")) {
+      snapped.left += xSnap.delta;
+      snapped.width -= xSnap.delta;
+    } else if (edge.includes("e")) snapped.width += xSnap.delta;
+  }
+  if (ySnap) {
+    if (moving) snapped.top += ySnap.delta;
+    else if (edge.includes("n")) {
+      snapped.top += ySnap.delta;
+      snapped.height -= ySnap.delta;
+    } else if (edge.includes("s")) snapped.height += ySnap.delta;
+  }
+  return {
+    rect: constrainTileRect(snapped),
+    vertical: xSnap ? xSnap.guide : null,
+    horizontal: ySnap ? ySnap.guide : null,
+  };
+}
+
+function constrainTileRect(rect) {
+  const width = clamp(rect.width, Math.min(MIN_TILE_WIDTH, projectCanvasWidth), projectCanvasWidth);
+  return {
+    left: clamp(rect.left, 0, Math.max(0, projectCanvasWidth - width)),
+    top: Math.max(0, rect.top),
+    width,
+    height: clamp(rect.height, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
+  };
+}
+
+function interactionRect(event) {
+  const active = activeTileInteraction;
+  const dx = event.clientX - active.startX;
+  const dy = event.clientY - active.startY;
+  const rect = { ...active.startRect };
+  if (active.edge === "move") {
+    rect.left += dx;
+    rect.top += dy;
+    return constrainTileRect(rect);
+  }
+  if (active.edge.includes("e")) rect.width += dx;
+  if (active.edge.includes("s")) rect.height += dy;
+  if (active.edge.includes("w")) {
+    rect.left += dx;
+    rect.width -= dx;
+    if (rect.width < MIN_TILE_WIDTH) {
+      rect.left = active.startRect.left + active.startRect.width - MIN_TILE_WIDTH;
+      rect.width = MIN_TILE_WIDTH;
+    }
+  }
+  if (active.edge.includes("n")) {
+    rect.top += dy;
+    rect.height -= dy;
+    if (rect.height < MIN_TILE_HEIGHT) {
+      rect.top = active.startRect.top + active.startRect.height - MIN_TILE_HEIGHT;
+      rect.height = MIN_TILE_HEIGHT;
+    }
+  }
+  return constrainTileRect(rect);
+}
+
+function queueInteractionFrame(rect, snap) {
+  activeTileInteraction.pendingRect = rect;
+  activeTileInteraction.pendingSnap = snap;
+  if (layoutFrame) return;
+  layoutFrame = window.requestAnimationFrame(() => {
+    layoutFrame = 0;
+    if (!activeTileInteraction) return;
+    setTileRect(activeTileInteraction.tile, activeTileInteraction.pendingRect);
+    showAlignmentChrome(activeTileInteraction.pendingSnap, activeTileInteraction.pendingRect);
+    updateProjectCanvasHeight(activeTileInteraction.pendingRect, false);
+  });
+}
+
+function beginTileInteraction(event) {
+  if (!layoutMode || activeTileInteraction || event.button !== 0) return;
+  const tile = event.target.closest(".proj");
+  if (!tile) return;
+  const handle = event.target.closest(".tile-handle");
+  event.preventDefault();
+  const highest = Math.max(0, ...[...dom.projectSections.querySelectorAll(".proj")].map((node) => num(node.style.zIndex)));
+  tile.style.zIndex = String(highest + 1);
+  tile.classList.add("interacting");
+  activeTileInteraction = {
+    tile,
+    pointerId: event.pointerId,
+    edge: handle ? handle.dataset.edge : "move",
+    startX: event.clientX,
+    startY: event.clientY,
+    startRect: rectOfTile(tile),
+    pendingRect: rectOfTile(tile),
+    pendingSnap: { vertical: null, horizontal: null },
+  };
+  try {
+    if (tile.setPointerCapture) tile.setPointerCapture(event.pointerId);
+  } catch (error) {
+    // Synthetic diagnostics and a pointer released during a WebView hand-off
+    // may no longer be capturable; the window listeners still finish safely.
+  }
+}
+
+function moveTileInteraction(event) {
+  if (!activeTileInteraction || event.pointerId !== activeTileInteraction.pointerId) return;
+  const raw = interactionRect(event);
+  const snap = snapTileRect(raw, activeTileInteraction.tile, activeTileInteraction.edge);
+  queueInteractionFrame(snap.rect, snap);
+}
+
+function finishTileInteraction(event) {
+  if (!activeTileInteraction || event.pointerId !== activeTileInteraction.pointerId) return;
+  if (layoutFrame) {
+    window.cancelAnimationFrame(layoutFrame);
+    layoutFrame = 0;
+  }
+  const active = activeTileInteraction;
+  setTileRect(active.tile, active.pendingRect);
+  active.tile.classList.remove("interacting");
+  active.tile.classList.add("settling");
+  if (typeof active.tile.animate === "function") {
+    active.tile.animate(
+      [
+        { transform: "scale(.995)" },
+        { transform: "scale(1.008)" },
+        { transform: "scale(1)" },
+      ],
+      { duration: 300, easing: "cubic-bezier(.2,.9,.25,1)" }
+    );
+  }
+  window.setTimeout(() => active.tile.classList.remove("settling"), 320);
+  activeTileInteraction = null;
+  hideAlignmentChrome();
+  updateProjectCanvasHeight(null, true);
+  persistTileLayout();
+}
+
+function observeProjectCanvas() {
+  if (projectResizeObserver || typeof ResizeObserver === "undefined") return;
+  projectResizeObserver = new ResizeObserver((entries) => {
+    const width = Math.round(entries[0] ? entries[0].contentRect.width : 0);
+    if (width <= 0 || width === Math.round(projectCanvasWidth) || activeTileInteraction) return;
+    applyProjectLayout(false);
+  });
+  projectResizeObserver.observe(dom.projectSections);
+}
+
+function markWindowResizing() {
+  dom.body.classList.add("window-resizing");
+  if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
+  windowResizeTimer = window.setTimeout(() => {
+    windowResizeTimer = 0;
+    dom.body.classList.remove("window-resizing");
+    if (layoutMode) return;
+    for (const tile of dom.projectSections.querySelectorAll(".proj")) {
+      if (typeof tile.animate !== "function") continue;
+      tile.animate(
+        [{ transform: "scale(.997)" }, { transform: "scale(1)" }],
+        { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" }
+      );
+    }
+  }, 140);
+}
+
+function bindTileEditing() {
+  dom.projectSections.addEventListener("pointerdown", (event) => {
+    beginTileInteraction(event);
+  });
+  window.addEventListener("pointermove", moveTileInteraction);
+  window.addEventListener("pointerup", finishTileInteraction);
+  window.addEventListener("pointercancel", finishTileInteraction);
+  observeProjectCanvas();
 }
 
 function selectView(name) {
@@ -696,6 +1169,17 @@ async function requestRepair(button) {
 /* ---------- controls ---------- */
 
 function bindControls() {
+  bindTileEditing();
+  for (const zone of document.querySelectorAll("[data-window-edge]")) {
+    zone.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const bridge = api();
+      if (!bridge || !bridge.begin_window_resize) return;
+      event.preventDefault();
+      event.stopPropagation();
+      bridge.begin_window_resize(zone.dataset.windowEdge).catch(() => {});
+    });
+  }
   for (const button of document.querySelectorAll(".view-tab")) {
     button.addEventListener("click", () => selectView(button.dataset.view));
   }
@@ -705,6 +1189,21 @@ function bindControls() {
     dom.btnRefresh.classList.remove("spinning");
   });
   el("btnRetry").addEventListener("click", () => pull(true));
+  dom.btnCapture.addEventListener("click", async () => {
+    const bridge = api();
+    if (!bridge || !bridge.capture) return;
+    const result = await bridge.capture();
+    dom.sbState.textContent = result && result.message ? result.message : "截图失败";
+  });
+  dom.btnLayout.addEventListener("click", () => {
+    layoutMode = !layoutMode;
+    configureTileEditing();
+    if (!layoutMode) {
+      persistTileLayout();
+      lastDataKey = "";
+      pull(false);
+    }
+  });
   dom.btnRepair.addEventListener("click", () => requestRepair(dom.btnRepair));
   dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
   el("btnMin").addEventListener("click", () => api() && api().minimize());
@@ -741,4 +1240,8 @@ function start() {
 
 window.addEventListener("pywebviewready", start);
 if (api()) start();
-window.addEventListener("beforeunload", () => timer && window.clearInterval(timer));
+window.addEventListener("resize", markWindowResizing);
+window.addEventListener("beforeunload", () => {
+  if (timer) window.clearInterval(timer);
+  if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
+});

@@ -38,6 +38,7 @@ class WindowState:
     on_top: bool = False
     # The operator prefers a light board; dark stays one titlebar click away.
     theme: str = "light"
+    project_layout: dict[str, dict[str, int]] | None = None
 
     def size(self) -> tuple[int, int]:
         return (self.width, self.height)
@@ -51,6 +52,43 @@ def _coerce_int(value: object, fallback: int | None) -> int | None:
     if isinstance(value, float):
         return int(value)
     return fallback
+
+
+def normalize_project_layout(value: object) -> dict[str, dict[str, int]]:
+    """Keep bounded freeform geometry while accepting the old grid format."""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, int]] = {}
+    entries = cast(dict[object, object], value)
+    for raw_id, raw_tile in entries.items():
+        if not isinstance(raw_id, str) or not raw_id or len(raw_id) > 64:
+            continue
+        if not isinstance(raw_tile, dict):
+            continue
+        tile = cast(dict[str, Any], raw_tile)
+        order = _coerce_int(tile.get("order"), len(result)) or 0
+        if any(key in tile for key in ("x", "y", "w", "h")):
+            width = max(1, min(1000, _coerce_int(tile.get("w"), 500) or 500))
+            x = max(0, min(1000 - width, _coerce_int(tile.get("x"), 0) or 0))
+            result[raw_id] = {
+                "x": x,
+                "y": max(0, min(10000, _coerce_int(tile.get("y"), 0) or 0)),
+                "w": width,
+                "h": max(104, min(2400, _coerce_int(tile.get("h"), 360) or 360)),
+                "order": max(0, min(99, order)),
+            }
+            continue
+
+        # One release used a coarse cols/rows grid. Preserve it long enough for
+        # the renderer to migrate it into freeform geometry on the next save.
+        cols = _coerce_int(tile.get("cols"), 6) or 6
+        rows = _coerce_int(tile.get("rows"), 1) or 1
+        result[raw_id] = {
+            "cols": max(3, min(12, cols)),
+            "rows": max(1, min(3, rows)),
+            "order": max(0, min(99, order)),
+        }
+    return result
 
 
 def load_state(path: Path | None = None) -> WindowState:
@@ -74,6 +112,7 @@ def load_state(path: Path | None = None) -> WindowState:
         compact=bool(data.get("compact", False)),
         on_top=bool(data.get("on_top", False)),
         theme=theme if theme in {"dark", "light"} else "light",
+        project_layout=normalize_project_layout(data.get("project_layout")),
     )
 
 

@@ -18,7 +18,7 @@ needs lives in the signed-in user's profile:
 ```text
 %LOCALAPPDATA%\Poyi\PersonalMcpDesktop\runtime   private Python 3.12 virtual environment
 %LOCALAPPDATA%\Poyi\PersonalMcpDesktop\webview   WebView2 profile
-%LOCALAPPDATA%\Poyi\PersonalMcpDesktop\window-state.json   size, position, theme, compact, pin
+%LOCALAPPDATA%\Poyi\PersonalMcpDesktop\window-state.json   window and project-tile layout
 ```
 
 The board is a viewer of the gateway, not a component of it. It holds no secrets, opens no listener
@@ -42,19 +42,22 @@ Options for `install-desktop.ps1`:
 Re-running the installer is the upgrade path. It stops any instance running out of its own runtime
 first — matched on the executable path, so other Python processes are left alone.
 
+Every shortcut targets `runtime\Scripts\PoyiControlCenter.exe`. The installer creates that launcher
+from the real Windows GUI-subsystem interpreter instead of uv's virtual-environment trampoline, so
+starting from Desktop, Start Menu, or Startup neither opens nor depends on PowerShell or a console
+Python process.
+
 ## Verify
 
 `desktop\Verify-PersonalMcpDesktop.cmd` also runs unelevated and writes
 `evidence/desktop-verification-result.json`. It checks the runtime imports, the package version, the
-generated `.ico`, that each shortcut points at the private `pythonw.exe` with the expected
+generated `.ico`, that each shortcut points at the private `PoyiControlCenter.exe` with the expected
 arguments, and the WebView2 runtime version.
 
 The gate that matters is the launch check: imports resolving only proves the runtime, so the script
-starts the board and waits for a real window to appear. A uv virtual environment installs launcher
-trampolines, so `Scripts\pythonw.exe` is a parent process and the window belongs to the interpreter
-it spawns; the probe walks the process tree rather than trusting the launched process id. An
-instance the operator already started is inspected in place instead of being replaced, because the
-single-instance guard would refuse a second one anyway.
+starts the native GUI launcher and waits for a real window to appear. An instance the operator
+already started is inspected in place instead of being replaced, because the single-instance guard
+would refuse a second one anyway.
 
 The window is matched on its title and its restored size, and the state it was found in is recorded
 as `visible`, `minimized` or `hidden-to-tray`:
@@ -79,13 +82,18 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 | Control | Behaviour |
 | --- | --- |
 | Refresh | Bypasses the shared probe cache. |
+| Camera | Captures the board through Win32 `PrintWindow` without activating or controlling it, then saves a PNG under `Pictures\Poyi Control Center`. |
+| Tiles | Enters a freeform canvas. Drag any tile surface to place it, or drag any edge/corner to resize continuously. Alignment guides appear near board and peer-tile edges; changes save automatically. |
+| Window edges | Drag any edge or corner to resize the whole frameless window through the native Windows sizing loop. The board follows directly and settles after release. |
 | Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
 | Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
 | Compact | Shrinks to a narrow status panel that fits beside other work. |
 | Close | Hides to the tray; the poll loop and the tray icon keep running. |
 | Tray menu | Show, compact, pin, open the web dashboard, refresh, quit. |
 
-Window size, position, theme, compact mode and the pin state persist across restarts.
+Window size, position, theme, compact mode, pin state, free tile positions and dimensions persist across
+restarts. Brief probe failures keep the last valid board visible and show a restrained recovery
+banner until the next successful poll instead of flashing a full-screen disconnect state.
 
 Status is encoded by shape as well as hue — circle for healthy, triangle for degraded, diamond for
 offline, square for no link — on the dashboard dots and on the tray icon alike. Healthy and critical

@@ -37,6 +37,7 @@ function Get-DesktopLayout {
         Runtime       = $runtime
         Python        = Join-Path $runtime 'Scripts\python.exe'
         PythonW       = Join-Path $runtime 'Scripts\pythonw.exe'
+        Launcher      = Join-Path $runtime 'Scripts\PoyiControlCenter.exe'
         Build         = Join-Path $root 'build'
         Icon          = Join-Path $root 'poyi-control-center.ico'
         State         = Join-Path $root 'window-state.json'
@@ -66,7 +67,7 @@ function Get-DesktopProcess {
     param([Parameter(Mandatory)][string]$Runtime)
 
     $prefix = [IO.Path]::GetFullPath($Runtime).TrimEnd('\') + '\'
-    @(Get-Process -Name 'python', 'pythonw' -ErrorAction SilentlyContinue | Where-Object {
+    @(Get-Process -Name 'python', 'pythonw', 'PoyiControlCenter' -ErrorAction SilentlyContinue | Where-Object {
         $path = $null
         try { $path = $_.Path } catch { $path = $null }
         $path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
@@ -134,7 +135,7 @@ function Get-WebView2Version {
 }
 
 function New-DesktopShortcut {
-    <# Point a .lnk at the private pythonw so no console window ever flashes. #>
+    <# Point a .lnk at the native GUI-subsystem launcher so no console can exist. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -146,10 +147,11 @@ function New-DesktopShortcut {
     $shell = New-Object -ComObject WScript.Shell
     try {
         $link = $shell.CreateShortcut($Path)
-        $link.TargetPath = $Layout.PythonW
+        $link.TargetPath = $Layout.Launcher
         $link.Arguments = $Layout.Arguments
         $link.WorkingDirectory = $Layout.Root
         $link.Description = $Description
+        $link.WindowStyle = 7
         if (Test-Path -LiteralPath $Layout.Icon) { $link.IconLocation = "$($Layout.Icon),0" }
         $link.Save()
     } finally {

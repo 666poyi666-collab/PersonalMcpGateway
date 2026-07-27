@@ -2,6 +2,17 @@
 
 ## 0.1.0-dev
 
+- Restore native eight-direction resizing to the frameless desktop window without adding a visible
+  system frame; content follows the Windows sizing loop directly and settles after release.
+- Replace the coarse desktop tile grid with a freeform canvas: tiles move continuously, resize from
+  all four edges and corners, align to live peer/board guides, adapt their content density at small
+  sizes, settle with spring transitions, and persist normalized geometry across window sizes.
+- Rework the desktop board into overview/activity/extensions views with a 12-column Bento project
+  grid, persistent drag ordering and two-axis tile resizing. Add inactive-window screenshots,
+  stale-while-revalidate recovery, and a real GUI-subsystem `PoyiControlCenter.exe` launcher so
+  Desktop, Start Menu, and Startup shortcuts never open or depend on PowerShell.
+- Render Watch `PHONE_TIMEOUT` and `WATCH_TIMEOUT` widget results as explicit neutral recovery
+  states, matching the existing offline handling instead of showing a generic tool error.
 - Push local Journal entries to Journal Cloud MCP with date/revision idempotent upserts, including chunked full-body reads. Treat `PHONE_OFFLINE` and `WATCH_OFFLINE` board results as neutral recovery states while preserving real execution errors as failures.
 - Split snapshot ingestion from connector access: Watch/Foxlink now accept bounded,
   allowlisted pushes only at `POST /sync/push` with an independent `SYNC_KEY` Bearer;

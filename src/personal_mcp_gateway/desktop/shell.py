@@ -79,11 +79,31 @@ def create_window(
         x=x,
         y=y,
         min_size=min_size,
+        resizable=True,
         frameless=True,
         easy_drag=False,
         background_color=background,
         on_top=on_top,
     )
+
+
+def enable_native_resize(window: Any) -> bool:
+    from personal_mcp_gateway.desktop.native_window import install_frameless_resize
+
+    return install_frameless_resize(window)
+
+
+def begin_native_resize(window: Any, edge: str) -> bool:
+    from personal_mcp_gateway.desktop.native_window import begin_window_resize
+
+    action_type = __import__("System").Action
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    if native.InvokeRequired:
+        native.BeginInvoke(action_type(lambda: begin_window_resize(window, edge)))
+        return True
+    return begin_window_resize(window, edge)
 
 
 def run_window(on_start: Any, storage: Path) -> None:

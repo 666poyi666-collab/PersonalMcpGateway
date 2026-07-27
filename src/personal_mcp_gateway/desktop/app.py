@@ -26,6 +26,7 @@ from personal_mcp_gateway.desktop.window_state import (
     MIN_SIZE,
     WindowState,
     load_state,
+    normalize_project_layout,
     save_state,
     state_dir,
 )
@@ -162,6 +163,7 @@ class DesktopApi:
             "onTop": controller.state.on_top,
             "theme": controller.state.theme,
             "adminUrl": admin_base_url(),
+            "projectLayout": controller.state.project_layout or {},
         }
         return payload
 
@@ -199,6 +201,34 @@ class DesktopApi:
         controller.state.theme = theme if theme in {"dark", "light"} else "light"
         save_state(controller.state)
         return self.snapshot()
+
+    def set_project_layout(self, layout: dict[str, Any]) -> dict[str, Any]:
+        controller = self._controller
+        controller.state.project_layout = normalize_project_layout(layout)
+        save_state(controller.state)
+        return self.snapshot()
+
+    def reset_project_layout(self) -> dict[str, Any]:
+        controller = self._controller
+        controller.state.project_layout = {}
+        save_state(controller.state)
+        return self.snapshot()
+
+    def capture(self) -> dict[str, Any]:
+        from personal_mcp_gateway.desktop.capture import capture_hwnd, native_handle
+
+        window = self._controller.window
+        try:
+            path = capture_hwnd(native_handle(window))
+        except (OSError, ValueError):
+            return {"ok": False, "message": "截图失败"}
+        return {"ok": True, "message": "截图已保存", "path": str(path)}
+
+    def begin_window_resize(self, edge: str) -> dict[str, bool]:
+        from personal_mcp_gateway.desktop import shell
+
+        window = self._controller.window
+        return {"ok": window is not None and shell.begin_native_resize(window, edge)}
 
     def minimize(self) -> None:
         window = self._controller.window
@@ -280,6 +310,7 @@ def main() -> int:
         print("无法创建桌面窗口: 请确认已安装 WebView2 运行时", file=sys.stderr)
         return 3
     controller.window = window
+    window.events.before_show += lambda: shell.enable_native_resize(window)
 
     def on_start() -> None:
         threading.Thread(target=controller.poll_forever, name="poyi-poll", daemon=True).start()

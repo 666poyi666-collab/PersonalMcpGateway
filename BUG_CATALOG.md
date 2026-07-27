@@ -24,3 +24,17 @@
 - [x] BUG-005（2026-07-26，来源:单测遗漏）admin/fleet.py 的 ctypes SCM 查询未声明
   OpenSCManagerW/OpenServiceW 的 restype，64 位句柄被截断，所有服务状态误报 unknown
   —— 状态:已修（显式 argtypes/restype = c_void_p）。
+- [x] BUG-006（2026-07-27，来源:桌面启动实测）桌面快捷方式指向 uv 虚拟环境的
+  `pythonw.exe` 跳板，跳板会再交给控制台解释器，导致 PowerShell/控制台窗口观感和错误的
+  生命周期依赖 —— 状态:已修（安装器复制真实 GUI-subsystem `pythonw.exe` 为
+  `PoyiControlCenter.exe`，桌面/开始菜单/开机启动快捷方式全部覆盖到该启动器）。
+- [x] BUG-007（2026-07-27，来源:桌面看板实测）瞬时探测失败会把整页替换成断连画面，窗口截图
+  在高 DPI 下还会被裁切 —— 状态:已修（stale-while-revalidate 保留最近有效数据；应用内
+  `PrintWindow` 截图启用 DPI 感知且不激活窗口）。
+- [x] BUG-008（2026-07-27，来源:磁贴编辑实测）项目磁贴只能按 12 列粗粒度改宽、按三档改高，
+  且唯一缩放命中区藏在右下角，拖放没有对齐反馈或收尾动画 —— 状态:已修（自由坐标与连续宽高、
+  四边四角大命中区、同级/画布参考线吸附、60fps Pointer Events 更新和弹性过渡）。
+- [x] BUG-009（2026-07-27，来源:桌面窗口实测）无边框看板移除了 Windows 原生缩放框，用户无法
+  从四边或四角调整整个窗口 —— 状态:已修（保留全客户区外观的 `WS_THICKFRAME`、原生八方向
+  `WM_NCHITTEST` 命中区、WebView 顶层八方向触发区，以及缩放期间直接跟随、松手后收尾的
+  内容过渡）。

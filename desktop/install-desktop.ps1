@@ -59,6 +59,17 @@ foreach ($interpreter in @($layout.Python, $layout.PythonW)) {
     }
 }
 
+# uv's venv pythonw.exe is a launcher trampoline that can hand off to the base
+# console python.exe. Copy the real GUI-subsystem interpreter into Scripts: it
+# still discovers runtime\pyvenv.cfg and the private site-packages, but its
+# process tree can never own or depend on a console window.
+$basePrefix = (& $layout.Python -c 'import sys; print(sys.base_prefix)').Trim()
+$basePythonW = Join-Path $basePrefix 'pythonw.exe'
+if (-not (Test-Path -LiteralPath $basePythonW)) {
+    throw "The Python base runtime is missing $basePythonW."
+}
+Copy-Item -LiteralPath $basePythonW -Destination $layout.Launcher -Force
+
 # Scratch space inside the install root rather than %TEMP%: the wheel that ends
 # up installed should be traceable to this run while it is being built, and the
 # directory is removed either way.
@@ -138,7 +149,7 @@ Write-Host "  WebView2  : $(if ($null -eq $webview2) { 'missing' } else { $webvi
 Write-Host 'Verify it with desktop\Verify-PersonalMcpDesktop.cmd.'
 
 if ($Launch) {
-    Start-Process -FilePath $layout.PythonW -ArgumentList $layout.Arguments `
-        -WorkingDirectory $layout.Root
+    Start-Process -FilePath $layout.Launcher -ArgumentList $layout.Arguments `
+        -WorkingDirectory $layout.Root -WindowStyle Hidden
     Write-Host 'Started the board; look for the tray icon.'
 }

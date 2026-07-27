@@ -59,6 +59,26 @@ def test_renderer_never_makes_its_own_network_calls() -> None:
     assert "pywebview.api" in script
 
 
+def test_capture_and_freeform_tile_controls_ship_together() -> None:
+    markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert 'id="btnCapture"' in markup
+    assert 'id="btnLayout"' in markup
+    assert "bridge.capture()" in script
+    assert "bridge.set_project_layout(projectLayout)" in script
+    assert "pointerdown" in script and "requestAnimationFrame" in script
+    assert "ResizeObserver" in script and "snapTileRect" in script
+    assert 'window.addEventListener("resize", markWindowResizing)' in script
+    assert "body.window-resizing" in style
+    assert markup.count('data-window-edge="') == 8
+    assert "bridge.begin_window_resize(zone.dataset.windowEdge)" in script
+    assert "window-resize-se::after" in style
+    assert "tile-handle-nw" in style and "layout-guide.visible" in style
+    assert "dragstart" not in script and "tile-resizer" not in style
+
+
 def test_every_status_maps_to_a_distinct_tray_colour() -> None:
     colours = {status_color(status) for status in STATUSES}
     assert len(colours) == len(STATUSES)

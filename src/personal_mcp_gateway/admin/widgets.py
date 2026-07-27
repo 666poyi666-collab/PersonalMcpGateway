@@ -423,11 +423,17 @@ class WidgetHub:
             error = payload.get("error")
             error_dict = cast(dict[str, Any], error) if isinstance(error, dict) else {}
             code = str(error_dict.get("code") or "")
-            if code in {"PHONE_OFFLINE", "WATCH_OFFLINE"}:
+            recovery_messages = {
+                "PHONE_OFFLINE": "手机当前离线 · 等待后台服务或下一次云端同步恢复",
+                "PHONE_TIMEOUT": "手机响应超时 · 等待后台服务恢复后自动重试",
+                "WATCH_OFFLINE": "手表当前离线 · 等待连接恢复或下一次云端同步",
+                "WATCH_TIMEOUT": "手表响应超时 · 等待连接恢复后自动重试",
+            }
+            if code in recovery_messages:
                 return self._ok(
                     config,
                     "text",
-                    {"body": "手机或手表当前离线 · 等待自动恢复或下一次云端同步"},
+                    {"body": recovery_messages[code]},
                 )
             return self._fail(config, "工具执行返回错误")
         kind, data = _present_mcp_payload(tool, payload)

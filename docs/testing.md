@@ -8,8 +8,16 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 uv run pytest --cov --cov-report=term-missing
+uv run pip-audit
 uv build
+git diff --check
 ```
+
+Desktop release work also runs `node --check` on `desktop.js`, parses the three PowerShell desktop
+scripts, reinstalls with `desktop\install-desktop.ps1 -Autostart -Launch`, and finishes with
+`desktop\Verify-PersonalMcpDesktop.cmd`. The live check must confirm that all shortcuts target
+`PoyiControlCenter.exe`, the application tree contains only that GUI launcher plus WebView2, and an
+in-app `PrintWindow` capture renders the full board without activating the window.
 
 Contract tests freeze the `personal_*` management surface and each installed adapter's independent
 tool namespace. They also assert that WatchIntervals tools and Resources are absent. Fault tests
