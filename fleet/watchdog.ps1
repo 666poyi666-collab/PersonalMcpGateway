@@ -294,7 +294,11 @@ function Invoke-CloudSync($Config) {
     $python = Join-Path $pythonDirs[0].FullName 'python.exe'
     $script = Join-Path $script:BaseDir 'cloud_sync.py'
     try {
-        $output = & $python -s $script --config $Config.cloudSync.config 2>&1
+        $arguments = @('-s', $script, '--config', [string]$Config.cloudSync.config)
+        if ($Config.cloudSync.PSObject.Properties.Name -contains 'status') {
+            $arguments += @('--status', [string]$Config.cloudSync.status)
+        }
+        $output = & $python @arguments 2>&1
         foreach ($line in @($output)) { Write-Log 'INFO' ("sync: {0}" -f $line) }
     } catch {
         Write-Log 'WARN' ("cloud sync failed: {0}" -f $_.Exception.Message)

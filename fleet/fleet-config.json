@@ -74,6 +74,7 @@
   "cloudSync": {
     "enabled": true,
     "everyPasses": 10,
-    "config": "C:\\ProgramData\\Poyi\\FleetWatchdog\\cloud-sync-config.json"
+    "config": "C:\\ProgramData\\Poyi\\FleetWatchdog\\cloud-sync-config.json",
+    "status": "C:\\ProgramData\\Poyi\\PersonalMcpGateway\\cloud-sync-status.json"
   }
 }

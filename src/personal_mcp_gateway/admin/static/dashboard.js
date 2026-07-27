@@ -110,16 +110,18 @@
       if (target.id === "personal") {
         const gw = data.gateway || {};
         const fleet = data.fleet || {};
-        [["本次在线", uptime(gw.uptimeSeconds || 0)], ["累计调用", compact(gw.callsTotal)], ["调用失败", compact(gw.callsFailed)], ["看护服务", fleet.watchdog && fleet.watchdog.state === "running" ? "在线" : "异常"]].forEach(([label, value]) => {
+        [["本次在线", uptime(gw.uptimeSeconds || 0)], ["累计调用", compact(gw.callsTotal)], ["调用失败", compact(gw.callsFailed)], ["看护服务", fleet.watchdog && fleet.watchdog.state === "running" ? "在线" : "异常"]].forEach(([label, value], index) => {
           const card = document.createElement("article"); card.className = "pd-stat";
+          card.dataset.priority = index < 2 ? "primary" : "secondary";
           const strong = document.createElement("strong"); strong.textContent = String(value);
           const span = document.createElement("span"); span.textContent = label;
           card.append(strong, span); dataZone.append(card);
         });
       } else {
         const mine = (widgets || []).filter((w) => style.groups.includes(w.group || ""));
-        mine.forEach((widget) => {
+        mine.forEach((widget, index) => {
           const card = document.createElement("article"); card.className = `pd-widget${widget.ok ? "" : " error"}`;
+          card.dataset.priority = index < 2 ? "primary" : "secondary";
           const whead = document.createElement("div"); whead.className = "pd-widget-head";
           const wtitle = document.createElement("strong"); wtitle.textContent = widget.title || widget.id; whead.append(wtitle);
           if (widget.subtitle) { const ws = document.createElement("small"); ws.textContent = widget.subtitle; whead.append(ws); }

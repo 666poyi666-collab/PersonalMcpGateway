@@ -31,7 +31,7 @@ operation. Each application remains the source of truth for its own business dat
 Everything runs on this machine and listens on loopback only; nothing is exposed to the
 network except the outbound Secure MCP Tunnel.
 
-The optional Cloudflare layer keeps read access available while this PC is off. The fleet sync job pushes local Journal entries with revision-based idempotency, while the Watch phone app pushes its own read-only snapshots directly. Cloud MCP access and snapshot ingestion use separate credentials; an offline device yields the last snapshot with stale metadata rather than a false live state.
+The optional Cloudflare layer keeps approved cloud data or the last successful snapshot readable while this PC is off. Journal has a persistent cloud database but only one-way local-to-cloud mirroring today. Watch and FocusLink remain snapshot mirrors: phone-side support exists, but the latest audit observed only `pc-sync`, so they are not labelled continued power-off synchronization. Cloud MCP access and snapshot ingestion use separate credentials; an offline device yields the last snapshot with stale metadata rather than a false live state.
 
 ## Development
 

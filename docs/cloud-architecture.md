@@ -40,10 +40,10 @@
 
 ## 实施状态（2026-07-27）
 
-- P0-P2 已完成：Journal Worker + D1 已部署，本机日记按日期和 source revision 幂等上行；ChatGPT 云端连接在全部本机服务停止时仍能列出并读取已同步日记。
-- P3 的只读快照阶段已完成：Phone 0.21.1 直接上行状态、训练、睡眠和计划六个数据面，Watch Cloud MCP 暴露 6 个读取工具与 1 个同步概览工具。训练控制/命令队列、R2 大文件与实时 Durable Object 仍未实现。
-- ChatGPT 中旧 Journal/Watch 本机连接已删除并换成云端连接。设备离线时继续返回最后快照并标记 stale；互联网或 Cloudflare 不可用仍会中断云端访问。
-- 最终本机门禁：Ruff、Pyright、95 项 pytest（80.89% 覆盖率）、依赖审计与 wheel/sdist 构建全部通过。
+- Journal Worker + D1 已部署，本机日记按日期和 source revision 幂等上行；ChatGPT 云端连接在全部本机服务停止时仍能读写云端库。当前仍是本机到云端单向上行，云端新建/修改不会回拉本机，因此不能标为“关机后持续同步”。
+- Watch Cloud MCP 已暴露 6 个读取工具与 1 个同步概览工具，手机侧也存在快照上行代码；但本次审计在远端 D1 只观察到 `pc-sync` 来源。正式证明非 PC 来源前，看板只能标为“最后快照”，不能标为“关机后持续同步”。
+- FocusLink Cloud MCP 当前同样是 Windows 上行的快照镜像。独立 device-sync Worker 在线不等于其生产数据已经进入 Cloud MCP；本次审计未证明电脑关机时 Cloud MCP revision 继续推进。
+- ChatGPT 中旧 Journal/Watch 本机连接已删除并换成云端连接。快照工具会返回 `synced` / `stale` / `never_synced` 与来源；互联网或 Cloudflare 不可用仍会中断云端访问。
 
 ## P0 用户需要做的事（一次性，约 10 分钟）
 

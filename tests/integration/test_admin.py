@@ -45,6 +45,10 @@ async def test_admin_endpoints_authorization_and_bundle(tmp_path: Path) -> None:
         assert snapshot["refreshIntervalSeconds"] == 4
         assert snapshot["summary"]["total"] == 4
         assert snapshot["targets"][0]["id"] == "personal"
+        assert snapshot["targets"][0]["sync"]["dataPlane"] == "local_only"
+        assert snapshot["targets"][0]["sync"]["pcOff"]["continuedSync"] is False
+        assert snapshot["targets"][1]["sync"]["dataPlane"] == "snapshot_mirror"
+        assert snapshot["targets"][3]["sync"]["dataPlane"] == "cloud_primary"
         assert len(snapshot["activity"]["hourly"]) == 24
         assert snapshot["events"] == []
         cached = (await client.get("/admin/dashboard-data")).json()

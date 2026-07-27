@@ -121,7 +121,8 @@ foreach ($project in $registry.projects) {
         if (Test-Path -LiteralPath $manifestPath) { $manifestFound = $true }
 
         $gitDirectory = Join-Path $path '.git'
-        if (Test-Path -LiteralPath $gitDirectory) {
+        if ((Test-Path -LiteralPath (Join-Path $gitDirectory 'HEAD')) -and
+            (Test-Path -LiteralPath (Join-Path $gitDirectory 'config'))) {
             $remote = (& git -C $path remote get-url origin 2>$null | Select-Object -First 1)
             if ($remote) {
                 $allowed = @($project.repositoryUrls | ForEach-Object {
@@ -213,8 +214,16 @@ $lines.Add('| --- | --- | --- | --- | --- | --- |')
 
 foreach ($project in $registry.projects) {
     $manifest = @($manifestRows | Where-Object Id -eq $project.id | Select-Object -First 1)
-    $manifestState = if ($manifest.Count -and $manifest[0].Found) { '已落地' } else { '待落地' }
-    $pcOff = if ($project.sync.status -eq 'complete') {
+    $manifestState = if ($project.lifecycle -eq 'archived') {
+        '不适用'
+    } elseif ($manifest.Count -and $manifest[0].Found) {
+        '已落地'
+    } else {
+        '待落地'
+    }
+    $pcOff = if ($project.lifecycle -eq 'archived') {
+        '已封存'
+    } elseif ($project.sync.status -eq 'complete') {
         '支持'
     } elseif ($project.sync.status -eq 'exempt') {
         '明确豁免'
@@ -250,7 +259,9 @@ foreach ($project in $registry.projects) {
 $lines.Add('')
 $lines.Add('## 已确认的关键缺口')
 $lines.Add('')
-foreach ($project in $registry.projects | Where-Object { -not $_.requirementsMet }) {
+foreach ($project in $registry.projects | Where-Object {
+    $_.lifecycle -eq 'active' -and -not $_.requirementsMet
+}) {
     $lines.Add("- **$($project.name)**：$($project.mcp.coverage) $($project.sync.pcOffBehavior)")
 }
 

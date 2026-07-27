@@ -11,7 +11,7 @@ FocusLink 是发丝线与直角的时间仪器，拾光是暖纸上的衬线墨�
 | 拾光 · 日记复盘 | Journal MCP `127.0.0.1:8780/mcp` | `拾光日记` | `paper` | `#A85F27` | [journal.md](journal.md) |
 | 步序 · 间歇跑 | Watch MCP `127.0.0.1:8768/mcp` | `步序 · 间歇跑` | `sport` | `#B6FF39` | [watch.md](watch.md) |
 | 随心一听（手表音乐） | 暂无常驻数据面 | `开发` | `neutral` | — | [watch-music.md](watch-music.md) |
-| 不做手机控 | 设计上离线，不接入 | — | — | — | [bzsjk.md](bzsjk.md) |
+| 不做手机控 | FocusLink 云状态只读；无 MCP | — | — | — | [bzsjk.md](bzsjk.md) |
 
 ## 通用规则
 

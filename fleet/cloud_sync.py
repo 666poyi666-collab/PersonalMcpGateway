@@ -14,11 +14,128 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
+from pathlib import Path
 
 UA = "poyi-cloud-sync/0.1"
+STATUS_SCHEMA_VERSION = 1
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _project_id(project: dict) -> str:
+    raw = str(project.get("id") or project.get("name") or "unknown").lower()
+    normalized = re.sub(r"[^a-z0-9]+", "_", raw).strip("_") or "unknown"
+    aliases = {
+        "watch_mcp": "watch",
+        "watchintervals": "watch",
+        "focuslink": "foxlink",
+        "foxlink_mcp": "foxlink",
+        "daylight_journal": "journal",
+        "journal_mcp": "journal",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _previous_timestamp(previous: dict, field: str) -> str | None:
+    if not isinstance(previous, dict):
+        return None
+    value = previous.get(field)
+    return value if isinstance(value, str) and value else None
+
+
+def _item_observation(
+    previous: dict,
+    *,
+    result: str,
+    attempted_at: str,
+    successful_at: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    observation = {
+        "result": result,
+        "lastAttemptAt": attempted_at,
+    }
+    last_success = successful_at or _previous_timestamp(previous, "lastSuccessfulPushAt")
+    if last_success:
+        observation["lastSuccessfulPushAt"] = last_success
+    if reason:
+        observation["reason"] = reason
+    return observation
+
+
+def _project_observation(
+    previous: dict,
+    *,
+    result: str,
+    attempted_at: str,
+    pushed_items: int,
+    skipped_items: int,
+    total_items: int,
+    items: dict[str, dict] | None = None,
+    successful_at: str | None = None,
+    complete_at: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    observation = {
+        "result": result,
+        "source": "pc-sync",
+        "lastAttemptAt": attempted_at,
+        "pushedItems": pushed_items,
+        "skippedItems": skipped_items,
+        "totalItems": total_items,
+        "items": items or {},
+    }
+    last_success = successful_at or _previous_timestamp(previous, "lastSuccessfulPushAt")
+    if last_success:
+        observation["lastSuccessfulPushAt"] = last_success
+    last_complete = complete_at or _previous_timestamp(previous, "lastCompletePushAt")
+    if last_complete:
+        observation["lastCompletePushAt"] = last_complete
+    if reason:
+        observation["reason"] = reason
+    return observation
+
+
+def load_status(path: Path) -> dict:
+    try:
+        if path.stat().st_size > 256_000:
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("schemaVersion") != STATUS_SCHEMA_VERSION:
+        return {}
+    projects = payload.get("projects")
+    return projects if isinstance(projects, dict) else {}
+
+
+def write_status(path: Path, projects: dict[str, dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    document = {
+        "schemaVersion": STATUS_SCHEMA_VERSION,
+        "generatedAt": _now_iso(),
+        "projects": projects,
+    }
+    try:
+        temporary.write_text(
+            json.dumps(document, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class McpClient:
@@ -119,9 +236,12 @@ def _tool_data(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def sync_journal(project: dict) -> None:
+def sync_journal(project: dict, previous: dict | None = None) -> dict:
     name = project["name"]
+    prior = previous or {}
+    attempted_at = _now_iso()
     client = McpClient(project["localMcp"])
+    stage = "local"
     try:
         client.connect()
         cursor = ""
@@ -169,27 +289,81 @@ def sync_journal(project: dict) -> None:
                 break
         if not entries:
             print(f"[{name}] no local entries to push")
-            return
+            return _project_observation(
+                prior,
+                result="no_changes",
+                attempted_at=attempted_at,
+                pushed_items=0,
+                skipped_items=0,
+                total_items=0,
+                reason="no_local_entries",
+            )
+        stage = "cloud"
         result = push_journal(project["cloudBase"], project["syncKey"], entries)
         print(
             f"[{name}] received {result.get('received')} local entry(s); "
             f"updated {result.get('stored')} cloud row(s)"
         )
+        synced_at = _now_iso()
+        return _project_observation(
+            prior,
+            result="success",
+            attempted_at=attempted_at,
+            pushed_items=len(entries),
+            skipped_items=0,
+            total_items=len(entries),
+            successful_at=synced_at,
+            complete_at=synced_at,
+        )
     except (urllib.error.URLError, OSError, ValueError, TypeError) as exc:
         print(f"[{name}] journal sync failed: {exc}")
+        reason = "cloud_push_failed" if stage == "cloud" else "local_data_unavailable"
+        return _project_observation(
+            prior,
+            result="failed",
+            attempted_at=attempted_at,
+            pushed_items=0,
+            skipped_items=0,
+            total_items=0,
+            reason=reason,
+        )
 
 
-def sync_project(project: dict) -> None:
+def sync_project(project: dict, previous: dict | None = None) -> dict:
     name = project["name"]
+    prior = previous or {}
+    attempted_at = _now_iso()
+    tools = [str(tool) for tool in project["tools"]]
+    previous_items = prior.get("items")
+    prior_items = previous_items if isinstance(previous_items, dict) else {}
     client = McpClient(project["localMcp"])
     try:
         client.connect()
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"[{name}] local MCP unreachable: {exc}")
-        return
+        items = {
+            tool: _item_observation(
+                prior_items.get(tool, {}),
+                result="failed",
+                attempted_at=attempted_at,
+                reason="local_mcp_unreachable",
+            )
+            for tool in tools
+        }
+        return _project_observation(
+            prior,
+            result="failed",
+            attempted_at=attempted_at,
+            pushed_items=0,
+            skipped_items=len(tools),
+            total_items=len(tools),
+            items=items,
+            reason="local_mcp_unreachable",
+        )
     snapshots: dict[str, str] = {}
     skipped: list[str] = []
-    for tool in project["tools"]:
+    skipped_tools: set[str] = set()
+    for tool in tools:
         try:
             ok, text = client.call_tool(tool)
         except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -198,30 +372,108 @@ def sync_project(project: dict) -> None:
             snapshots[tool] = text
         else:
             skipped.append(f"{tool} ({text[:80]})")
+            skipped_tools.add(tool)
     if not snapshots:
         print(f"[{name}] nothing to push; skipped: {'; '.join(skipped) or 'all tools failed'}")
-        return
+        items = {
+            tool: _item_observation(
+                prior_items.get(tool, {}),
+                result="failed",
+                attempted_at=attempted_at,
+                reason="local_data_unavailable",
+            )
+            for tool in tools
+        }
+        return _project_observation(
+            prior,
+            result="failed",
+            attempted_at=attempted_at,
+            pushed_items=0,
+            skipped_items=len(tools),
+            total_items=len(tools),
+            items=items,
+            reason="local_data_unavailable",
+        )
     try:
         result = push(project["cloudBase"], project["syncKey"], "pc-sync", snapshots)
+        synced_at_raw = result.get("syncedAt")
+        synced_at = (
+            synced_at_raw if isinstance(synced_at_raw, str) and synced_at_raw else attempted_at
+        )
         print(
             f"[{name}] pushed {result.get('stored')} snapshot(s) at {result.get('syncedAt')}"
             + (f"; skipped {len(skipped)}: {'; '.join(skipped)}" if skipped else "")
         )
+        items = {
+            tool: _item_observation(
+                prior_items.get(tool, {}),
+                result="failed" if tool in skipped_tools else "success",
+                attempted_at=attempted_at,
+                successful_at=None if tool in skipped_tools else synced_at,
+                reason="local_data_unavailable" if tool in skipped_tools else None,
+            )
+            for tool in tools
+        }
+        complete_at = synced_at if not skipped_tools else None
+        return _project_observation(
+            prior,
+            result="partial" if skipped_tools else "success",
+            attempted_at=attempted_at,
+            pushed_items=len(snapshots),
+            skipped_items=len(skipped_tools),
+            total_items=len(tools),
+            items=items,
+            successful_at=synced_at,
+            complete_at=complete_at,
+            reason="local_items_unavailable" if skipped_tools else None,
+        )
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"[{name}] cloud push failed: {exc}")
+        items = {
+            tool: _item_observation(
+                prior_items.get(tool, {}),
+                result="failed",
+                attempted_at=attempted_at,
+                reason=(
+                    "local_data_unavailable" if tool in skipped_tools else "cloud_push_failed"
+                ),
+            )
+            for tool in tools
+        }
+        return _project_observation(
+            prior,
+            result="failed",
+            attempted_at=attempted_at,
+            pushed_items=0,
+            skipped_items=len(tools),
+            total_items=len(tools),
+            items=items,
+            reason="cloud_push_failed",
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--status")
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as handle:
         config = json.load(handle)
+    status_path = Path(args.status) if args.status else None
+    statuses = load_status(status_path) if status_path else {}
     for project in config.get("projects", []):
+        project_id = _project_id(project)
+        previous = statuses.get(project_id)
+        prior = previous if isinstance(previous, dict) else {}
         if project.get("kind") == "journal":
-            sync_journal(project)
+            statuses[project_id] = sync_journal(project, prior)
         else:
-            sync_project(project)
+            statuses[project_id] = sync_project(project, prior)
+    if status_path:
+        try:
+            write_status(status_path, statuses)
+        except OSError as exc:
+            print(f"[status] unable to write sync status: {exc}")
     return 0
 
 

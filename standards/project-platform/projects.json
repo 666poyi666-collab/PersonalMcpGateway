@@ -1,20 +1,20 @@
 {
   "standardVersion": 1,
-  "auditedAt": "2026-07-27T20:20:00+08:00",
+  "auditedAt": "2026-07-27T21:45:00+08:00",
   "scope": {
     "formalInventory": "C:\\开发\\README.md",
     "githubOwner": "666poyi666-collab",
-    "officialRepositoryCount": 9,
-    "officialProductCount": 8,
-    "note": "SuixinYiTing has separate development and publication repositories."
+    "officialRepositoryCount": 10,
+    "officialProductCount": 9,
+    "note": "SuixinYiTing has separate development and publication repositories. EchoDiary, VideoFlow, and Math are retained as archived products."
   },
   "securityFindings": [
     {
       "severity": "critical",
       "projectId": "math-mistake-manager",
       "path": "chatgpt-web-automation/auth.json",
-      "finding": "The public repository tracks a non-empty browser authentication state containing cookies and origins.",
-      "requiredAction": "Revoke the affected ChatGPT/browser sessions, remove the file from the current branch, add an ignore rule, and purge the secret from Git history. A normal delete commit alone does not remove historical exposure."
+      "finding": "The repository previously exposed a non-empty browser authentication state containing cookies and origins. It was changed to private and archived on 2026-07-27.",
+      "requiredAction": "Revoke the affected ChatGPT/browser sessions and purge the secret from Git history before any future unarchive. Changing visibility does not invalidate copied cookies or erase historical exposure."
     }
   ],
   "canonicalRoutes": {
@@ -189,15 +189,45 @@
       "priority": "P2"
     },
     {
-      "id": "echodiary",
-      "name": "EchoDiary",
+      "id": "do-not-phone",
+      "name": "不做手机控",
       "lifecycle": "active",
       "runtimeProject": true,
+      "repositoryUrls": [
+        "https://github.com/666poyi666-collab/BuZuoShouJiKong"
+      ],
+      "repositoryPaths": [
+        "C:\\开发\\不做手机控"
+      ],
+      "dataPolicy": "cloud_allowed_with_local_rules",
+      "manifestRelativePath": ".poyi/project-platform.json",
+      "mcp": {
+        "status": "missing",
+        "localEndpoint": null,
+        "localHealth": null,
+        "cloudHealth": null,
+        "localToolCount": 0,
+        "cloudToolCount": 0,
+        "coverage": "No MCP server; local supervision rules and statistics are not exposed to ChatGPT."
+      },
+      "sync": {
+        "status": "partial",
+        "mode": "focuslink_read_only_cloud_client",
+        "pcOffBehavior": "The app can read FocusLink live state directly from its cloud endpoint, but its own rules and statistics do not synchronize bidirectionally."
+      },
+      "requirementsMet": false,
+      "priority": "P2"
+    },
+    {
+      "id": "echodiary",
+      "name": "EchoDiary",
+      "lifecycle": "archived",
+      "runtimeProject": false,
       "repositoryUrls": [
         "https://github.com/666poyi666-collab/EchoDiary"
       ],
       "repositoryPaths": [
-        "C:\\开发\\项目\\EchoDiary\\主项目"
+        "C:\\归档\\代码项目\\封存-20260727\\sources\\EchoDiary"
       ],
       "dataPolicy": "sensitive_cloud_allowed",
       "manifestRelativePath": ".poyi/project-platform.json",
@@ -216,18 +246,23 @@
         "pcOffBehavior": "Room/browser data has no verified cloud replication path."
       },
       "requirementsMet": false,
-      "priority": "P2"
+      "priority": "archived",
+      "archive": {
+        "zip": "C:\\归档\\代码项目\\封存-20260727\\packages\\EchoDiary-20260727.zip",
+        "sha256": "79E9F35BC954429C31EAE4EAAE329134F1B32BF77DDF659776B12A380AC06514",
+        "githubArchived": true
+      }
     },
     {
       "id": "videoflow",
       "name": "VideoFlow",
-      "lifecycle": "active",
-      "runtimeProject": true,
+      "lifecycle": "archived",
+      "runtimeProject": false,
       "repositoryUrls": [
         "https://github.com/666poyi666-collab/VideoFlow"
       ],
       "repositoryPaths": [
-        "C:\\开发\\项目\\VideoFlow"
+        "C:\\归档\\代码项目\\封存-20260727\\sources\\VideoFlow"
       ],
       "dataPolicy": "metadata_cloud_allowed_binaries_opt_in",
       "manifestRelativePath": ".poyi/project-platform.json",
@@ -246,18 +281,25 @@
         "pcOffBehavior": "Jobs and outputs remain local. Large videos should not be copied into D1 or MCP JSON."
       },
       "requirementsMet": false,
-      "priority": "P3"
+      "priority": "archived",
+      "archive": {
+        "zip": "C:\\归档\\代码项目\\封存-20260727\\packages\\VideoFlow-20260727.zip",
+        "sha256": "D302D2FDE56DD3764E2FD15A9C6A70CB12BDAC3FE27C5A0D7085B04D7F32C8B6",
+        "githubArchived": true
+      }
     },
     {
       "id": "math-mistake-manager",
       "name": "Math Mistake Manager",
-      "lifecycle": "inactive_remote_only",
-      "runtimeProject": true,
+      "lifecycle": "archived",
+      "runtimeProject": false,
       "repositoryUrls": [
         "https://github.com/666poyi666-collab/math"
       ],
-      "repositoryPaths": [],
-      "dataPolicy": "unknown_pending_restore",
+      "repositoryPaths": [
+        "C:\\归档\\代码项目\\封存-20260727\\sources\\Math"
+      ],
+      "dataPolicy": "archived_private",
       "manifestRelativePath": ".poyi/project-platform.json",
       "mcp": {
         "status": "missing",
@@ -266,7 +308,7 @@
         "cloudHealth": null,
         "localToolCount": 0,
         "cloudToolCount": 0,
-        "coverage": "No local checkout is available for runtime verification and the public repository contains no MCP implementation."
+        "coverage": "Archived without an MCP implementation."
       },
       "sync": {
         "status": "missing",
@@ -274,17 +316,16 @@
         "pcOffBehavior": "No cloud runtime sync implementation was found."
       },
       "requirementsMet": false,
-      "priority": "P4"
+      "priority": "archived",
+      "archive": {
+        "zip": "C:\\归档\\代码项目\\封存-20260727\\packages\\Math-20260727.zip",
+        "sha256": "B0FA4EC828FC434B21411CCAE17E93008E520CF18BE05479D281E6D972A1D623",
+        "recoveredCommit": "987c5a4fa1f20012e63735156df8e57fadde1d5a",
+        "githubArchived": true
+      }
     }
   ],
   "policyExceptions": [
-    {
-      "id": "do-not-phone",
-      "name": "不做手机控",
-      "path": "C:\\开发\\不做手机控",
-      "dataPolicy": "local_only",
-      "reason": "The product promise explicitly forbids INTERNET permission, accounts, telemetry, and cloud sync. Only user-initiated ADB export is acceptable."
-    },
     {
       "id": "chatgpt-branch-map",
       "name": "ChatGPT Branch Map",
@@ -299,21 +340,24 @@
       "path": "C:\\开发\\mcp开发\\foxlink-cloud-mcp",
       "health": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
       "deployed": true,
-      "remoteBackedUp": false
+      "remoteBackedUp": true,
+      "repositoryUrl": "https://github.com/666poyi666-collab/foxlink-cloud-mcp"
     },
     {
       "id": "journal-cloud-mcp",
       "path": "C:\\开发\\mcp开发\\journal-cloud-mcp",
       "health": "https://journal-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
       "deployed": true,
-      "remoteBackedUp": false
+      "remoteBackedUp": true,
+      "repositoryUrl": "https://github.com/666poyi666-collab/journal-cloud-mcp"
     },
     {
       "id": "watch-cloud-mcp",
       "path": "C:\\开发\\mcp开发\\watch-cloud-mcp",
       "health": "https://watch-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
       "deployed": true,
-      "remoteBackedUp": false
+      "remoteBackedUp": true,
+      "repositoryUrl": "https://github.com/666poyi666-collab/watch-cloud-mcp"
     },
     {
       "id": "focuslink-device-sync-worker",

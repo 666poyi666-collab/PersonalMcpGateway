@@ -14,7 +14,9 @@ FULL_SIZE = (1160, 760)
 # carrying permanent dead space under the last row.
 COMPACT_SIZE = (392, 520)
 MIN_SIZE = (360, 480)
-PROJECT_LAYOUT_VERSION = 2
+# v3 keeps the bounded wire shape but lets the renderer interpret it as
+# normalized, elastic geometry instead of a fixed-pixel canvas.
+PROJECT_LAYOUT_VERSION = 3
 MAX_PROJECT_POSITION = 100_000
 MAX_PROJECT_TILE_SIZE = 20_000
 
@@ -60,7 +62,7 @@ def _coerce_int(value: object, fallback: int | None) -> int | None:
 
 
 def normalize_project_layout(value: object) -> dict[str, dict[str, int]]:
-    """Keep bounded absolute geometry while accepting earlier layout formats."""
+    """Keep layout geometry bounded while preserving legacy migration inputs."""
     if not isinstance(value, dict):
         return {}
     result: dict[str, dict[str, int]] = {}

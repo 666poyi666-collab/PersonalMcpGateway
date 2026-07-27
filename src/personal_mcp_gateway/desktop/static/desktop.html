@@ -44,6 +44,10 @@
   <button type="button" class="view-tab" data-view="activity">活动</button>
   <button type="button" class="view-tab" data-view="extensions">扩展</button>
   <span class="view-rule"></span>
+  <span class="view-live"><i class="dot" id="sbDot" data-status="disconnected"></i><b id="sbState">CONNECTING</b></span>
+  <span class="view-health" id="sbGuard">看护 —</span>
+  <span class="view-health" id="sbSync">—</span>
+  <span class="view-health" id="sbProbe">—</span>
   <span class="view-clock" id="viewClock">LOCAL</span>
 </nav>
 
@@ -59,25 +63,27 @@
 
   <div class="board" id="board">
     <section class="view-panel active" data-panel="overview">
-      <div class="hero-grid">
-        <article class="signal-panel">
-          <div class="signal-copy"><span>REAL-TIME SYSTEM</span><h1 id="heroTitle">正在读取状态</h1><p>所有本地服务、隧道和设备链路</p></div>
-          <strong class="signal-value" id="heroValue">—</strong>
-          <div class="signal-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        </article>
-        <article class="system-panel">
-          <header><span>SYSTEM PULSE</span><i class="dot fs-dot" id="fsDot" data-status="disconnected"></i></header>
-          <div class="system-grid">
-            <div><b id="tileCalls">—</b><span>24H CALLS</span></div>
-            <div><b id="tileRate">—</b><span>SUCCESS</span></div>
-            <div><b id="tileUptime">—</b><span>UPTIME</span></div>
-            <div><b id="tileProbe">—</b><span>PROBE</span></div>
-          </div>
-        </article>
-      </div>
+      <div class="overview-deck">
+        <section class="overview-rail" id="overviewRail" aria-label="全局运行状态">
+          <article class="signal-panel">
+            <div class="signal-copy"><span>REAL-TIME SYSTEM</span><h1 id="heroTitle">正在读取状态</h1><p>本机、云端、隧道与设备链路</p></div>
+            <strong class="signal-value" id="heroValue">—</strong>
+            <div class="signal-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </article>
+          <article class="system-panel">
+            <header><span>SYSTEM PULSE</span><i class="dot fs-dot" id="fsDot" data-status="disconnected"></i></header>
+            <div class="system-grid">
+              <div><b id="tileCalls">—</b><span>24H CALLS</span></div>
+              <div><b id="tileRate">—</b><span>SUCCESS</span></div>
+              <div><b id="tileUptime">—</b><span>UPTIME</span></div>
+              <div><b id="tileProbe">—</b><span>PROBE</span></div>
+            </div>
+          </article>
+        </section>
 
-      <div class="section-kicker"><span>01</span><h2>项目矩阵</h2><i></i></div>
-      <section class="project-grid" id="projectSections"></section>
+        <div class="section-kicker matrix-heading" id="matrixHeading"><span>01</span><h2>项目矩阵</h2><i></i><b id="matrixFitState">AUTO FIT</b></div>
+        <section class="project-grid" id="projectSections" aria-label="项目磁贴"></section>
+      </div>
     </section>
 
     <section class="view-panel" data-panel="activity" hidden>
@@ -110,11 +116,6 @@
     <section class="compact-list" id="compactList"></section>
   </div>
 </main>
-
-<footer class="statusbar">
-  <span><i class="dot" id="sbDot" data-status="disconnected"></i><b id="sbState">CONNECTING</b></span>
-  <span id="sbGuard">看护 —</span><span id="sbSync">—</span><span id="sbProbe">—</span>
-</footer>
 
 <script src="desktop.js"></script>
 </body>

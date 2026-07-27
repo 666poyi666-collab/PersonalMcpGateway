@@ -41,3 +41,7 @@ class Settings(BaseSettings):
     @property
     def board_widgets_path(self) -> Path:
         return self.data_dir / "board-widgets.yaml"
+
+    @property
+    def cloud_sync_status_path(self) -> Path:
+        return self.data_dir / "cloud-sync-status.json"

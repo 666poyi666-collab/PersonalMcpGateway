@@ -63,6 +63,9 @@ const dom = {
   viewClock: el("viewClock"),
   btnCapture: el("btnCapture"),
   btnLayout: el("btnLayout"),
+  overviewRail: el("overviewRail"),
+  matrixHeading: el("matrixHeading"),
+  matrixFitState: el("matrixFitState"),
 };
 
 /* Per-project art direction: the section carries the source project's own
@@ -101,10 +104,12 @@ const PROJECT_STYLE = {
   },
 };
 const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
-const LEGACY_LAYOUT_SCALE = 1000;
-const PROJECT_LAYOUT_VERSION = 2;
+const LAYOUT_SCALE = 1000;
+const PROJECT_LAYOUT_VERSION = 3;
 const MIN_TILE_WIDTH = 120;
 const MIN_TILE_HEIGHT = 104;
+const RENDER_MIN_TILE_WIDTH = 92;
+const RENDER_MIN_TILE_HEIGHT = 82;
 const MAX_TILE_WIDTH = 20000;
 const MAX_TILE_HEIGHT = 20000;
 const MAX_WORKSPACE_POSITION = 100000;
@@ -114,10 +119,10 @@ const AUTO_SCROLL_MAX = 20;
 const RECOVERY_BANNER_FAILURES = 3;
 const SNAP_DISTANCE = 10;
 const DEFAULT_TILE_LAYOUT = {
-  foxlink: { x: 0, y: 0, w: 410, h: 300, order: 0 },
-  watch: { x: 420, y: 0, w: 580, h: 360, order: 1 },
-  journal: { x: 0, y: 372, w: 410, h: 320, order: 2 },
-  personal: { x: 420, y: 372, w: 580, h: 320, order: 3 },
+  foxlink: { x: 0, y: 0, w: 390, h: 470, order: 0 },
+  watch: { x: 400, y: 0, w: 600, h: 470, order: 1 },
+  journal: { x: 0, y: 480, w: 390, h: 520, order: 2 },
+  personal: { x: 400, y: 480, w: 600, h: 520, order: 3 },
 };
 let projectLayout = {};
 let projectLayoutVersion = PROJECT_LAYOUT_VERSION;
@@ -127,6 +132,7 @@ let layoutFrame = 0;
 let interactionScrollFrame = 0;
 let projectCanvasWidth = 0;
 let projectViewportWidth = 0;
+let projectViewportHeight = 0;
 let projectResizeObserver = null;
 let sectionsRendered = false;
 let windowResizeTimer = 0;
@@ -343,6 +349,45 @@ function probeChip(label, probe) {
   return chip;
 }
 
+function syncChip(sync) {
+  const chip = make("div", "sync-chip");
+  const plane = sync && sync.dataPlane ? sync.dataPlane : "unknown";
+  const pcOff = sync && sync.pcOff ? sync.pcOff : {};
+  const observation = sync && sync.observation ? sync.observation : {};
+  const snapshotLabels = {
+    fresh: "快照新鲜",
+    stale: "快照已过期",
+    incomplete: "快照不完整",
+    never_synced: "尚未同步",
+    unknown: "快照待确认",
+  };
+  let mode = "同步未声明";
+  let ability = "关机状态未知";
+  let detail = "未接入统一同步契约";
+
+  if (plane === "cloud_primary") {
+    mode = "云端主库";
+    ability = pcOff.readAvailable && pcOff.writeAvailable ? "关机可读写" : "关机能力受限";
+    detail = pcOff.continuedSync ? "多端持续同步" : "本机副本暂停上行";
+  } else if (plane === "snapshot_mirror") {
+    mode = "云端快照";
+    ability = pcOff.readAvailable ? "关机可读快照" : "关机不可读";
+    detail = `${snapshotLabels[sync.snapshotState] || "快照待确认"} · 关机后不再更新`;
+  } else if (plane === "local_only") {
+    mode = "本机数据";
+    ability = "关机后离线";
+    detail = "依赖 Windows 运行时";
+  }
+
+  chip.dataset.plane = plane;
+  chip.dataset.state = sync && sync.compliance ? sync.compliance : "unknown";
+  chip.append(make("span", null, mode), make("strong", null, ability), make("small", null, detail));
+  chip.title = observation.lastSuccessfulPushAt
+    ? `${detail} · 上次成功 ${clockOf(observation.lastSuccessfulPushAt)}`
+    : detail;
+  return chip;
+}
+
 function gatewayProbeState(probe) {
   if (probe && probe.ok) return "online";
   if (probe && probe.service && probe.service.state === "running") return "degraded";
@@ -536,7 +581,9 @@ function gatewayConsole(target, data) {
   traffic.append(trafficHead, bars);
   telemetry.append(traffic, gatewayLatestSignal(data));
   body.append(serviceMatrix, telemetry);
-  console.append(route, metrics, body);
+  const continuity = syncChip(target.sync);
+  continuity.classList.add("gw-sync-chip");
+  console.append(route, metrics, continuity, body);
   return console;
 }
 
@@ -653,6 +700,34 @@ function watchConsole(target, widgets) {
   return console;
 }
 
+function projectCore(target, widgets, data) {
+  const core = make("div", "proj-core");
+  let label = "LIVE STATE";
+  let value = target.state === "online" ? "READY" : target.state === "degraded" ? "CHECK" : "OFFLINE";
+
+  if (target.id === "personal") {
+    const summary = data.summary || {};
+    label = "ROUTES ONLINE";
+    value = `${num(summary.online)}/${num(summary.total)}`;
+  } else if (target.id === "foxlink") {
+    const focus = widgets.find((widget) => widget.id === "focus_today");
+    label = "TODAY FOCUS";
+    if (focus && focus.ok && focus.data && focus.data.value) value = String(focus.data.value);
+  } else if (target.id === "watch") {
+    const workouts = widgets.find((widget) => widget.id === "watch_workouts");
+    const pairs = widgetPairs(workouts);
+    label = "TOTAL DISTANCE";
+    value = pairs.get("总距离") || value;
+  } else if (target.id === "journal") {
+    const count = widgets.find((widget) => widget.id === "journal_count");
+    label = "TOTAL ENTRIES";
+    if (count && count.ok && count.data && count.data.value != null) value = String(count.data.value);
+  }
+
+  core.append(make("span", null, label), make("strong", null, value));
+  return core;
+}
+
 function sectionDataCards(target, widgets, data) {
   const style = PROJECT_STYLE[target.id];
   const cards = [];
@@ -751,7 +826,7 @@ function renderSections(data) {
     state.append(dot, make("b", null, stateText));
     const grip = make("span", "tile-grip");
     grip.setAttribute("aria-hidden", "true");
-    head.append(naming, state);
+    head.append(naming, state, projectCore(target, widgets, data));
     if (target.id === "personal") {
       const identity = make("div", "gw-identity");
       identity.append(
@@ -766,6 +841,7 @@ function renderSections(data) {
     const vitals = make("div", "proj-vitals");
     vitals.append(probeChip("MCP", target.mcp));
     if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
+    if (target.id !== "personal") vitals.append(syncChip(target.sync));
 
     const dataZone = make("div", "proj-data");
     if (target.id === "personal") dataZone.classList.add("gateway-data");
@@ -1043,51 +1119,65 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function defaultGeometryForTile(projectId, index, viewportWidth) {
-  const base = DEFAULT_TILE_LAYOUT[projectId] || {
+function defaultGeometryForTile(projectId, index) {
+  return { ...(DEFAULT_TILE_LAYOUT[projectId] || {
     x: index % 2 ? 510 : 0,
-    y: Math.floor(index / 2) * 372,
+    y: Math.floor(index / 2) * 510,
     w: 490,
-    h: 360,
+    h: 500,
     order: index,
-  };
-  const scale = viewportWidth / LEGACY_LAYOUT_SCALE;
+  }) };
+}
+
+function layoutBounds(layout) {
+  let right = 0;
+  let bottom = 0;
+  for (const saved of Object.values(layout || {})) {
+    if (!saved || typeof saved !== "object") continue;
+    if (!["x", "y", "w", "h"].every((key) => Number.isFinite(Number(saved[key])))) continue;
+    right = Math.max(right, num(saved.x) + num(saved.w));
+    bottom = Math.max(bottom, num(saved.y) + num(saved.h));
+  }
+  return { right: Math.max(1, right), bottom: Math.max(1, bottom) };
+}
+
+function geometryFromUnits(units, viewportWidth, viewportHeight) {
+  const horizontalScale = viewportWidth / LAYOUT_SCALE;
+  const verticalScale = viewportHeight / LAYOUT_SCALE;
   return {
-    x: Math.round(base.x * scale),
-    y: base.y,
-    w: Math.round(base.w * scale),
-    h: base.h,
-    order: base.order,
+    x: clamp(num(units.x) * horizontalScale, 0, MAX_WORKSPACE_POSITION),
+    y: clamp(num(units.y) * verticalScale, 0, MAX_WORKSPACE_POSITION),
+    w: clamp(num(units.w) * horizontalScale, RENDER_MIN_TILE_WIDTH, MAX_TILE_WIDTH),
+    h: clamp(num(units.h) * verticalScale, RENDER_MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
+    order: clamp(num(units.order), 0, 999),
   };
 }
 
-function geometryForTile(projectId, index, viewportWidth, sourceVersion) {
+function geometryForTile(projectId, index, viewportWidth, viewportHeight, sourceVersion) {
   const saved = projectLayout[projectId] || {};
-  const fallback = defaultGeometryForTile(projectId, index, viewportWidth);
+  const fallback = defaultGeometryForTile(projectId, index);
   const hasFreeform = ["x", "y", "w", "h"].every((key) => Number.isFinite(Number(saved[key])));
   if (hasFreeform) {
-    const legacy = sourceVersion < PROJECT_LAYOUT_VERSION;
-    const width = legacy
-      ? num(saved.w, fallback.w) / LEGACY_LAYOUT_SCALE * viewportWidth
-      : num(saved.w, fallback.w);
-    const left = legacy
-      ? num(saved.x, fallback.x) / LEGACY_LAYOUT_SCALE * viewportWidth
-      : num(saved.x, fallback.x);
-    return {
-      x: clamp(left, 0, MAX_WORKSPACE_POSITION),
-      y: clamp(num(saved.y, fallback.y), 0, MAX_WORKSPACE_POSITION),
-      w: clamp(width, MIN_TILE_WIDTH, MAX_TILE_WIDTH),
-      h: clamp(num(saved.h, fallback.h), MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
-      order: clamp(num(saved.order, fallback.order), 0, 999),
-    };
+    if (sourceVersion >= PROJECT_LAYOUT_VERSION) {
+      return geometryFromUnits({ ...saved, order: num(saved.order, fallback.order) }, viewportWidth, viewportHeight);
+    }
+
+    // v1/v2 stored a mixture of 1000-wide and absolute-pixel geometry. Normalize
+    // the whole saved canvas once so every tile, including off-screen tiles, is
+    // brought into the current window without losing its relative arrangement.
+    const bounds = layoutBounds(projectLayout);
+    return geometryFromUnits({
+      x: num(saved.x) / bounds.right * LAYOUT_SCALE,
+      y: num(saved.y) / bounds.bottom * LAYOUT_SCALE,
+      w: num(saved.w) / bounds.right * LAYOUT_SCALE,
+      h: num(saved.h) / bounds.bottom * LAYOUT_SCALE,
+      order: num(saved.order, fallback.order),
+    }, viewportWidth, viewportHeight);
   }
-  if (Number.isFinite(Number(saved.cols)) || Number.isFinite(Number(saved.rows))) {
-    return {
-      ...fallback,
-      order: clamp(num(saved.order, fallback.order), 0, 999),
-    };
-  }
-  return { ...fallback };
+  return geometryFromUnits({
+    ...fallback,
+    order: clamp(num(saved.order, fallback.order), 0, 999),
+  }, viewportWidth, viewportHeight);
 }
 
 function rectOfTile(tile) {
@@ -1100,11 +1190,15 @@ function rectOfTile(tile) {
 }
 
 function setTileDensity(tile, width, height) {
-  tile.dataset.widthClass = width < 300 ? "small" : width < 500 ? "medium" : "large";
-  tile.dataset.heightClass = height < 210 ? "short" : height < 300 ? "medium" : "tall";
-  tile.classList.toggle("tile-narrow", width < 420);
-  tile.classList.toggle("tile-tiny", width < 250 || height < 185);
-  tile.classList.toggle("tile-micro", width < 180 || height < 140);
+  const area = width * height;
+  const summaryOnly = (width < 185 && height < 165) || area < 24000;
+  const micro = (width < 145 && height < 125) || area < 15500;
+  tile.dataset.widthClass = width < 280 ? "small" : width < 480 ? "medium" : "large";
+  tile.dataset.heightClass = height < 150 ? "short" : height < 225 ? "medium" : "tall";
+  tile.classList.toggle("tile-narrow", width < 390);
+  tile.classList.toggle("tile-summary", summaryOnly);
+  tile.classList.toggle("tile-tiny", summaryOnly);
+  tile.classList.toggle("tile-micro", micro);
 }
 
 function setTileRect(tile, rect) {
@@ -1144,9 +1238,20 @@ function workspaceViewportWidth() {
   return Math.max(MIN_TILE_WIDTH, Math.floor(dom.board.clientWidth - horizontalPadding));
 }
 
+function workspaceViewportHeight() {
+  if (!dom.stage || !dom.board) return 0;
+  const boardStyle = window.getComputedStyle(dom.board);
+  const verticalPadding = num(Number.parseFloat(boardStyle.paddingTop)) + num(Number.parseFloat(boardStyle.paddingBottom));
+  const railHeight = dom.overviewRail ? dom.overviewRail.getBoundingClientRect().height : 92;
+  const headingHeight = dom.matrixHeading ? dom.matrixHeading.getBoundingClientRect().height : 38;
+  return Math.max(260, Math.floor(dom.stage.clientHeight - verticalPadding - railHeight - headingHeight));
+}
+
 function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
   const viewportWidth = workspaceViewportWidth();
+  const viewportHeight = workspaceViewportHeight();
   projectViewportWidth = viewportWidth;
+  projectViewportHeight = viewportHeight;
   let right = extraRect ? extraRect.left + extraRect.width : 0;
   let bottom = extraRect ? extraRect.top + extraRect.height : 0;
   for (const tile of dom.projectSections.querySelectorAll(".proj")) {
@@ -1156,7 +1261,7 @@ function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
   }
   const overflowPadding = right > viewportWidth + 0.5 ? CANVAS_PADDING : 0;
   const wantedWidth = Math.max(viewportWidth, Math.ceil(right + overflowPadding));
-  const wantedHeight = Math.max(260, Math.ceil(bottom + CANVAS_PADDING));
+  const wantedHeight = Math.max(viewportHeight, Math.ceil(bottom + (bottom > viewportHeight + 0.5 ? CANVAS_PADDING : 0)));
   const currentWidth = Number.parseFloat(dom.projectSections.style.width) || wantedWidth;
   const currentHeight = Number.parseFloat(dom.projectSections.style.height) || wantedHeight;
   projectCanvasWidth = allowShrink ? wantedWidth : Math.max(currentWidth, wantedWidth);
@@ -1166,20 +1271,23 @@ function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
 
 function applyProjectLayout(animate = false) {
   const viewportWidth = workspaceViewportWidth();
-  if (viewportWidth <= 0) return;
+  const viewportHeight = workspaceViewportHeight();
+  if (viewportWidth <= 0 || viewportHeight <= 0) return;
   projectViewportWidth = viewportWidth;
+  projectViewportHeight = viewportHeight;
   projectCanvasWidth = viewportWidth;
   dom.projectSections.style.width = `${viewportWidth}px`;
+  dom.projectSections.style.height = `${viewportHeight}px`;
   dom.projectSections.classList.add("free-layout");
   const tiles = [...dom.projectSections.querySelectorAll(".proj")];
   const sourceVersion = projectLayoutVersion;
   tiles.forEach((tile, index) => {
-    const geometry = geometryForTile(tile.dataset.projectId, index, viewportWidth, sourceVersion);
+    const geometry = geometryForTile(tile.dataset.projectId, index, viewportWidth, viewportHeight, sourceVersion);
     const rect = {
       left: geometry.x,
       top: geometry.y,
       width: geometry.w,
-      height: clamp(geometry.h, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT),
+      height: geometry.h,
     };
     tile.style.zIndex = String(geometry.order + 1);
     setTileRect(tile, rect);
@@ -1212,15 +1320,17 @@ function applyProjectLayout(animate = false) {
 function tileLayoutFromDom() {
   const layout = {};
   const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+  const viewportWidth = Math.max(1, projectViewportWidth || workspaceViewportWidth());
+  const viewportHeight = Math.max(1, projectViewportHeight || workspaceViewportHeight());
   const ranked = [...tiles].sort((first, second) => num(first.style.zIndex) - num(second.style.zIndex));
   const orderByTile = new Map(ranked.map((tile, order) => [tile, order]));
   tiles.forEach((tile) => {
     const rect = rectOfTile(tile);
     layout[tile.dataset.projectId] = {
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      w: Math.round(rect.width),
-      h: Math.round(rect.height),
+      x: Math.round(rect.left / viewportWidth * LAYOUT_SCALE),
+      y: Math.round(rect.top / viewportHeight * LAYOUT_SCALE),
+      w: Math.round(rect.width / viewportWidth * LAYOUT_SCALE),
+      h: Math.round(rect.height / viewportHeight * LAYOUT_SCALE),
       order: orderByTile.get(tile) || 0,
     };
   });
@@ -1238,6 +1348,7 @@ function configureTileEditing() {
   const changed = dom.body.classList.contains("layout-mode") !== layoutMode;
   dom.body.classList.toggle("layout-mode", layoutMode);
   dom.btnLayout.setAttribute("aria-pressed", String(layoutMode));
+  if (dom.matrixFitState) dom.matrixFitState.textContent = layoutMode ? "FREE EDIT" : "AUTO FIT";
   if (!layoutMode) hideAlignmentChrome();
   if (changed) {
     const tiles = [...dom.projectSections.querySelectorAll(".proj")];
@@ -1544,12 +1655,10 @@ function observeProjectCanvas() {
   if (projectResizeObserver || typeof ResizeObserver === "undefined") return;
   projectResizeObserver = new ResizeObserver(() => {
     const width = workspaceViewportWidth();
-    if (width <= 0 || width === Math.round(projectViewportWidth)) return;
-    if (!Object.keys(projectLayout).length && !activeTileInteraction) {
-      applyProjectLayout(false);
-    } else {
-      updateProjectCanvasSize(null, true);
-    }
+    const height = workspaceViewportHeight();
+    if (width <= 0 || height <= 0) return;
+    if (width === Math.round(projectViewportWidth) && height === Math.round(projectViewportHeight)) return;
+    if (!activeTileInteraction) applyProjectLayout(false);
   });
   projectResizeObserver.observe(dom.stage);
 }

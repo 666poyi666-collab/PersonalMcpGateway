@@ -4,16 +4,119 @@ import asyncio
 import time
 from collections import deque
 from datetime import UTC, datetime
-from typing import Any, cast
+from pathlib import Path
+from typing import Any, Literal, Self, cast
 from urllib.parse import urlparse
 
 import httpx
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from personal_mcp_gateway.admin import fleet
 from personal_mcp_gateway.admin.widgets import WidgetHub
 from personal_mcp_gateway.core.runtime import GatewayRuntime
+
+
+class PcOffCapability(BaseModel):
+    read_available: bool
+    write_available: bool
+    continued_sync: bool
+
+
+class DashboardSyncProfile(BaseModel):
+    compliance: Literal["complete", "partial", "missing", "exempt"]
+    data_plane: Literal["cloud_primary", "snapshot_mirror", "local_only"]
+    pc_off: PcOffCapability
+    local_dependency: Literal["none", "uplink", "runtime"]
+    stale_after_seconds: int | None = Field(default=None, ge=60)
+
+    @model_validator(mode="after")
+    def prevent_false_power_off_claims(self) -> Self:
+        if self.data_plane == "snapshot_mirror":
+            if self.stale_after_seconds is None:
+                raise ValueError("snapshot_mirror requires stale_after_seconds")
+            if self.pc_off.continued_sync:
+                raise ValueError("snapshot_mirror cannot claim continued sync")
+        if self.data_plane == "local_only" and (
+            self.pc_off.read_available
+            or self.pc_off.write_available
+            or self.pc_off.continued_sync
+        ):
+            raise ValueError("local_only cannot claim power-off availability")
+        if self.pc_off.continued_sync and not (
+            self.pc_off.read_available and self.pc_off.write_available
+        ):
+            raise ValueError("continued sync requires power-off read and write availability")
+        return self
+
+
+SyncFailureReason = Literal[
+    "local_mcp_unreachable",
+    "local_data_unavailable",
+    "cloud_push_failed",
+    "local_items_unavailable",
+    "no_local_entries",
+]
+
+
+def _require_aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        raise ValueError("sync timestamps must include a timezone")
+    return value
+
+
+class CloudSyncItemObservation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    result: Literal["success", "failed"]
+    last_attempt_at: datetime = Field(alias="lastAttemptAt")
+    last_successful_push_at: datetime | None = Field(
+        default=None, alias="lastSuccessfulPushAt"
+    )
+    reason: SyncFailureReason | None = None
+
+    _timestamps_are_aware = field_validator(
+        "last_attempt_at", "last_successful_push_at"
+    )(_require_aware)
+
+
+def _empty_sync_items() -> dict[str, CloudSyncItemObservation]:
+    return {}
+
+
+class CloudSyncObservation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    result: Literal["success", "partial", "failed", "no_changes"]
+    source: Literal["pc-sync"]
+    last_attempt_at: datetime = Field(alias="lastAttemptAt")
+    last_successful_push_at: datetime | None = Field(
+        default=None, alias="lastSuccessfulPushAt"
+    )
+    last_complete_push_at: datetime | None = Field(default=None, alias="lastCompletePushAt")
+    pushed_items: int = Field(default=0, alias="pushedItems", ge=0)
+    skipped_items: int = Field(default=0, alias="skippedItems", ge=0)
+    total_items: int = Field(default=0, alias="totalItems", ge=0)
+    reason: SyncFailureReason | None = None
+    items: dict[str, CloudSyncItemObservation] = Field(default_factory=_empty_sync_items)
+
+    _timestamps_are_aware = field_validator(
+        "last_attempt_at", "last_successful_push_at", "last_complete_push_at"
+    )(_require_aware)
+
+
+def _empty_sync_projects() -> dict[str, CloudSyncObservation]:
+    return {}
+
+
+class CloudSyncStatusDocument(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    schema_version: Literal[1] = Field(alias="schemaVersion")
+    generated_at: datetime = Field(alias="generatedAt")
+    projects: dict[str, CloudSyncObservation] = Field(default_factory=_empty_sync_projects)
+
+    _generated_at_is_aware = field_validator("generated_at")(_require_aware)
 
 
 class DashboardTarget(BaseModel):
@@ -27,6 +130,7 @@ class DashboardTarget(BaseModel):
     tunnel_ready_url: str | None = None
     mcp_service: str | None = None
     tunnel_service: str | None = None
+    sync: DashboardSyncProfile | None = None
     enabled: bool = True
 
     @field_validator("health_url", "ready_url", "tunnel_ready_url")
@@ -66,6 +170,16 @@ DEFAULT_TARGETS = (
         tunnel_ready_url="http://127.0.0.1:8877/readyz",
         mcp_service="PoyiPersonalMcpGateway",
         tunnel_service="OpenAISecureMcpTunnel",
+        sync=DashboardSyncProfile(
+            compliance="missing",
+            data_plane="local_only",
+            pc_off=PcOffCapability(
+                read_available=False,
+                write_available=False,
+                continued_sync=False,
+            ),
+            local_dependency="runtime",
+        ),
     ),
     DashboardTarget(
         id="watch",
@@ -78,6 +192,17 @@ DEFAULT_TARGETS = (
         tunnel_ready_url="http://127.0.0.1:8880/readyz",
         mcp_service="PoyiWatchMcp",
         tunnel_service="PoyiWatchTunnel",
+        sync=DashboardSyncProfile(
+            compliance="partial",
+            data_plane="snapshot_mirror",
+            pc_off=PcOffCapability(
+                read_available=True,
+                write_available=False,
+                continued_sync=False,
+            ),
+            local_dependency="uplink",
+            stale_after_seconds=3 * 60 * 60,
+        ),
     ),
     DashboardTarget(
         id="foxlink",
@@ -90,6 +215,17 @@ DEFAULT_TARGETS = (
         tunnel_ready_url="http://127.0.0.1:8878/readyz",
         mcp_service="PoyiFoxlinkMcp",
         tunnel_service="FoxlinkSecureMcpTunnel",
+        sync=DashboardSyncProfile(
+            compliance="partial",
+            data_plane="snapshot_mirror",
+            pc_off=PcOffCapability(
+                read_available=True,
+                write_available=False,
+                continued_sync=False,
+            ),
+            local_dependency="uplink",
+            stale_after_seconds=3 * 60 * 60,
+        ),
     ),
     DashboardTarget(
         id="journal",
@@ -102,8 +238,78 @@ DEFAULT_TARGETS = (
         tunnel_ready_url="http://127.0.0.1:8887/readyz",
         mcp_service="PoyiJournalMcp",
         tunnel_service="PoyiJournalTunnel",
+        sync=DashboardSyncProfile(
+            compliance="partial",
+            data_plane="cloud_primary",
+            pc_off=PcOffCapability(
+                read_available=True,
+                write_available=True,
+                continued_sync=False,
+            ),
+            local_dependency="uplink",
+        ),
     ),
 )
+
+
+def load_cloud_sync_observations(path: Path) -> dict[str, CloudSyncObservation]:
+    try:
+        if path.stat().st_size > 256_000:
+            return {}
+        document = CloudSyncStatusDocument.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return document.projects
+
+
+def _snapshot_state(
+    profile: DashboardSyncProfile,
+    observation: CloudSyncObservation | None,
+    now: datetime,
+) -> Literal["fresh", "stale", "incomplete", "never_synced", "unknown", "not_applicable"]:
+    if profile.data_plane != "snapshot_mirror":
+        return "not_applicable"
+    if observation is None:
+        return "unknown"
+    successful_at = [
+        item.last_successful_push_at
+        for item in observation.items.values()
+        if item.last_successful_push_at is not None
+    ]
+    if not successful_at:
+        return "never_synced"
+    if observation.total_items > len(successful_at):
+        return "incomplete"
+    oldest = min(successful_at)
+    threshold = profile.stale_after_seconds
+    if threshold is not None and (now - oldest).total_seconds() > threshold:
+        return "stale"
+    return "fresh"
+
+
+def _sync_payload(
+    profile: DashboardSyncProfile,
+    observation: CloudSyncObservation | None,
+    now: datetime,
+) -> dict[str, Any]:
+    runtime: dict[str, Any]
+    if observation is None:
+        runtime = {"result": "unknown"}
+    else:
+        runtime = observation.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return {
+        "compliance": profile.compliance,
+        "dataPlane": profile.data_plane,
+        "pcOff": {
+            "readAvailable": profile.pc_off.read_available,
+            "writeAvailable": profile.pc_off.write_available,
+            "continuedSync": profile.pc_off.continued_sync,
+        },
+        "localDependency": profile.local_dependency,
+        "staleAfterSeconds": profile.stale_after_seconds,
+        "snapshotState": _snapshot_state(profile, observation, now),
+        "observation": runtime,
+    }
 
 
 class DashboardMonitor:
@@ -138,11 +344,16 @@ class DashboardMonitor:
             }
             | {fleet.WATCHDOG_SERVICE}
         )
-        service_states, probed = await asyncio.gather(
+        service_states, probed, sync_observations = await asyncio.gather(
             asyncio.to_thread(fleet.query_service_states, service_names),
             self._probe_all(targets),
+            asyncio.to_thread(
+                load_cloud_sync_observations, self.runtime.settings.cloud_sync_status_path
+            ),
         )
-        target_states = self._attach_services(targets, probed, service_states)
+        target_states = self._attach_services(
+            targets, probed, service_states, sync_observations=sync_observations
+        )
         activity, recent, widgets = await asyncio.gather(
             self._activity(), self._recent_invocations(), self.widgets.snapshot()
         )
@@ -200,7 +411,10 @@ class DashboardMonitor:
         targets: list[DashboardTarget],
         probed: list[dict[str, Any]],
         service_states: dict[str, str],
+        sync_observations: dict[str, CloudSyncObservation] | None = None,
     ) -> list[dict[str, Any]]:
+        observed = sync_observations or {}
+        now = datetime.now(UTC)
         for target, payload in zip(targets, probed, strict=True):
             if target.mcp_service and isinstance(payload.get("mcp"), dict):
                 payload["mcp"]["service"] = {
@@ -212,6 +426,9 @@ class DashboardMonitor:
                     "name": target.tunnel_service,
                     "state": service_states.get(target.tunnel_service, "unknown"),
                 }
+            payload["sync"] = (
+                _sync_payload(target.sync, observed.get(target.id), now) if target.sync else None
+            )
         return probed
 
     def _record_state_changes(self, targets: list[dict[str, Any]]) -> None:
@@ -248,11 +465,13 @@ class DashboardMonitor:
                     # the default services for the same id.
                     default = targets.get(target.id)
                     if default is not None:
-                        updates: dict[str, str] = {}
+                        updates: dict[str, Any] = {}
                         if target.mcp_service is None and default.mcp_service:
                             updates["mcp_service"] = default.mcp_service
                         if target.tunnel_service is None and default.tunnel_service:
                             updates["tunnel_service"] = default.tunnel_service
+                        if target.sync is None and default.sync:
+                            updates["sync"] = default.sync
                         if updates:
                             target = target.model_copy(update=updates)
                     targets[target.id] = target

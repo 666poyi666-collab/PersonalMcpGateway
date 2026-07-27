@@ -9,4 +9,13 @@ targets:
     health_url: http://127.0.0.1:8790/healthz
     ready_url: http://127.0.0.1:8790/readyz
     tunnel_ready_url: http://127.0.0.1:8890/readyz
+    # Declare only capabilities that have passed the power-off acceptance gates.
+    sync:
+      compliance: missing
+      data_plane: local_only  # cloud_primary | snapshot_mirror | local_only
+      pc_off:
+        read_available: false
+        write_available: false
+        continued_sync: false
+      local_dependency: runtime  # none | uplink | runtime
     enabled: true

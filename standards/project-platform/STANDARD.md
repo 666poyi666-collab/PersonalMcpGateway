@@ -26,6 +26,18 @@ The cloud service must never claim an offline device is online. Commands that
 require hardware return `device_offline`, `lastSyncAt`, and an expiry-aware
 queued state where supported.
 
+Dashboard and operational APIs use the following data-plane terms without
+weakening that definition:
+
+- `cloud_primary`: a durable cloud database remains available while Windows is
+  off; this alone does not prove device synchronization or later reconciliation;
+- `snapshot_mirror`: the cloud retains the last successful Windows/device
+  snapshot; this is remote read availability, not continued synchronization;
+- `local_only`: the runtime or data requires the Windows PC.
+
+Power-off read availability, write availability, and continued synchronization
+must be represented separately. A UI must not derive one from another.
+
 ## 2. Canonical routes
 
 New implementations use these exact routes:
@@ -158,5 +170,6 @@ does not satisfy gates 5-7.
 3. Connect FocusLink's production device-sync data to its cloud MCP instead of
    relying on the Windows snapshot mirror.
 4. Move Personal Gateway diagnostics to a small cloud control-plane MCP.
-5. Add scoped MCP and sync adapters to EchoDiary, VideoFlow, SuixinYiTing, and
-   the math project according to their data inventories.
+5. Add scoped MCP and sync adapters to SuixinYiTing and other active products
+   according to their data inventories. EchoDiary, VideoFlow, and Math are
+   archived and excluded unless they are explicitly restored.

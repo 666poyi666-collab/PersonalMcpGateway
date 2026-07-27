@@ -19,7 +19,12 @@ from personal_mcp_gateway.desktop.client import (
     STATUS_ONLINE,
     DesktopSnapshot,
 )
-from personal_mcp_gateway.desktop.window_state import COMPACT_SIZE, load_state, state_path
+from personal_mcp_gateway.desktop.window_state import (
+    COMPACT_SIZE,
+    PROJECT_LAYOUT_VERSION,
+    load_state,
+    state_path,
+)
 
 
 class FakeClient:
@@ -197,7 +202,7 @@ def test_snapshot_payload_carries_the_view_preferences() -> None:
         "desktopMode": False,
         "theme": "light",
         "adminUrl": "http://127.0.0.1:8761",
-        "projectLayoutVersion": 2,
+        "projectLayoutVersion": PROJECT_LAYOUT_VERSION,
         "projectLayout": {},
     }
     assert payload["stale"] is False
@@ -297,9 +302,14 @@ def test_project_layout_is_validated_and_persisted() -> None:
         "h": 344,
         "order": 1,
     }
-    assert load_state(state_path()).project_layout == payload["view"]["projectLayout"]
+    persisted = load_state(state_path())
+    assert payload["view"]["projectLayoutVersion"] == PROJECT_LAYOUT_VERSION
+    assert persisted.project_layout == payload["view"]["projectLayout"]
+    assert persisted.project_layout_version == PROJECT_LAYOUT_VERSION
 
-    assert api.reset_project_layout()["view"]["projectLayout"] == {}
+    reset = api.reset_project_layout()["view"]
+    assert reset["projectLayout"] == {}
+    assert reset["projectLayoutVersion"] == PROJECT_LAYOUT_VERSION
 
 
 def test_capture_uses_the_native_window_without_activating_it(

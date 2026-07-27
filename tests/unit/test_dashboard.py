@@ -1,6 +1,11 @@
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from personal_mcp_gateway.admin.dashboard import DashboardMonitor
+from personal_mcp_gateway.admin.dashboard import (
+    DashboardMonitor,
+    load_cloud_sync_observations,
+)
 from personal_mcp_gateway.core.registry import ModuleRegistry
 from personal_mcp_gateway.core.runtime import GatewayRuntime
 from personal_mcp_gateway.settings import Settings
@@ -63,3 +68,136 @@ targets:
 
     assert [target.id for target in targets] == ["personal", "watch", "foxlink", "journal"]
     assert warning is not None
+
+
+def test_default_sync_contract_separates_cloud_snapshot_and_local_runtime(tmp_path: Path) -> None:
+    targets, warning = build_monitor(tmp_path).targets()
+    by_id = {target.id: target.sync for target in targets}
+
+    assert warning is None
+    assert by_id["journal"] is not None
+    assert by_id["journal"].data_plane == "cloud_primary"
+    assert by_id["journal"].pc_off.read_available is True
+    assert by_id["journal"].pc_off.write_available is True
+    assert by_id["journal"].pc_off.continued_sync is False
+    assert by_id["watch"] is not None
+    assert by_id["watch"].data_plane == "snapshot_mirror"
+    assert by_id["watch"].pc_off.read_available is True
+    assert by_id["watch"].pc_off.write_available is False
+    assert by_id["watch"].pc_off.continued_sync is False
+    assert by_id["personal"] is not None
+    assert by_id["personal"].data_plane == "local_only"
+    assert by_id["personal"].local_dependency == "runtime"
+
+
+def test_existing_target_override_keeps_default_sync_contract(tmp_path: Path) -> None:
+    monitor = build_monitor(tmp_path)
+    tmp_path.joinpath("dashboard-targets.yaml").write_text(
+        """
+targets:
+  - id: watch
+    name: Watch custom
+    description: custom
+    icon: watch
+    accent: '#fff'
+    health_url: http://127.0.0.1:8768/healthz
+    ready_url: http://127.0.0.1:8768/readyz
+""",
+        encoding="utf-8",
+    )
+
+    targets, warning = monitor.targets()
+    watch = next(target for target in targets if target.id == "watch")
+
+    assert warning is None
+    assert watch.sync is not None
+    assert watch.sync.data_plane == "snapshot_mirror"
+
+
+def test_dashboard_rejects_snapshot_mirror_that_claims_continued_sync(tmp_path: Path) -> None:
+    monitor = build_monitor(tmp_path)
+    tmp_path.joinpath("dashboard-targets.yaml").write_text(
+        """
+targets:
+  - id: demo
+    name: Demo
+    description: invalid sync claim
+    icon: service
+    accent: '#fff'
+    health_url: http://127.0.0.1:8790/healthz
+    ready_url: http://127.0.0.1:8790/readyz
+    sync:
+      compliance: complete
+      data_plane: snapshot_mirror
+      stale_after_seconds: 3600
+      pc_off:
+        read_available: true
+        write_available: true
+        continued_sync: true
+      local_dependency: none
+""",
+        encoding="utf-8",
+    )
+
+    targets, warning = monitor.targets()
+
+    assert [target.id for target in targets] == ["personal", "watch", "foxlink", "journal"]
+    assert warning is not None
+
+
+def test_sync_status_is_sanitized_and_attached_with_conservative_freshness(
+    tmp_path: Path,
+) -> None:
+    monitor = build_monitor(tmp_path)
+    now = datetime.now(UTC)
+    status = {
+        "schemaVersion": 1,
+        "generatedAt": now.isoformat(),
+        "projects": {
+            "watch": {
+                "result": "partial",
+                "source": "pc-sync",
+                "lastAttemptAt": now.isoformat(),
+                "lastSuccessfulPushAt": now.isoformat(),
+                "pushedItems": 1,
+                "skippedItems": 1,
+                "totalItems": 2,
+                "reason": "local_items_unavailable",
+                "privateError": "must not escape",
+                "items": {
+                    "fresh": {
+                        "result": "success",
+                        "lastAttemptAt": now.isoformat(),
+                        "lastSuccessfulPushAt": now.isoformat(),
+                    },
+                    "old": {
+                        "result": "failed",
+                        "lastAttemptAt": now.isoformat(),
+                        "lastSuccessfulPushAt": (now - timedelta(hours=4)).isoformat(),
+                        "reason": "local_data_unavailable",
+                    },
+                },
+            }
+        },
+    }
+    monitor.runtime.settings.cloud_sync_status_path.write_text(
+        json.dumps(status), encoding="utf-8"
+    )
+    observations = load_cloud_sync_observations(monitor.runtime.settings.cloud_sync_status_path)
+    watch = next(target for target in monitor.targets()[0] if target.id == "watch")
+    payload = DashboardMonitor._attach_services(  # pyright: ignore[reportPrivateUsage]
+        [watch],
+        [{"mcp": {"ok": True}, "tunnel": None}],
+        {},
+        sync_observations=observations,
+    )[0]
+
+    assert payload["sync"]["dataPlane"] == "snapshot_mirror"
+    assert payload["sync"]["pcOff"] == {
+        "readAvailable": True,
+        "writeAvailable": False,
+        "continuedSync": False,
+    }
+    assert payload["sync"]["snapshotState"] == "stale"
+    assert payload["sync"]["observation"]["source"] == "pc-sync"
+    assert "privateError" not in payload["sync"]["observation"]
