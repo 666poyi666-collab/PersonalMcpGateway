@@ -396,6 +396,18 @@ function Test-ManifestAgainstRegistry(
             )
         }
     }
+    if (Test-HasProperty $Project.mcp 'toolContractId') {
+        if ($Manifest.mcp.toolContractId -ne $Project.mcp.toolContractId) {
+            Add-ManifestIssue $IssueList $projectId (
+                "mcp.toolContractId must be $($Project.mcp.toolContractId)"
+            )
+        }
+        if (-not (Test-StringSetEqual @($Manifest.mcp.requiredScopes) @($Project.mcp.requiredScopes))) {
+            Add-ManifestIssue $IssueList $projectId (
+                'mcp.requiredScopes must exactly match the registry'
+            )
+        }
+    }
     if (Test-HasProperty $Project.sync 'dataPlane') {
         if ($Manifest.sync.dataPlane -ne $Project.sync.dataPlane) {
             Add-ManifestIssue $IssueList $projectId (
@@ -428,6 +440,13 @@ function Test-ManifestAgainstRegistry(
                 "sync.contractId must be $($Project.sync.contractId)"
             )
         }
+    } elseif (
+        $Manifest.sync.status -in @('partial', 'complete') -and
+        (Test-HasProperty $Manifest.sync 'contractId')
+    ) {
+        Add-ManifestIssue $IssueList $projectId (
+            "manifest declares unregistered sync.contractId $($Manifest.sync.contractId)"
+        )
     }
 }
 
@@ -679,12 +698,13 @@ function Test-ProtocolContracts(
     [System.Collections.Generic.List[string]]$IssueList,
     [System.Collections.Generic.List[string]]$GapList
 ) {
-    $contractIds = @($Registry.protocolContracts | ForEach-Object { $_.id })
+    $contracts = @($Registry.protocolContracts | Where-Object { $null -ne $_ })
+    $contractIds = @($contracts | ForEach-Object { $_.id })
     foreach ($duplicate in @($contractIds | Group-Object | Where-Object Count -gt 1)) {
         $IssueList.Add("Duplicate protocol contract id: $($duplicate.Name)")
     }
 
-    foreach ($contract in @($Registry.protocolContracts)) {
+    foreach ($contract in $contracts) {
         $artifactFields = @(
             'schemaRelativePath',
             'requestFixtureRelativePath',
@@ -746,6 +766,130 @@ function Test-ProtocolContracts(
                         "$($contract.id)/$($consumer.id): $field differs from canonical artifact"
                     )
                 }
+            }
+        }
+
+        foreach ($projectId in $projectIds) {
+            $mappedConsumers = @(
+                $contract.consumers | Where-Object {
+                    (Test-HasProperty $_ 'projectIds') -and
+                    $projectId -in @($_.projectIds)
+                }
+            )
+            if ($mappedConsumers.Count -eq 0) {
+                $GapList.Add(
+                    "$($contract.id): project $projectId has no registered contract consumer"
+                )
+            }
+        }
+    }
+
+    foreach ($project in @(
+            $Registry.projects | Where-Object {
+                $_.lifecycle -eq 'active' -and
+                $_.runtimeProject -eq $true -and
+                $_.sync.status -in @('partial', 'complete') -and
+                (Test-HasProperty $_.sync 'contractId')
+            }
+        )) {
+        $matches = @(
+            $contracts | Where-Object id -eq $project.sync.contractId
+        )
+        if ($matches.Count -ne 1 -or $project.id -notin @($matches[0].projectIds)) {
+            $GapList.Add(
+                "$($project.id): sync.contractId $($project.sync.contractId) is not registered for the project"
+            )
+        }
+    }
+}
+
+function Test-McpContracts(
+    [object]$Registry,
+    [string]$RegistryDirectory,
+    [System.Collections.Generic.List[string]]$IssueList,
+    [System.Collections.Generic.List[string]]$GapList
+) {
+    $contractIds = @($Registry.mcpContracts | ForEach-Object { $_.id })
+    foreach ($duplicate in @($contractIds | Group-Object | Where-Object Count -gt 1)) {
+        $IssueList.Add("Duplicate MCP contract id: $($duplicate.Name)")
+    }
+
+    foreach ($contract in @($Registry.mcpContracts)) {
+        $project = @($Registry.projects | Where-Object id -eq $contract.projectId)
+        if ($project.Count -ne 1) {
+            $IssueList.Add("$($contract.id): unknown project $($contract.projectId)")
+            continue
+        }
+        if ($project[0].mcp.toolContractId -ne $contract.id) {
+            $IssueList.Add(
+                "$($contract.id): project $($contract.projectId) must register mcp.toolContractId"
+            )
+        }
+
+        $requiredScopes = @($contract.requiredScopes)
+        $projectScopes = @($project[0].mcp.requiredScopes)
+        $canonicalScopes = @($Registry.oauthOwnerTrust.canonicalScopes)
+        if (
+            $requiredScopes.Count -eq 0 -or
+            (Compare-Object $requiredScopes $projectScopes) -or
+            @($requiredScopes | Where-Object { $_ -notin $canonicalScopes }).Count -gt 0
+        ) {
+            $IssueList.Add(
+                "$($contract.id): required scopes must exactly match the registered canonical OAuth scopes"
+            )
+        }
+
+        $tools = @($contract.canonicalTools)
+        if (
+            $tools.Count -eq 0 -or
+            @($tools | Group-Object | Where-Object Count -gt 1).Count -gt 0 -or
+            @($tools | Where-Object { $_ -notmatch '^focuslink_[a-z0-9_]+$' }).Count -gt 0
+        ) {
+            $IssueList.Add("$($contract.id): canonical tool names are missing, duplicate, or invalid")
+        }
+        foreach ($alias in @($contract.compatibilityAliases.psobject.Properties)) {
+            if ($alias.Name -notmatch '^foxlink_[a-z0-9_]+$' -or $alias.Value -notin $tools) {
+                $IssueList.Add("$($contract.id): invalid compatibility alias $($alias.Name)")
+            }
+        }
+
+        $artifactFields = @(
+            'schemaRelativePath',
+            'requestFixtureRelativePath',
+            'responseFixtureRelativePath'
+        )
+        $canonicalHashes = @{}
+        foreach ($field in $artifactFields) {
+            $relativePath = [string]$contract.$field
+            $path = Join-Path $RegistryDirectory $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                $IssueList.Add("$($contract.id): missing canonical MCP artifact $relativePath")
+                continue
+            }
+            try {
+                Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
+            } catch {
+                $IssueList.Add("$($contract.id): invalid JSON in canonical MCP artifact $relativePath")
+                continue
+            }
+            $canonicalHashes[$field] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        }
+
+        $consumer = $contract.consumer
+        if (-not (Test-Path -LiteralPath $consumer.repositoryPath -PathType Container)) {
+            $GapList.Add("$($contract.id)/$($consumer.id): consumer repository path is missing")
+            continue
+        }
+        foreach ($field in $artifactFields) {
+            if (-not $canonicalHashes.ContainsKey($field)) { continue }
+            $consumerPath = Join-Path $consumer.repositoryPath $consumer.$field
+            if (-not (Test-Path -LiteralPath $consumerPath -PathType Leaf)) {
+                $GapList.Add("$($contract.id)/$($consumer.id): missing $($consumer.$field)")
+                continue
+            }
+            $consumerHash = (Get-FileHash -LiteralPath $consumerPath -Algorithm SHA256).Hash
+            if ($consumerHash -ne $canonicalHashes[$field]) {
+                $IssueList.Add("$($contract.id)/$($consumer.id): $field differs from canonical artifact")
             }
         }
     }
@@ -930,8 +1074,20 @@ foreach ($project in $registry.projects) {
     }
 }
 
-if ($registry.protocolContracts) {
+if (
+    $registry.protocolContracts -or
+    @(
+        $registry.projects | Where-Object {
+            $_.lifecycle -eq 'active' -and
+            $_.runtimeProject -eq $true -and
+            (Test-HasProperty $_.sync 'contractId')
+        }
+    ).Count -gt 0
+) {
     Test-ProtocolContracts $registry $registryDirectory $issues $contractGaps
+}
+if ($registry.mcpContracts) {
+    Test-McpContracts $registry $registryDirectory $issues $contractGaps
 }
 Test-OAuthOwnerTrust $registry $issues $contractGaps
 

@@ -1,0 +1,10 @@
+{
+  "contractVersion": 1,
+  "tool": "focuslink_get_task_summary",
+  "requiredScope": "focuslink:read",
+  "arguments": {
+    "from": 1785168000000,
+    "to": 1785254400000,
+    "limit": 20
+  }
+}

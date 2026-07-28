@@ -97,6 +97,25 @@ class Database:
 
         await self._run(operation)
 
+    async def readiness(self) -> dict[str, Any]:
+        """Verify that the live database is readable and fully migrated."""
+
+        def operation(connection: sqlite3.Connection) -> dict[str, Any]:
+            integrity = connection.execute("PRAGMA quick_check(1)").fetchone()
+            integrity_state = str(integrity[0]) if integrity else "missing"
+            row = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+            schema_version = int(row[0] or 0) if row else 0
+            expected_schema_version = len(MIGRATIONS)
+            if integrity_state != "ok" or schema_version != expected_schema_version:
+                raise RuntimeError("database_not_ready")
+            return {
+                "state": "ready",
+                "schemaVersion": schema_version,
+                "expectedSchemaVersion": expected_schema_version,
+            }
+
+        return await self._run(operation)
+
     async def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> int:
         """Execute one serialized statement and return its affected row count."""
 

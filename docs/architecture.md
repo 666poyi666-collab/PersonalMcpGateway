@@ -12,8 +12,9 @@ adapter.
 SQLite uses WAL and stores operational state only. Plans, workouts, routes, sleep records, journal
 content, and Foxlink history remain in their source applications.
 
-`/healthz` means the process is alive. `/readyz` means MCP can accept requests; an offline or failed
-adapter degrades module health but does not make the gateway unready.
+`/healthz` means the process is alive. `/readyz` probes the live SQLite database and its migration
+version before reporting ready; an offline or failed adapter degrades module health but does not
+take the whole gateway down.
 
 ## Compatibility boundary
 

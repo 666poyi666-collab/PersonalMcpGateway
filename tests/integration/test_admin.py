@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -20,9 +21,51 @@ async def test_ready_does_not_require_modules(tmp_path: Path) -> None:
     ) as client:
         response = await client.get("/readyz")
         assert response.status_code == 200
-        assert response.json() == {"gateway": "ready", "modules": {}}
+        assert response.json() == {
+            "ready": True,
+            "gateway": "ready",
+            "dependencies": {
+                "database": {
+                    "state": "ready",
+                    "schemaVersion": 1,
+                    "expectedSchemaVersion": 1,
+                }
+            },
+            "modules": {},
+            "degraded": False,
+            "unavailableModules": [],
+        }
         forbidden = await client.post("/admin/modules/example/restart")
         assert forbidden.status_code == 403
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_ready_fails_closed_when_the_live_database_probe_fails(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, modules_dir=tmp_path / "missing")
+    runtime = GatewayRuntime(settings, Database(settings.database_path), ModuleRegistry())
+    await runtime.start()
+    async with AsyncClient(
+        transport=ASGITransport(app=build_admin_app(runtime)), base_url="http://test"
+    ) as client:
+        with patch.object(
+            runtime.database,
+            "readiness",
+            new=AsyncMock(side_effect=OSError("fixture database unavailable")),
+        ):
+            response = await client.get("/readyz")
+            metrics = await client.get("/metrics")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "ready": False,
+        "gateway": "unavailable",
+        "dependencies": {"database": {"state": "unavailable"}},
+        "modules": {},
+        "degraded": False,
+        "unavailableModules": [],
+    }
+    assert "personal_mcp_ready 0" in metrics.text
     await runtime.stop()
 
 

@@ -243,7 +243,10 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
     foxlink_origin = "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev"
     assert focus["publicCloudBaseUrl"] == foxlink_origin
     assert focus["mcp"]["cloudBaseUrl"] == foxlink_origin
+    assert focus["mcp"]["toolContractId"] == "focuslink-cloud-mcp-v1"
+    assert focus["mcp"]["requiredScopes"] == ["focuslink:read"]
     assert focus["sync"]["cloudBaseUrl"] == foxlink_origin
+    assert focus["sync"]["contractId"] == "sync-envelope-v1"
     assert focus["internalAuthority"]["exposure"] == "edge_contained_noncanonical"
     assert focus["internalAuthority"]["publiclyReachable"] is False
     assert focus["internalAuthority"]["publicCanonical"] is False
@@ -261,6 +264,24 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
     assert support["focuslink-device-sync-worker"]["private"] is False
     assert support["focuslink-device-sync-worker"]["registeredInManifest"] is False
     assert "health" not in support["focuslink-device-sync-worker"]
+
+    sync_contract = next(
+        contract
+        for contract in cast(list[JsonObject], registry["protocolContracts"])
+        if contract["id"] == "sync-envelope-v1"
+    )
+    assert {"focuslink", "suixinyiting", "do-not-phone"} <= set(
+        cast(list[str], sync_contract["projectIds"])
+    )
+    mcp_contract = cast(list[JsonObject], registry["mcpContracts"])[0]
+    assert mcp_contract["id"] == "focuslink-cloud-mcp-v1"
+    assert mcp_contract["requiredScopes"] == ["focuslink:read"]
+    assert mcp_contract["canonicalTools"] == [
+        "focuslink_get_status",
+        "focuslink_get_today_summary",
+        "focuslink_list_focus_records",
+        "focuslink_get_task_summary",
+    ]
 
 
 def test_sync_envelope_v1_rejects_plaintext_and_legacy_drafts() -> None:
@@ -308,6 +329,91 @@ def test_sync_envelope_v1_rejects_plaintext_and_legacy_drafts() -> None:
     assert all(not validator.is_valid(candidate) for candidate in invalid)
 
 
+def test_focuslink_cloud_mcp_contract_is_read_only_scoped_and_truthful() -> None:
+    schema = load_json(PLATFORM / "contracts" / "focuslink-cloud-mcp-v1.schema.json")
+    request = load_json(
+        PLATFORM / "contracts" / "focuslink-cloud-mcp-v1.request.fixture.json"
+    )
+    response = load_json(
+        PLATFORM / "contracts" / "focuslink-cloud-mcp-v1.response.fixture.json"
+    )
+    Draft202012Validator.check_schema(schema)
+    validator = cast(
+        JsonValidator,
+        Draft202012Validator(schema, format_checker=FormatChecker()),
+    )
+    validator.validate(request)
+    validator.validate(response)
+
+    assert request["tool"] == "focuslink_get_task_summary"
+    assert response["schemaVersion"] == 1
+    assert request["requiredScope"] == "focuslink:read"
+    assert response["authority"] == "focuslink-account-do"
+    assert response["freshness"]["state"] == "fresh"
+    assert response["lastVerifiedAt"]
+
+    invalid: list[JsonObject] = []
+    legacy_scope = copy.deepcopy(request)
+    legacy_scope["requiredScope"] = "foxlink:read"
+    invalid.append(legacy_scope)
+
+    legacy_tool = copy.deepcopy(request)
+    legacy_tool["tool"] = "foxlink_get_today_summary"
+    invalid.append(legacy_tool)
+
+    fake_live_state = copy.deepcopy(response)
+    fake_live_state["deviceOnline"] = True
+    invalid.append(fake_live_state)
+
+    fresh_without_verification = copy.deepcopy(response)
+    fresh_without_verification["lastVerifiedAt"] = None
+    invalid.append(fresh_without_verification)
+
+    leaked_note = copy.deepcopy(response)
+    leaked_note["recentSessions"][0]["note"] = "must not be in the cloud summary"
+    invalid.append(leaked_note)
+
+    assert all(not validator.is_valid(candidate) for candidate in invalid)
+
+    unknown = copy.deepcopy(response)
+    unknown["lastVerifiedAt"] = None
+    unknown["freshness"] = {
+        "state": "unknown",
+        "ageMs": None,
+        "staleAfterMs": 900000,
+    }
+    validator.validate(unknown)
+
+
+def test_every_partial_sync_contract_declaration_is_registered_with_a_consumer() -> None:
+    registry = load_json(PLATFORM / "projects.json")
+    contracts = {
+        contract["id"]: contract
+        for contract in cast(list[JsonObject], registry["protocolContracts"])
+    }
+
+    for project in cast(list[JsonObject], registry["projects"]):
+        if project["lifecycle"] != "active" or project["sync"]["status"] not in {
+            "partial",
+            "complete",
+        }:
+            continue
+        manifest_path = (
+            Path(cast(str, project["manifestRepositoryPath"]))
+            / cast(str, project["manifestRelativePath"])
+        )
+        manifest_value = load_json(manifest_path)
+        contract_id = cast(str, manifest_value["sync"]["contractId"])
+        assert project["sync"]["contractId"] == contract_id
+        assert contract_id in contracts
+        contract = contracts[contract_id]
+        assert project["id"] in contract["projectIds"]
+        assert any(
+            project["id"] in consumer.get("projectIds", [])
+            for consumer in cast(list[JsonObject], contract["consumers"])
+        )
+
+
 def test_manifest_gate_scans_six_canonical_roots_and_rejects_publish_substitute(
     tmp_path: Path,
 ) -> None:
@@ -341,6 +447,48 @@ def test_manifest_gate_scans_six_canonical_roots_and_rejects_publish_substitute(
     assert re.search(r"RegistryIssues\s*:\s*1", mismatch.stdout)
 
 
+def test_manifest_contract_declaration_cannot_hide_registry_omission(tmp_path: Path) -> None:
+    registry, roots, _ = fixture_registry(tmp_path)
+    projects = cast(list[JsonObject], registry["projects"])
+    project = projects[0]
+    project["dataPolicy"] = "cloud_allowed"
+    project["mcp"] = {
+        "status": "partial",
+        "dataPlane": "cloud_primary",
+        "coverage": "Fixture cloud query.",
+    }
+    project["sync"] = {
+        "status": "partial",
+        "dataPlane": "cloud_primary",
+        "mode": "bidirectional_delta",
+        "pcOffBehavior": "Fixture contract intentionally omitted from registry.",
+    }
+
+    for item, root in zip(projects, roots, strict=True):
+        if item is project:
+            value = manifest(
+                cast(str, item["id"]),
+                cast(str, item["name"]),
+                data_policy="cloud_allowed",
+                mcp_status="partial",
+                sync_status="partial",
+                data_plane="cloud_primary",
+            )
+        else:
+            value = manifest(cast(str, item["id"]), cast(str, item["name"]))
+        write_json(root / ".poyi" / "project-platform.json", value)
+
+    registry_path = tmp_path / "projects.json"
+    report_path = tmp_path / "audit.md"
+    write_json(registry_path, registry)
+    result = run_audit(registry_path, report_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "manifest declares unregistered sync.contractId sync-envelope-v1" in (
+        report_path.read_text(encoding="utf-8-sig")
+    )
+
+
 def test_fake_watch_complete_without_verifiable_evidence_fails(tmp_path: Path) -> None:
     registry, roots, _ = fixture_registry(tmp_path)
     projects = cast(list[JsonObject], registry["projects"])
@@ -357,6 +505,7 @@ def test_fake_watch_complete_without_verifiable_evidence_fails(tmp_path: Path) -
         "status": "complete",
         "dataPlane": "cloud_primary",
         "mode": "bidirectional_delta",
+        "contractId": "sync-envelope-v1",
         "pcOffBehavior": "Claimed complete without evidence.",
     }
 

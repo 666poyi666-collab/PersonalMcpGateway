@@ -1,0 +1,474 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:poyi:project-platform:focuslink-cloud-mcp:v1",
+  "title": "FocusLink authoritative cloud MCP summary contract",
+  "description": "Read-only FocusLink focus summary served from the cloud authority. Freshness describes the last verified authority state and never implies that any device is online.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "epochMilliseconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "durationMilliseconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nullableTimestamp": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/timestamp"
+        }
+      ]
+    },
+    "taskAssociation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "source",
+        "title"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source": {
+          "enum": [
+            "local",
+            "ticktick"
+          ]
+        },
+        "title": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "maxLength": 1000
+            }
+          ]
+        }
+      }
+    },
+    "taskAggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "source",
+        "title",
+        "focusCount",
+        "activeMs",
+        "lastFocusedAt"
+      ],
+      "properties": {
+        "taskId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          ]
+        },
+        "source": {
+          "enum": [
+            "local",
+            "ticktick",
+            null
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "focusCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        },
+        "activeMs": {
+          "$ref": "#/$defs/durationMilliseconds"
+        },
+        "lastFocusedAt": {
+          "$ref": "#/$defs/epochMilliseconds"
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "startedAt",
+        "endedAt",
+        "status",
+        "activeMs",
+        "pausedMs",
+        "wallMs",
+        "title",
+        "task",
+        "segmentTasks"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "startedAt": {
+          "$ref": "#/$defs/epochMilliseconds"
+        },
+        "endedAt": {
+          "$ref": "#/$defs/epochMilliseconds"
+        },
+        "status": {
+          "enum": [
+            "finished",
+            "aborted"
+          ]
+        },
+        "activeMs": {
+          "$ref": "#/$defs/durationMilliseconds"
+        },
+        "pausedMs": {
+          "$ref": "#/$defs/durationMilliseconds"
+        },
+        "wallMs": {
+          "$ref": "#/$defs/durationMilliseconds"
+        },
+        "title": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "maxLength": 1000
+            }
+          ]
+        },
+        "task": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/taskAssociation"
+            }
+          ]
+        },
+        "segmentTasks": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/segmentTask"
+          }
+        }
+      }
+    },
+    "segmentTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "source",
+        "title",
+        "activeMs"
+      ],
+      "properties": {
+        "taskId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          ]
+        },
+        "source": {
+          "enum": [
+            "local",
+            "ticktick",
+            null
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "activeMs": {
+          "$ref": "#/$defs/durationMilliseconds"
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "ageMs",
+        "staleAfterMs"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unknown"
+          ]
+        },
+        "ageMs": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/durationMilliseconds"
+            }
+          ]
+        },
+        "staleAfterMs": {
+          "const": 900000
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "fresh",
+                  "stale"
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ageMs": {
+                "$ref": "#/$defs/durationMilliseconds"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "tool",
+        "requiredScope",
+        "arguments"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": 1
+        },
+        "tool": {
+          "const": "focuslink_get_task_summary"
+        },
+        "requiredScope": {
+          "const": "focuslink:read"
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to",
+            "limit"
+          ],
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/epochMilliseconds"
+            },
+            "to": {
+              "$ref": "#/$defs/epochMilliseconds"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "authority",
+        "generatedAt",
+        "lastVerifiedAt",
+        "dataThrough",
+        "freshness",
+        "range",
+        "totals",
+        "tasks",
+        "recentSessions",
+        "changeSeq"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "authority": {
+          "const": "focuslink-account-do"
+        },
+        "generatedAt": {
+          "$ref": "#/$defs/epochMilliseconds"
+        },
+        "lastVerifiedAt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/epochMilliseconds"
+            }
+          ]
+        },
+        "dataThrough": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/epochMilliseconds"
+            }
+          ]
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to"
+          ],
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/epochMilliseconds"
+            },
+            "to": {
+              "$ref": "#/$defs/epochMilliseconds"
+            }
+          }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "focusCount",
+            "activeMs",
+            "pausedMs",
+            "wallMs"
+          ],
+          "properties": {
+            "focusCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000
+            },
+            "activeMs": {
+              "$ref": "#/$defs/durationMilliseconds"
+            },
+            "pausedMs": {
+              "$ref": "#/$defs/durationMilliseconds"
+            },
+            "wallMs": {
+              "$ref": "#/$defs/durationMilliseconds"
+            }
+          }
+        },
+        "tasks": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/taskAggregate"
+          }
+        },
+        "recentSessions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/session"
+          }
+        },
+        "changeSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "freshness": {
+                "properties": {
+                  "state": {
+                    "enum": [
+                      "fresh",
+                      "stale"
+                    ]
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              }
+            },
+            "required": [
+              "freshness"
+            ]
+          },
+          "then": {
+            "properties": {
+              "lastVerifiedAt": {
+                "$ref": "#/$defs/epochMilliseconds"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

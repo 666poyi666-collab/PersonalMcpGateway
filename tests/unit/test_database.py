@@ -14,6 +14,11 @@ async def test_migrations_are_repeatable(tmp_path: Path) -> None:
     assert rows == [{"version": 1}]
     mode = await database.fetchone("PRAGMA journal_mode")
     assert mode == {"journal_mode": "wal"}
+    assert await database.readiness() == {
+        "state": "ready",
+        "schemaVersion": 1,
+        "expectedSchemaVersion": 1,
+    }
 
 
 @pytest.mark.asyncio

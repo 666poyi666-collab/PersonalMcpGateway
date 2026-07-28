@@ -46,24 +46,18 @@ def build_admin_app(runtime: GatewayRuntime) -> Starlette:
         return JSONResponse({"gateway": "alive", "version": runtime.settings.version})
 
     async def ready(_: Request) -> JSONResponse:
-        status = 200 if runtime.ready else 503
-        modules = await runtime.registry.all_health()
-        return JSONResponse(
-            {
-                "gateway": "ready" if runtime.ready else "starting",
-                "modules": {key: value.state for key, value in modules.items()},
-            },
-            status_code=status,
-        )
+        readiness = await runtime.readiness_status()
+        return JSONResponse(readiness, status_code=200 if readiness["ready"] else 503)
 
     async def metrics(_: Request) -> PlainTextResponse:
+        readiness = await runtime.readiness_status()
         return PlainTextResponse(
             "# TYPE personal_mcp_tool_calls_total counter\n"
             f"personal_mcp_tool_calls_total {runtime.calls_total}\n"
             "# TYPE personal_mcp_tool_failures_total counter\n"
             f"personal_mcp_tool_failures_total {runtime.calls_failed}\n"
             "# TYPE personal_mcp_ready gauge\n"
-            f"personal_mcp_ready {1 if runtime.ready else 0}\n",
+            f"personal_mcp_ready {1 if readiness['ready'] else 0}\n",
             media_type="text/plain; version=0.0.4",
         )
 

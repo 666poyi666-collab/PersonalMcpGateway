@@ -9,7 +9,7 @@ import uuid
 from typing import Any
 
 from personal_mcp_gateway.core.errors import GatewayError
-from personal_mcp_gateway.core.models import ToolDefinition
+from personal_mcp_gateway.core.models import HealthState, ToolDefinition
 from personal_mcp_gateway.core.redaction import redact
 from personal_mcp_gateway.core.registry import ModuleRegistry
 from personal_mcp_gateway.core.result import failure, success
@@ -140,6 +140,43 @@ class GatewayRuntime:
                 key: value.model_dump(by_alias=True, exclude_none=True)
                 for key, value in health.items()
             },
+        }
+
+    async def readiness_status(self) -> dict[str, Any]:
+        """Return sanitized readiness based on live dependencies, not boot flags alone."""
+
+        database: dict[str, Any]
+        if not self.ready:
+            database = {"state": "not_checked"}
+            database_ready = False
+        else:
+            try:
+                database = await self.database.readiness()
+                database_ready = True
+            except Exception:
+                database = {"state": "unavailable"}
+                database_ready = False
+
+        module_health = await self.registry.all_health()
+        module_states = {key: value.state for key, value in module_health.items()}
+        unavailable_modules = sorted(
+            key
+            for key, state in module_states.items()
+            if state
+            in {
+                HealthState.STARTING,
+                HealthState.UNAVAILABLE,
+                HealthState.NOT_INSTALLED,
+            }
+        )
+        ready = self.ready and database_ready
+        return {
+            "ready": ready,
+            "gateway": "ready" if ready else "starting" if not self.ready else "unavailable",
+            "dependencies": {"database": database},
+            "modules": module_states,
+            "degraded": bool(unavailable_modules),
+            "unavailableModules": unavailable_modules,
         }
 
     async def recent_errors(self, limit: int = 20) -> list[dict[str, Any]]:

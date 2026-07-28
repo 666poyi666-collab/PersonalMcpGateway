@@ -1,6 +1,6 @@
 {
   "standardVersion": 1,
-  "auditedAt": "2026-07-28T00:07:00+08:00",
+  "auditedAt": "2026-07-28T09:51:00+08:00",
   "scope": {
     "formalInventory": "C:\\开发\\README.md",
     "githubOwner": "666poyi666-collab",
@@ -91,7 +91,10 @@
       "id": "sync-envelope-v1",
       "projectIds": [
         "daylight-journal",
-        "watchintervals"
+        "watchintervals",
+        "focuslink",
+        "suixinyiting",
+        "do-not-phone"
       ],
       "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
       "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
@@ -99,6 +102,9 @@
       "consumers": [
         {
           "id": "journal-cloud-worker",
+          "projectIds": [
+            "daylight-journal"
+          ],
           "repositoryPath": "C:\\开发\\mcp开发\\journal-cloud-mcp",
           "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
           "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
@@ -106,6 +112,9 @@
         },
         {
           "id": "daylight-journal",
+          "projectIds": [
+            "daylight-journal"
+          ],
           "repositoryPath": "C:\\开发\\日记复盘",
           "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
           "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
@@ -113,11 +122,94 @@
         },
         {
           "id": "watch-cloud-worker",
+          "projectIds": [
+            "watchintervals"
+          ],
           "repositoryPath": "C:\\开发\\mcp开发\\watch-cloud-mcp",
           "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
           "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
           "responseFixtureRelativePath": "contracts/sync-envelope-v1.response.fixture.json"
+        },
+        {
+          "id": "focuslink-authority",
+          "projectIds": [
+            "focuslink",
+            "do-not-phone"
+          ],
+          "repositoryPath": "C:\\Users\\poyi\\Desktop\\time1",
+          "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
+          "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
+          "responseFixtureRelativePath": "contracts/sync-envelope-v1.response.fixture.json"
+        },
+        {
+          "id": "foxlink-cloud-worker",
+          "projectIds": [
+            "focuslink",
+            "do-not-phone"
+          ],
+          "repositoryPath": "C:\\开发\\mcp开发\\foxlink-cloud-mcp",
+          "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
+          "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
+          "responseFixtureRelativePath": "contracts/sync-envelope-v1.response.fixture.json"
+        },
+        {
+          "id": "suixinyiting-client",
+          "projectIds": [
+            "suixinyiting"
+          ],
+          "repositoryPath": "C:\\开发\\手表音乐软件",
+          "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
+          "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
+          "responseFixtureRelativePath": "contracts/sync-envelope-v1.response.fixture.json"
+        },
+        {
+          "id": "do-not-phone-client",
+          "projectIds": [
+            "do-not-phone"
+          ],
+          "repositoryPath": "C:\\开发\\不做手机控",
+          "schemaRelativePath": "contracts/sync-envelope-v1.schema.json",
+          "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
+          "responseFixtureRelativePath": "contracts/sync-envelope-v1.response.fixture.json"
         }
+      ]
+    }
+  ],
+  "mcpContracts": [
+    {
+      "id": "focuslink-cloud-mcp-v1",
+      "projectId": "focuslink",
+      "requiredScopes": [
+        "focuslink:read"
+      ],
+      "canonicalTools": [
+        "focuslink_get_status",
+        "focuslink_get_today_summary",
+        "focuslink_list_focus_records",
+        "focuslink_get_task_summary"
+      ],
+      "compatibilityAliases": {
+        "foxlink_get_status": "focuslink_get_status",
+        "foxlink_get_today_summary": "focuslink_get_today_summary",
+        "foxlink_list_sessions": "focuslink_list_focus_records",
+        "foxlink_get_sync_overview": "focuslink_get_status"
+      },
+      "schemaRelativePath": "contracts/focuslink-cloud-mcp-v1.schema.json",
+      "requestFixtureRelativePath": "contracts/focuslink-cloud-mcp-v1.request.fixture.json",
+      "responseFixtureRelativePath": "contracts/focuslink-cloud-mcp-v1.response.fixture.json",
+      "consumer": {
+        "id": "foxlink-cloud-mcp",
+        "repositoryPath": "C:\\开发\\mcp开发\\foxlink-cloud-mcp",
+        "schemaRelativePath": "contracts/focuslink-cloud-mcp-v1.schema.json",
+        "requestFixtureRelativePath": "contracts/focuslink-cloud-mcp-v1.request.fixture.json",
+        "responseFixtureRelativePath": "contracts/focuslink-cloud-mcp-v1.response.fixture.json"
+      },
+      "readinessDependencies": [
+        "oauth_authorization_server",
+        "oauth_jwks",
+        "oauth_introspection",
+        "focuslink_authority_service_binding",
+        "derived_projection_storage"
       ]
     }
   ],
@@ -178,13 +270,18 @@
             "degraded"
           ]
         },
-        "coverage": "The single public foxlink-cloud-mcp origin must read the authoritative DO v2 feed through a sync-on-read derived projection and expose epoch, lag, and degraded state. It is not a second data authority."
+        "toolContractId": "focuslink-cloud-mcp-v1",
+        "requiredScopes": [
+          "focuslink:read"
+        ],
+        "coverage": "The single public foxlink-cloud-mcp origin must serve focuslink-cloud-mcp-v1 from the Account DO through a read-only derived projection, with changeSeq, dataThrough and honest freshness. The approved server-readable projection is limited to focus/session/task identifiers, task titles, timestamps, status and duration aggregates; it excludes notes, tags, device identifiers and credentials."
       },
       "sync": {
         "status": "partial",
         "dataPlane": "cloud_primary",
         "authority": "cloud",
         "mode": "public_adapter_to_internal_do_encrypted_v2_pending",
+        "contractId": "sync-envelope-v1",
         "cloudBaseUrl": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev",
         "cloudHealth": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/healthz",
         "canonicalExchangeRoute": "/sync/v2/exchange",
@@ -217,7 +314,7 @@
           "/tasks",
           "/write"
         ],
-        "pcOffBehavior": "The one public origin must proxy encrypted SyncEnvelopeV1 writes to the internal authority and expose only verified metadata through MCP. Current plaintext V2 feed code is not eligible for PC-off completion."
+        "pcOffBehavior": "The one public origin must proxy SyncEnvelopeV1 device writes to the internal authority and expose the separately approved minimal FocusLink summary projection through OAuth MCP. The summary exception does not make plaintext device sync eligible; contract consumers, staging OAuth, deployment and PC-off evidence remain incomplete."
       },
       "requirementsMet": false,
       "priority": "P1"
@@ -295,6 +392,7 @@
         "status": "partial",
         "dataPlane": "cloud_primary",
         "mode": "encrypted_allowlist_sync_local_implemented_remote_unverified",
+        "contractId": "sync-envelope-v1",
         "supportsPcOff": false,
         "supportsBidirectionalDelta": false,
         "pcOffBehavior": "The Android client locally implements AES-256-GCM synchronization for allow-listed queue references, favorites, progress and preferences; deployment, device provisioning and PC-off evidence remain absent. NetEase cookie/token, media URL, audio bytes and cache remain excluded."
@@ -413,6 +511,7 @@
         "status": "partial",
         "dataPlane": "cloud_primary",
         "mode": "focuslink_authority_reuse_local_implemented_remote_unverified",
+        "contractId": "sync-envelope-v1",
         "supportsPcOff": false,
         "supportsBidirectionalDelta": false,
         "pcOffBehavior": "The local encrypted v2 guard sync reuses FocusLink account authority and device identity for rules, state, completions and configuration, and compiles locally. Deployment, real-device key flows and PC-off evidence remain incomplete."

@@ -31,7 +31,12 @@ operation. Each application remains the source of truth for its own business dat
 Everything runs on this machine and listens on loopback only; nothing is exposed to the
 network except the outbound Secure MCP Tunnel.
 
-The optional Cloudflare layer keeps approved cloud data or the last successful snapshot readable while this PC is off. Journal has a persistent cloud database but only one-way local-to-cloud mirroring today. Watch and FocusLink remain snapshot mirrors: phone-side support exists, but the latest audit observed only `pc-sync`, so they are not labelled continued power-off synchronization. Cloud MCP access and snapshot ingestion use separate credentials; an offline device yields the last snapshot with stale metadata rather than a false live state.
+The optional Cloudflare layer keeps approved cloud data or the last successful snapshot readable
+while this PC is off. FocusLink now has a versioned cloud MCP contract for a minimal
+server-readable task/session projection, but the canonical Worker contract copy, staging OAuth,
+deployment, and real-device PC-off evidence are still pending. It must return `stale` or `unknown`
+with `lastVerifiedAt` when the authority cannot be verified, never a false live state. Device sync
+credentials and MCP OAuth credentials remain separate.
 
 ## Development
 

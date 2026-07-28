@@ -1,9 +1,9 @@
 ﻿# MCP 与关机同步审计
 
-生成时间：2026-07-28 05:54:06 +08:00
+生成时间：2026-07-28 09:53:00 +08:00
 
 结论：正式运行时项目中 **0/6**，当前活跃运行时项目中 **0/6** 满足各自适用门禁（完整实现或显式 local_only 豁免）。
-Canonical manifest：**5/6**；合同副本缺口：**0**；完成证据缺口：**0**。
+Canonical manifest：**6/6**；合同副本缺口：**15**；完成证据缺口：**0**。
 
 ## 安全阻断项
 
@@ -15,22 +15,22 @@ Canonical manifest：**5/6**；合同副本缺口：**0**；完成证据缺口�
 | --- | --- | --- | --- | --- | --- |
 | FocusLink | `partial` | `partial` | 不完整 | 已校验 | 未执行 |
 | WatchIntervals | `partial` | `partial` | 不完整 | 已校验 | 未执行 |
-| SuixinYiTing | `missing` | `missing` | 不完整 | 无效 | 未执行 |
+| SuixinYiTing | `missing` | `partial` | 不完整 | 已校验 | 未执行 |
 | Daylight Journal | `partial` | `partial` | 不完整 | 已校验 | 未执行 |
 | PersonalMcpGateway | `complete` | `missing` | 不完整 | 已校验 | 未执行 |
-| 不做手机控 | `partial` | `missing` | 不完整 | 已校验 | 未执行 |
+| 不做手机控 | `partial` | `partial` | 不完整 | 已校验 | 未执行 |
 | EchoDiary | `missing` | `missing` | 已封存 | 不适用 | 未执行 |
 | VideoFlow | `missing` | `missing` | 已封存 | 不适用 | 未执行 |
 | Math Mistake Manager | `missing` | `missing` | 已封存 | 不适用 | 未执行 |
 
 ## 已确认的关键缺口
 
-- **FocusLink**：The single public foxlink-cloud-mcp origin must read the authoritative DO v2 feed through a sync-on-read derived projection and expose epoch, lag, and degraded state. It is not a second data authority. The one public origin must proxy encrypted SyncEnvelopeV1 writes to the internal authority and expose only verified metadata through MCP. Current plaintext V2 feed code is not eligible for PC-off completion.
+- **FocusLink**：The single public foxlink-cloud-mcp origin must serve focuslink-cloud-mcp-v1 from the Account DO through a read-only derived projection, with changeSeq, dataThrough and honest freshness. The approved server-readable projection is limited to focus/session/task identifiers, task titles, timestamps, status and duration aggregates; it excludes notes, tags, device identifiers and credentials. The one public origin must proxy SyncEnvelopeV1 device writes to the internal authority and expose the separately approved minimal FocusLink summary projection through OAuth MCP. The summary exception does not make plaintext device sync eligible; contract consumers, staging OAuth, deployment and PC-off evidence remain incomplete.
 - **WatchIntervals**：Cloud MCP exposes only encrypted-sync metadata, counts, cursors and freshness. Training, plan, route, heart and sleep plaintext remains unavailable to the cloud. Encrypted SyncEnvelopeV1 exchange, Android outbox/cursor/conflict handling, explicit tombstones, pull-first bootstrap, WorkManager recovery and Keystore-backed recovery/approval packages are implemented locally. Deployed remote exchange, Android real-device key flows, PC-off readback and restart catch-up evidence are not complete. Legacy /sync/push and plaintext V1 data routes are locally retired with 410.
-- **SuixinYiTing**：No cloud MCP projection exists. Any future projection must remain metadata-only and cannot expose NetEase credentials, media URLs, audio bytes, caches, or playback diagnostics. The required encrypted state plane for queue references, favorites, progress and preferences is not implemented. NetEase cookie/token, media URL, audio bytes and cache remain excluded.
+- **SuixinYiTing**：No cloud MCP projection exists. Any future projection must remain metadata-only and cannot expose NetEase credentials, media URLs, audio bytes, caches, or playback diagnostics. The Android client locally implements AES-256-GCM synchronization for allow-listed queue references, favorites, progress and preferences; deployment, device provisioning and PC-off evidence remain absent. NetEase cookie/token, media URL, audio bytes and cache remain excluded.
 - **Daylight Journal**：Local and cloud tools use different identifiers and operations; append/status are local-only and delete is cloud-only. The encrypted V2 Worker and browser client are implemented locally, but staging OAuth, attachment object transport, real device recovery and PC-off acceptance evidence are still required.
 - **PersonalMcpGateway**：All five approved runtime diagnostics tools are reachable through the authenticated tunnel while Windows is running. The tunnel is transport, not a cloud runtime or durable diagnostics store. Runtime diagnostics remain local-only. The separately scoped encrypted dashboard profile for layout, tile sizes, pinned items and preferences is not yet connected to a cloud authority.
-- **不做手机控**：The app reads FocusLink focus state locally, but no verified projection exists for this product's encrypted rules, completion records or configuration. The application must reuse FocusLink account authority and device identity for encrypted rules, state, completions and configuration. It currently only reads live focus state.
+- **不做手机控**：The app reads FocusLink focus state locally, but no verified projection exists for this product's encrypted rules, completion records or configuration. The local encrypted v2 guard sync reuses FocusLink account authority and device identity for rules, state, completions and configuration, and compiles locally. Deployment, real-device key flows and PC-off evidence remain incomplete.
 
 ## 策略例外
 
@@ -51,7 +51,21 @@ Canonical manifest：**5/6**；合同副本缺口：**0**；完成证据缺口�
 
 ## 协议合同一致性缺口
 
-- 无
+- sync-envelope-v1/focuslink-authority: missing contracts/sync-envelope-v1.schema.json
+- sync-envelope-v1/focuslink-authority: missing contracts/sync-envelope-v1.request.fixture.json
+- sync-envelope-v1/focuslink-authority: missing contracts/sync-envelope-v1.response.fixture.json
+- sync-envelope-v1/foxlink-cloud-worker: missing contracts/sync-envelope-v1.schema.json
+- sync-envelope-v1/foxlink-cloud-worker: missing contracts/sync-envelope-v1.request.fixture.json
+- sync-envelope-v1/foxlink-cloud-worker: missing contracts/sync-envelope-v1.response.fixture.json
+- sync-envelope-v1/suixinyiting-client: missing contracts/sync-envelope-v1.schema.json
+- sync-envelope-v1/suixinyiting-client: missing contracts/sync-envelope-v1.request.fixture.json
+- sync-envelope-v1/suixinyiting-client: missing contracts/sync-envelope-v1.response.fixture.json
+- sync-envelope-v1/do-not-phone-client: missing contracts/sync-envelope-v1.schema.json
+- sync-envelope-v1/do-not-phone-client: missing contracts/sync-envelope-v1.request.fixture.json
+- sync-envelope-v1/do-not-phone-client: missing contracts/sync-envelope-v1.response.fixture.json
+- focuslink-cloud-mcp-v1/foxlink-cloud-mcp: missing contracts/focuslink-cloud-mcp-v1.schema.json
+- focuslink-cloud-mcp-v1/foxlink-cloud-mcp: missing contracts/focuslink-cloud-mcp-v1.request.fixture.json
+- focuslink-cloud-mcp-v1/foxlink-cloud-mcp: missing contracts/focuslink-cloud-mcp-v1.response.fixture.json
 
 ## 能力迁移缺口
 
@@ -60,18 +74,13 @@ Canonical manifest：**5/6**；合同副本缺口：**0**；完成证据缺口�
 - watchintervals: MCP is partial
 - watchintervals: sync is partial
 - suixinyiting: MCP is missing
-- suixinyiting: sync is missing
+- suixinyiting: sync is partial
 - daylight-journal: MCP is partial
 - daylight-journal: sync is partial
 - personal-mcp-gateway: sync is missing
 - do-not-phone: MCP is partial
-- do-not-phone: sync is missing
+- do-not-phone: sync is partial
 
 ## 完成状态证据缺口
 
 - 无
-
-## 注册表或声明错误
-
-- suixinyiting manifest: sync.status does not match registry (expected missing, got partial)
-- sync-envelope-v1/journal-cloud-worker: schemaRelativePath differs from canonical artifact

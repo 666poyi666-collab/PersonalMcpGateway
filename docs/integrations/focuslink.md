@@ -1,59 +1,73 @@
 # FocusLink（专注数据）接入
 
-FocusLink 是桌面上的专注计时器（`Desktop\time1`，Electron + SQLite）。它的三时间模型
-把一次专注拆成 `activeElapsedMs`（有效专注）、`pauseElapsedMs`（暂停）、`wallElapsedMs`
-（自然跨度）；数据落在 `%APPDATA%\FocusLink\focuslink.db`。
+FocusLink 的专注账本以 Account Durable Object 为唯一 authority。Windows、手机和手表只是
+产生及同步数据的设备；它们全部离线时，已经被 authority 接收并验证的数据仍可由
+ChatGPT 通过 canonical cloud MCP 查询。
 
-## 数据面
-
-看板不碰 SQLite。FocusLink 自带独立的 **Foxlink MCP**（`PoyiFoxlinkMcp` Windows 服务，
-`127.0.0.1:8770/mcp`），MCP 再经 Electron 回环业务 API（`127.0.0.1:18770/v1`）读账本，
-所以计时事实始终只有一个持有者。链路：
+## PC-off 数据链路
 
 ```text
-看板 widget -> 127.0.0.1:8770/mcp (Foxlink MCP) -> 18770/v1 业务 API -> focuslink.db
+ChatGPT
+  -> OAuth access token（仅 focuslink:read）
+  -> foxlink-cloud-mcp /mcp（唯一公开 canonical origin）
+  -> Cloudflare service binding
+  -> FocusLink Account DO（唯一写 authority）
+  -> 最小只读 derived projection
 ```
 
-注意：业务 API 随 FocusLink 桌面应用启动。桌面应用没开时，widget 显示错误卡，
-这是准确的状态而不是看板故障。
+PersonalMcpGateway 是 loopback Windows 服务，不在这条 PC-off 链路中。它只负责本地
+看板、开发验证和平台合同；不得因本机 Gateway 在线而宣称云 authority 在线。
 
-## 上板配置
+严格端到端加密且所有设备离线时，云端无法解密业务数据。为了满足“所有设备离线时仍能
+从云 MCP 读取专注任务、次数和时长”，FocusLink 明确采用
+`sensitive_cloud_allowed` 的最小 server-readable projection。允许字段仅包括：
 
-```yaml
-  - id: focus_today
-    type: mcp
-    title: 今日专注
-    group: FocusLink
-    flavor: instrument
-    accent: "#007A55"
-    options: {url: "http://127.0.0.1:8770/mcp", tool: foxlink_get_today_summary}
-```
+- session/task 标识、任务来源与标题；
+- 开始/结束时间、完成/中止状态；
+- active、paused、wall 时长；
+- 按任务聚合、change sequence 和 authority freshness。
 
-可用的只读工具：
+`note`、`tags`、设备 ID、OAuth/device credential、第三方 cookie/token、原始诊断和
+不做手机控规则均不得进入该 projection。不做手机控只消费 FocusLink 已允许的专注摘要；
+它自己的规则、配置和完成状态继续使用加密同步。
 
-| 工具 | 卡片 | 内容 |
+## 公共工具合同
+
+中央合同是
+[`focuslink-cloud-mcp-v1.schema.json`](../../standards/project-platform/contracts/focuslink-cloud-mcp-v1.schema.json)。
+所有公共工具只接受 `focuslink:read`：
+
+| Canonical 工具 | 内容 | 兼容别名 |
 | --- | --- | --- |
-| `foxlink_get_today_summary` | stat | 有效专注时长 + 日期，注脚为会话数与暂停 |
-| `foxlink_get_status` | keyvalue | 产品、版本、当前计时状态 |
-| `foxlink_get_current_session` | keyvalue | 进行中的会话（无会话时为空态） |
-| `foxlink_list_sessions` | keyvalue | 通用降级呈现；专用列表呈现在路线图上 |
+| `focuslink_get_status` | authority、changeSeq、lastVerifiedAt、freshness | `foxlink_get_status`、`foxlink_get_sync_overview` |
+| `focuslink_get_today_summary` | 今日次数与 active/paused/wall 汇总 | `foxlink_get_today_summary` |
+| `focuslink_list_focus_records` | 分页专注记录与关联任务 | `foxlink_list_sessions` |
+| `focuslink_get_task_summary` | 时间范围内按任务聚合的次数、时长和最近专注 | 无 |
 
-控制类工具（`foxlink_start_focus` 等）会被看板的只读闸门直接拒绝。
+旧 `foxlink_*` 名称只作为兼容别名，返回同一 authority envelope，不得从本地 SQLite 或
+Windows 快照拼出另一份“云结果”。
 
-## 呈现风格：时间仪器（`instrument`）
+每个响应都必须提供：
 
-取自 FocusLink 前端规范（`FocusLink/frontend-design/FRONTEND_SPEC.md`）的真实语言：
+- `authority: "focuslink-account-do"`；
+- `generatedAt`、`lastVerifiedAt`、数据覆盖截止时间 `dataThrough` 和单调 `changeSeq`；
+- `freshness.state`: `fresh`、`stale` 或 `unknown`；
+- `freshness.ageMs` 与固定 15 分钟的 `staleAfterMs`。
 
-- 连续浅色画布 + 1px 发丝线分区，**无圆角卡片墙**——卡片直角、无阴影；
-- 标题下 20px × 2px 强调色短刻度，对应其导航选中态的底部刻度；
-- 读数用等宽数字槽（`tabular-nums`），对应其「工业读数」仪表；
-- 强调色默认取其五色预设中的翡翠 `#007A55`（深色板面自动换亮阶 `#35C493`），
-  暂停/损耗语义在 FocusLink 里固定为红，看板沿用其停用色的克制原则。
+`fresh` 只表示 projection 最近成功核对过 authority，不表示手机、手表或 PC 在线。
+authority 无法核对时可以返回最后的 projection，但必须标为 `stale` 或 `unknown`，不能
+伪装实时。
 
-## 更深入的路线
+## 鉴权与 readiness
 
-- `foxlink://analytics/today` Resource 提供比工具更细的当日分析，可做成
-  专注/暂停双读数卡；
-- 多日趋势（FocusLink 统计页的堆叠日柱）需要新增 list/chart 呈现器，等看板
-  引入迷你柱状 kind 后接入；
-- FocusLink 云测试后端（`127.0.0.1:18787`）是实验件，不作为看板数据源。
+- MCP 使用 OAuth access token，资源必须精确匹配 canonical `/mcp`，scope 必须包含
+  `focuslink:read`。
+- device sync token、pair nonce、内部 service credential 和旧 `foxlink:read` scope
+  在 MCP 上一律拒绝。
+- `/healthz` 只报告进程存活。
+- `/readyz` 只有在 OAuth AS/JWKS/introspection、authority service binding 和 derived
+  projection storage 均真实可用时才返回 `200`；否则返回 `503` 和经过清理的依赖名称。
+
+当前合同与本地代码仍属 `partial`。在 canonical Worker 合同副本、staging OAuth、真实
+设备同步、三轮 PC-off 读取证据和部署 revision 同时匹配前，禁止设置
+`supportsPcOff=true` 或 `complete`。

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "authority": "focuslink-account-do",
+  "generatedAt": 1785211205000,
+  "lastVerifiedAt": 1785211200000,
+  "dataThrough": 1785200700000,
+  "freshness": {
+    "state": "fresh",
+    "ageMs": 5000,
+    "staleAfterMs": 900000
+  },
+  "range": {
+    "from": 1785168000000,
+    "to": 1785254400000
+  },
+  "totals": {
+    "focusCount": 2,
+    "activeMs": 5400000,
+    "pausedMs": 300000,
+    "wallMs": 5700000
+  },
+  "tasks": [
+    {
+      "taskId": "fixture-task-chemistry",
+      "source": "ticktick",
+      "title": "化学复习",
+      "focusCount": 2,
+      "activeMs": 5400000,
+      "lastFocusedAt": 1785200400000
+    }
+  ],
+  "recentSessions": [
+    {
+      "sessionId": "fixture-session-2",
+      "startedAt": 1785195000000,
+      "endedAt": 1785200700000,
+      "status": "finished",
+      "activeMs": 5400000,
+      "pausedMs": 300000,
+      "wallMs": 5700000,
+      "title": "化学复习",
+      "task": {
+        "taskId": "fixture-task-chemistry",
+        "source": "ticktick",
+        "title": "化学复习"
+      },
+      "segmentTasks": [
+        {
+          "taskId": "fixture-task-chemistry",
+          "source": "ticktick",
+          "title": "化学复习",
+          "activeMs": 5400000
+        }
+      ]
+    }
+  ],
+  "changeSeq": 42
+}

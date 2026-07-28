@@ -102,6 +102,24 @@ credentials are accepted only by exchange and its upstream; MCP uses a separate
 OAuth token. End-to-end proof uses the same public origin for exchange write and
 MCP read, then verifies that the internal DO revision advanced.
 
+The public read contract is `focuslink-cloud-mcp-v1`. Canonical tools are
+`focuslink_get_status`, `focuslink_get_today_summary`,
+`focuslink_list_focus_records`, and `focuslink_get_task_summary`; the existing
+`foxlink_*` names remain compatibility aliases only. Every response reports the
+Account DO authority, `changeSeq`, `lastVerifiedAt`, `dataThrough`, and
+`fresh` / `stale` / `unknown` freshness. Freshness describes authority
+verification, never device presence.
+
+The approved PC-off query requirement permits ChatGPT to read
+already-synchronized focus counts, task titles and durations while every
+personal device is offline. That is incompatible with strict end-to-end
+encryption of those fields, so FocusLink's `sensitive_cloud_allowed` policy
+explicitly permits a minimal server-readable derived projection containing
+session/task identifiers, task source/title, timestamps, status and duration
+aggregates. Notes, tags, device identifiers, credentials, cookies, diagnostics
+and Focus Guard rules remain excluded. The platform must not describe this
+projection as end-to-end encrypted.
+
 FocusLink pairing never introduces OAuth scopes. The authorization server
 advertises only the four canonical scopes; `focuslink:pair` and
 `devices:manage` are permanently forbidden. `/sync/v1/pair/offers` accepts only
