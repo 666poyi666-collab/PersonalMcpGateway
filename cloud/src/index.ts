@@ -378,15 +378,37 @@ async function oauthDependencyProbe(env: Env): Promise<Record<string, unknown>> 
 }
 
 async function ready(env: Env): Promise<Response> {
-  const oauth = await oauthDependencyProbe(env);
-  const authority = await cloudSummary(env);
+  let oauth: Record<string, unknown>;
+  let oauthProbeError = false;
+  try {
+    oauth = await oauthDependencyProbe(env);
+  } catch {
+    oauthProbeError = true;
+    oauth = { configured: oauthConfigValid(env), metadata: false, jwks: false, introspection: false };
+  }
+  let authority: { summary: Record<string, unknown>; verifiedCount: number };
+  let authorityProbeError = false;
+  try {
+    authority = await cloudSummary(env);
+  } catch {
+    authorityProbeError = true;
+    authority = { summary: {}, verifiedCount: 0 };
+  }
   const oauthReady = Object.values(oauth).every((value) => value === true);
   const authorityReady = authority.verifiedCount === PRODUCTS.length;
   return json({
     ready: oauthReady && authorityReady,
     environment: env.ENVIRONMENT,
     deploymentRevision: env.DEPLOYMENT_REVISION,
-    dependencies: { oauth, authorities: { configured: parseAuthorityConfig(env.AUTHORITY_CONFIG_JSON).size, verified: authority.verifiedCount, required: PRODUCTS.length } },
+    dependencies: {
+      oauth: { ...oauth, probeError: oauthProbeError },
+      authorities: {
+        configured: parseAuthorityConfig(env.AUTHORITY_CONFIG_JSON).size,
+        verified: authority.verifiedCount,
+        required: PRODUCTS.length,
+        probeError: authorityProbeError,
+      },
+    },
   }, oauthReady && authorityReady ? 200 : 503);
 }
 

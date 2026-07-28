@@ -90,4 +90,19 @@ describe("public staging boundary", () => {
     expect(body.ready).toBe(false);
     expect(body.dependencies.authorities).toMatchObject({ verified: 0, required: 4 });
   });
+
+  it("reports unavailable configured OAuth dependencies as 503 instead of throwing", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response('{"active":false}', { status: 404, headers: { "content-type": "application/json" } });
+    try {
+      const response = await worker.fetch(
+        new Request("https://gateway.example/readyz"),
+        { ...env, OAUTH_RS_CLIENT_SECRET: "s".repeat(64) } as never,
+      );
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ ready: false });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
