@@ -64,6 +64,16 @@ def acquire_single_instance() -> object | None:
     return handle or object()
 
 
+def show_existing_instance() -> bool:
+    """Ask an already-running hidden instance to reveal its native window."""
+    try:
+        from personal_mcp_gateway.desktop import shell
+
+        return shell.show_existing_window()
+    except Exception:
+        return False
+
+
 class DesktopController:
     """Owns the polling loop, the window handle and the tray icon."""
 
@@ -334,7 +344,8 @@ def tray_actions(controller: DesktopController, api: DesktopApi) -> dict[str, An
 def main() -> int:
     guard = acquire_single_instance()
     if guard is None:
-        print("Poyi Control Center 已在运行: 请查看系统托盘", file=sys.stderr)
+        if not show_existing_instance():
+            print("Poyi Control Center 已在运行: 请查看系统托盘", file=sys.stderr)
         return 0
     try:
         from personal_mcp_gateway.desktop import shell

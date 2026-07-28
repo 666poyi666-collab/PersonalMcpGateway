@@ -11,6 +11,7 @@ from personal_mcp_gateway.desktop.app import (
     DesktopApi,
     DesktopController,
     acquire_single_instance,
+    main,
     tray_actions,
 )
 from personal_mcp_gateway.desktop.client import (
@@ -423,3 +424,19 @@ def test_tray_actions_toggle_the_current_view_state(monkeypatch: pytest.MonkeyPa
 def test_a_second_instance_is_refused() -> None:
     acquire_single_instance()
     assert acquire_single_instance() is None
+
+
+def test_a_second_launch_reveals_the_existing_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.app.acquire_single_instance",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.app.show_existing_instance",
+        lambda: calls.append(True) or True,
+    )
+
+    assert main() == 0
+    assert calls == [True]

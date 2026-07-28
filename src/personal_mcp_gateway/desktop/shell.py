@@ -11,6 +11,8 @@ and stays under strict checking.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -24,6 +26,98 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 class WindowFactory(Protocol):
     def __call__(self, **kwargs: Any) -> Any: ...
+
+
+def show_existing_window(title: str = "Poyi Control Center") -> bool:
+    """Reveal this launcher's existing top-level window, if it is hidden."""
+    if sys.platform != "win32":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    process_query_limited_information = 0x1000
+    sw_show = 5
+    sw_restore = 9
+
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindowAsync.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    executable = os.path.normcase(os.path.abspath(sys.executable))
+    existing: list[int] = []
+
+    @callback_type
+    def find_window(hwnd: int, _lparam: int) -> bool:
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        window_title = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, window_title, len(window_title))
+        if window_title.value != title:
+            return True
+
+        process_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        process = kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            process_id.value,
+        )
+        if not process:
+            return True
+        try:
+            size = wintypes.DWORD(32768)
+            image = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(
+                process,
+                0,
+                image,
+                ctypes.byref(size),
+            ):
+                return True
+            if os.path.normcase(os.path.abspath(image.value)) != executable:
+                return True
+        finally:
+            kernel32.CloseHandle(process)
+
+        existing.append(int(hwnd))
+        return False
+
+    user32.EnumWindows(find_window, 0)
+    if not existing:
+        return False
+    hwnd = existing[0]
+    user32.ShowWindowAsync(hwnd, sw_show)
+    user32.ShowWindowAsync(hwnd, sw_restore)
+    user32.SetForegroundWindow(hwnd)
+    return True
 
 
 def build_tray_icon(controller: DesktopController, actions: dict[str, Any]) -> Any:
