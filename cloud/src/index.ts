@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+import { createLocalJWKSet, jwtVerify, type JWTPayload, type JSONWebKeySet } from "jose";
 
 const PRODUCTS = ["identity-focus", "journal", "watch", "suixin"] as const;
 const REQUIRED_SCOPE = "gateway:read";
@@ -507,13 +507,24 @@ async function introspect(env: Env, token: string, payload: JWTPayload): Promise
   }
 }
 
+let jwksCache: { keys: JSONWebKeySet; expiresAt: number } | undefined;
+
+async function loadJwksLocal(env: Env): Promise<ReturnType<typeof createLocalJWKSet>> {
+  if (jwksCache && jwksCache.expiresAt > Date.now()) return createLocalJWKSet(jwksCache.keys);
+  const response = await fetchBoundedHttp(env.OAUTH_JWKS_URL, { method: "GET", headers: { accept: "application/json" } }, 128_000, 5_000, resolveBindingFetch(env, env.OAUTH_JWKS_URL));
+  if (!response?.ok) throw new Error("jwks_unavailable");
+  const jwks = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes)) as JSONWebKeySet;
+  jwksCache = { keys: jwks, expiresAt: Date.now() + 300_000 };
+  return createLocalJWKSet(jwks);
+}
+
 async function authenticate(request: Request, env: Env): Promise<boolean> {
   const authorization = request.headers.get("authorization") ?? "";
   const match = /^Bearer ([A-Za-z0-9._~-]+)$/.exec(authorization);
   if (!match || !oauthConfigValid(env)) return false;
   try {
-    const jwks = createRemoteJWKSet(new URL(env.OAUTH_JWKS_URL), { timeoutDuration: 5_000, cooldownDuration: 30_000, cacheMaxAge: 300_000 });
-    const { payload } = await jwtVerify(match[1]!, jwks, {
+    const JWKS = await loadJwksLocal(env);
+    const { payload } = await jwtVerify(match[1]!, JWKS, {
       issuer: env.OAUTH_ISSUER,
       audience: env.OAUTH_AUDIENCE,
       algorithms: ["RS256"],
