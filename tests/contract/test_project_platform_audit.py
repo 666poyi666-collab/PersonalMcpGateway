@@ -224,10 +224,10 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
     assert by_id["suixinyiting"]["manifestRepositoryPath"] == "C:\\开发\\手表音乐软件"
     assert by_id["suixinyiting"]["dataPolicy"] == "cloud_allowed_with_media_exclusions"
     assert by_id["suixinyiting"]["mcp"]["status"] == "missing"
-    assert by_id["suixinyiting"]["sync"]["status"] == "missing"
+    assert by_id["suixinyiting"]["sync"]["status"] == "partial"
     assert by_id["do-not-phone"]["dataPolicy"] == "sensitive_cloud_allowed"
     assert by_id["do-not-phone"]["mcp"]["status"] == "partial"
-    assert by_id["do-not-phone"]["sync"]["status"] == "missing"
+    assert by_id["do-not-phone"]["sync"]["status"] == "partial"
 
     gateway = by_id["personal-mcp-gateway"]
     assert gateway["runtimeDiagnostics"] == {

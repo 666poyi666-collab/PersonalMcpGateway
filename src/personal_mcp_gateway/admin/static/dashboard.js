@@ -7,11 +7,28 @@
     watch: '<svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="11" height="14" rx="4"/><path d="M9 5V2.5h6V5m-6 14v2.5h6V19m-5.5-7h5"/></svg>',
     link: '<svg viewBox="0 0 24 24"><path d="M9.5 14.5l5-5m-7.7 8.2-1 1a3.5 3.5 0 0 1-5-5l3-3a3.5 3.5 0 0 1 5 0m6.4 2.6a3.5 3.5 0 0 1 0-5l3-3a3.5 3.5 0 0 1 5 5l-1 1"/></svg>',
     journal: '<svg viewBox="0 0 24 24"><path d="M5 3.5h11a3 3 0 0 1 3 3v14H8a3 3 0 0 1-3-3v-14Z"/><path d="M8 20.5a3 3 0 0 1 0-6h11M9 8h6m-6 3h4"/></svg>',
-    service: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></svg>'
+    service: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></svg>',
+    pin: '<svg viewBox="0 0 24 24"><path d="M14 4 20 10l-3 1-4 4-1 3-2-2 3-1 4-4-3-7Z"/><path d="m9 15-5 5"/></svg>',
+    up: '<svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>',
+    down: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+    grip: '<svg viewBox="0 0 24 24"><path d="M8 7h8M8 12h8M8 17h8"/></svg>'
   };
+  let draggedProjectId = null;
   let refreshTimer;
   let toastTimer;
   let refreshInFlight = false;
+  let latestSnapshot = null;
+  const profileSync = window.PoyiDashboardProfile;
+  let profileState = {
+    version: 1,
+    theme: localStorage.getItem("poyi-dashboard-theme") === "dark" ? "dark" : "light",
+    density: ["full", "compact", "minimal"].includes(localStorage.getItem("poyi-dashboard-density"))
+      ? localStorage.getItem("poyi-dashboard-density")
+      : "full",
+    layout: [],
+    pinnedProjectIds: [],
+    tileSizes: {},
+  };
 
   function text(node, value) { node.textContent = String(value); }
   function compact(value) { return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value || 0); }
@@ -37,6 +54,10 @@
   function syncBlocker(reason) {
     return ({
       authority_not_observed: "未取得权威验证",
+      authority_fetch_failed: "未能读取权威状态",
+      authority_signature_invalid: "权威状态签名无效",
+      authority_status_expired: "权威状态已过期",
+      authority_product_mismatch: "权威状态项目不匹配",
       implementation_incomplete: "实现尚未完成",
       pc_off_acceptance_pending: "PC-off 验收未通过",
       pc_runtime_required: "需要本机运行",
@@ -77,6 +98,104 @@
   const CLAIMED_GROUPS = new Set(Object.values(PROJECT_STYLE).flatMap((s) => s.groups));
   let lastSectionsKey = "";
 
+  function normalizeProfile(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const cleanIds = (items) => Array.isArray(items)
+      ? [...new Set(items.filter((item) => typeof item === "string" && /^[a-z][a-z0-9_]*$/.test(item)))].slice(0, 64)
+      : [];
+    const tileSizes = {};
+    if (source.tileSizes && typeof source.tileSizes === "object" && !Array.isArray(source.tileSizes)) {
+      Object.entries(source.tileSizes).forEach(([id, size]) => {
+        if (/^[a-z][a-z0-9_]*$/.test(id) && ["compact", "standard", "expanded"].includes(size)) tileSizes[id] = size;
+      });
+    }
+    return {
+      version: 1,
+      theme: source.theme === "dark" ? "dark" : "light",
+      density: ["full", "compact", "minimal"].includes(source.density) ? source.density : "full",
+      layout: cleanIds(source.layout),
+      pinnedProjectIds: cleanIds(source.pinnedProjectIds),
+      tileSizes,
+    };
+  }
+
+  function persistProfile() {
+    if (!profileSync) return;
+    void profileSync.update(profileState).catch(() => undefined);
+  }
+
+  function renderProfileChange() {
+    lastSectionsKey = "";
+    if (latestSnapshot) renderProjects(latestSnapshot.targets, latestSnapshot.widgets || [], latestSnapshot);
+  }
+
+  function projectLayout(targets) {
+    const ids = new Set(targets.map((target) => target.id));
+    const baseline = [
+      ...SECTION_ORDER.filter((id) => ids.has(id)),
+      ...targets.map((target) => target.id).filter((id) => !SECTION_ORDER.includes(id)),
+    ];
+    const saved = profileState.layout.filter((id) => ids.has(id));
+    return [...saved, ...baseline.filter((id) => !saved.includes(id))];
+  }
+
+  function orderedProjects(targets) {
+    const byId = new Map(targets.map((target) => [target.id, target]));
+    const ordered = projectLayout(targets).map((id) => byId.get(id)).filter(Boolean);
+    const pinned = new Set(profileState.pinnedProjectIds);
+    return [...ordered.filter((target) => pinned.has(target.id)), ...ordered.filter((target) => !pinned.has(target.id))];
+  }
+
+  function updateProjectLayout(targetId, direction, targets) {
+    const layout = projectLayout(targets);
+    const index = layout.indexOf(targetId);
+    const next = index + direction;
+    if (index < 0 || next < 0 || next >= layout.length) return;
+    [layout[index], layout[next]] = [layout[next], layout[index]];
+    profileState = { ...profileState, layout };
+    persistProfile(); renderProfileChange();
+  }
+
+  // Free drag-to-reorder writes the same profileState.layout the up/down buttons
+  // use, so it persists through the existing encrypted profile with no new field.
+  function reorderProject(draggedId, targetId, placeAfter, targets) {
+    if (!draggedId || draggedId === targetId) return;
+    const layout = projectLayout(targets);
+    const from = layout.indexOf(draggedId);
+    if (from < 0) return;
+    layout.splice(from, 1);
+    let to = layout.indexOf(targetId);
+    if (to < 0) return;
+    if (placeAfter) to += 1;
+    layout.splice(to, 0, draggedId);
+    profileState = { ...profileState, layout };
+    persistProfile(); renderProfileChange();
+  }
+
+  function togglePinnedProject(targetId) {
+    const pinned = new Set(profileState.pinnedProjectIds);
+    if (pinned.has(targetId)) pinned.delete(targetId); else pinned.add(targetId);
+    profileState = { ...profileState, pinnedProjectIds: [...pinned] };
+    persistProfile(); renderProfileChange();
+  }
+
+  function setProjectTileSize(targetId, size) {
+    profileState = { ...profileState, tileSizes: { ...profileState.tileSizes, [targetId]: size } };
+    persistProfile(); renderProfileChange();
+  }
+
+  function iconButton(icon, label, handler, disabled = false) {
+    const button = document.createElement("button");
+    button.className = "project-icon-button";
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.disabled = disabled;
+    button.innerHTML = icons[icon];
+    button.addEventListener("click", handler);
+    return button;
+  }
+
   function probeChip(label, probe) {
     const chip = document.createElement("div"); chip.className = "pv-chip";
     const dot = document.createElement("i"); dot.className = "dot";
@@ -112,20 +231,18 @@
   }
   function renderProjects(targets, widgets, data) {
     const grid = $("projectGrid");
-    const key = JSON.stringify([targets, widgets, data.events, data.gateway, data.fleet]);
+    const key = JSON.stringify([targets, widgets, data.events, data.gateway, data.fleet, profileState]);
     if (key === lastSectionsKey) return;
     lastSectionsKey = key;
     grid.replaceChildren();
-    const byId = new Map(targets.map((t) => [t.id, t]));
-    const ordered = [];
-    SECTION_ORDER.forEach((id) => { if (byId.has(id)) ordered.push(byId.get(id)); });
-    targets.forEach((t) => { if (!SECTION_ORDER.includes(t.id)) ordered.push(t); });
+    const ordered = orderedProjects(targets);
     ordered.forEach((target) => {
       const style = PROJECT_STYLE[target.id] || { flavor: "neutral", accent: target.accent || "#8878ff", display: target.name, tagline: target.description || "", groups: [] };
       const section = document.createElement("section");
       section.className = `proj proj-${style.flavor}`;
       section.style.setProperty("--p-accent", style.accent);
       section.dataset.state = target.state || "offline";
+      section.dataset.tileSize = profileState.tileSizes[target.id] || "standard";
 
       const head = document.createElement("header"); head.className = "proj-head";
       const naming = document.createElement("div");
@@ -137,7 +254,33 @@
       const sdot = document.createElement("i"); sdot.className = "dot"; sdot.dataset.status = target.state || "offline";
       const slabel = document.createElement("b"); slabel.textContent = stateLabel(target.state);
       state.append(sdot, slabel);
-      head.append(naming, state);
+      const controls = document.createElement("div"); controls.className = "proj-head-actions";
+      const dragHandle = iconButton("grip", `拖动排序 ${style.display}`, () => {});
+      dragHandle.classList.add("proj-drag");
+      dragHandle.addEventListener("pointerdown", () => section.setAttribute("draggable", "true"));
+      dragHandle.addEventListener("pointerup", () => section.removeAttribute("draggable"));
+      controls.append(dragHandle);
+      const isPinned = profileState.pinnedProjectIds.includes(target.id);
+      controls.append(iconButton("pin", isPinned ? `取消固定 ${style.display}` : `固定 ${style.display}`, () => togglePinnedProject(target.id)));
+      controls.append(iconButton("up", `上移 ${style.display}`, () => updateProjectLayout(target.id, -1, targets)));
+      controls.append(iconButton("down", `下移 ${style.display}`, () => updateProjectLayout(target.id, 1, targets)));
+      const sizeControl = document.createElement("div");
+      sizeControl.className = "tile-size-toggle";
+      sizeControl.setAttribute("role", "group");
+      sizeControl.setAttribute("aria-label", `${style.display} 卡片尺寸`);
+      const currentSize = section.dataset.tileSize;
+      [["compact", "S", "紧凑"], ["standard", "M", "标准"], ["expanded", "L", "扩展"]].forEach(([size, label, title]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.title = `${style.display} ${title}尺寸`;
+        button.setAttribute("aria-label", `${style.display} ${title}尺寸`);
+        button.setAttribute("aria-pressed", String(currentSize === size));
+        button.addEventListener("click", () => setProjectTileSize(target.id, size));
+        sizeControl.append(button);
+      });
+      controls.append(sizeControl);
+      head.append(naming, state, controls);
 
       const vitals = document.createElement("div"); vitals.className = "proj-vitals";
       vitals.append(probeChip("MCP", target.mcp));
@@ -180,6 +323,41 @@
           dataZone.append(empty);
         }
       }
+
+      section.addEventListener("dragstart", (event) => {
+        draggedProjectId = target.id;
+        section.classList.add("dragging");
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          try { event.dataTransfer.setData("text/plain", target.id); } catch (_) { /* older engines */ }
+        }
+      });
+      section.addEventListener("dragend", () => {
+        draggedProjectId = null;
+        section.removeAttribute("draggable");
+        grid.querySelectorAll(".proj").forEach((node) =>
+          node.classList.remove("dragging", "drag-over-before", "drag-over-after"));
+      });
+      section.addEventListener("dragover", (event) => {
+        if (!draggedProjectId || draggedProjectId === target.id) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        const rect = section.getBoundingClientRect();
+        const after = event.clientY - rect.top > rect.height / 2;
+        section.classList.toggle("drag-over-after", after);
+        section.classList.toggle("drag-over-before", !after);
+      });
+      section.addEventListener("dragleave", () =>
+        section.classList.remove("drag-over-before", "drag-over-after"));
+      section.addEventListener("drop", (event) => {
+        if (!draggedProjectId || draggedProjectId === target.id) return;
+        event.preventDefault();
+        const rect = section.getBoundingClientRect();
+        const after = event.clientY - rect.top > rect.height / 2;
+        const dragged = draggedProjectId;
+        section.classList.remove("drag-over-before", "drag-over-after");
+        reorderProject(dragged, target.id, after, targets);
+      });
 
       section.append(head, vitals, dataZone);
       grid.append(section);
@@ -342,6 +520,7 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 5000);
   }
   function applySnapshot(data) {
+    latestSnapshot = data;
     const summary = data.summary;
     text($("onlineCount"), `${summary.online}/${summary.total}`);
     text($("onlineSub"), summary.offline ? `${summary.offline} 个项目离线` : summary.degraded ? `${summary.degraded} 个项目需要注意` : "所有独立项目运行正常");
@@ -388,33 +567,47 @@
     text($("clockTime"), now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     text($("clockDate"), now.toLocaleDateString("zh-CN", { month: "short", day: "numeric", weekday: "short" }));
   }
+  function applyTheme(value, persist = true) {
+    const theme = value === "dark" ? "dark" : "light";
+    document.body.classList.toggle("light", theme === "light");
+    profileState = { ...profileState, theme };
+    localStorage.setItem("poyi-dashboard-theme", theme);
+    if (persist) persistProfile();
+  }
   function setupTheme() {
-    // Light unless the operator chose dark; anything else (unset, legacy values)
-    // lands on the light default.
-    const stored = localStorage.getItem("poyi-dashboard-theme");
-    if (stored !== "dark") document.body.classList.add("light");
+    applyTheme(profileState.theme, false);
     $("themeToggle").addEventListener("click", () => {
-      document.body.classList.toggle("light");
-      localStorage.setItem("poyi-dashboard-theme", document.body.classList.contains("light") ? "light" : "dark");
+      applyTheme(document.body.classList.contains("light") ? "dark" : "light");
     });
   }
-  function setupDensity() {
-    const allowed = ["full", "compact", "minimal"];
-    const stored = localStorage.getItem("poyi-dashboard-density");
-    const apply = (value) => {
-      const density = allowed.includes(value) ? value : "full";
-      document.body.dataset.density = density;
-      localStorage.setItem("poyi-dashboard-density", density);
-      document.querySelectorAll("[data-density-mode]").forEach((button) => {
-        button.setAttribute("aria-pressed", String(button.dataset.densityMode === density));
-      });
-    };
+  function applyDensity(value, persist = true) {
+    const density = ["full", "compact", "minimal"].includes(value) ? value : "full";
+    document.body.dataset.density = density;
+    profileState = { ...profileState, density };
+    localStorage.setItem("poyi-dashboard-density", density);
     document.querySelectorAll("[data-density-mode]").forEach((button) => {
-      button.addEventListener("click", () => apply(button.dataset.densityMode));
+      button.setAttribute("aria-pressed", String(button.dataset.densityMode === density));
     });
-    apply(stored);
+    if (persist) persistProfile();
+  }
+  function setupDensity() {
+    document.querySelectorAll("[data-density-mode]").forEach((button) => {
+      button.addEventListener("click", () => applyDensity(button.dataset.densityMode));
+    });
+    applyDensity(profileState.density, false);
+  }
+  async function hydrateProfile() {
+    if (!profileSync) return;
+    try {
+      profileState = normalizeProfile(await profileSync.load());
+      applyTheme(profileState.theme, false);
+      applyDensity(profileState.density, false);
+      renderProfileChange();
+    } catch (_) {
+      // LocalStorage remains the presentational fallback when browser storage is blocked.
+    }
   }
   $("refreshNow").addEventListener("click", () => refresh(true));
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-  setupTheme(); setupDensity(); updateClock(); setInterval(updateClock, 1000); refresh();
+  setupTheme(); setupDensity(); void hydrateProfile(); updateClock(); setInterval(updateClock, 1000); refresh();
 })();

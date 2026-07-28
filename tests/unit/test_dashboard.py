@@ -1,14 +1,24 @@
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
 from personal_mcp_gateway.admin.dashboard import (
+    AuthorityStatusDocument,
+    AuthorityStatusEndpoint,
     CloudSyncObservation,
     DashboardMonitor,
     DashboardSyncProfile,
+    DashboardTarget,
     PcOffCapability,
-    _sync_truth,
+    _authority_signing_bytes,  # pyright: ignore[reportPrivateUsage]
+    _sync_truth,  # pyright: ignore[reportPrivateUsage]
     load_cloud_sync_observations,
+    verify_authority_status,
 )
 from personal_mcp_gateway.core.registry import ModuleRegistry
 from personal_mcp_gateway.core.runtime import GatewayRuntime
@@ -20,6 +30,67 @@ def build_monitor(tmp_path: Path) -> DashboardMonitor:
     settings = Settings(data_dir=tmp_path)
     runtime = GatewayRuntime(settings, Database(settings.database_path), ModuleRegistry())
     return DashboardMonitor(runtime)
+
+
+def _base64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def _authority_target(public_key: str) -> DashboardTarget:
+    return DashboardTarget(
+        id="journal",
+        name="Journal",
+        description="Encrypted journal sync",
+        icon="journal",
+        accent="#fff",
+        health_url="http://127.0.0.1:8780/healthz",
+        ready_url="http://127.0.0.1:8780/readyz",
+        sync=DashboardSyncProfile(
+            compliance="complete",
+            data_plane="cloud_primary",
+            pc_off=PcOffCapability(
+                read_available=True,
+                write_available=True,
+                continued_sync=True,
+            ),
+            local_dependency="none",
+            stale_after_seconds=300,
+        ),
+        authority_status=AuthorityStatusEndpoint(
+            url="https://authority.example.test/sync/v2/status",
+            public_key=public_key,
+            max_age_seconds=300,
+        ),
+    )
+
+
+def _signed_authority_status(
+    private_key: Ed25519PrivateKey,
+    *,
+    now: datetime,
+    product_id: str = "journal",
+    issued_at: datetime | None = None,
+    expires_at: datetime | None = None,
+) -> bytes:
+    document = AuthorityStatusDocument.model_validate(
+        {
+            "schemaVersion": 1,
+            "productId": product_id,
+            "issuedAt": (issued_at or now).isoformat(),
+            "expiresAt": (expires_at or now + timedelta(minutes=2)).isoformat(),
+            "observation": {
+                "result": "success",
+                "source": "product-authority",
+                "lastAttemptAt": now.isoformat(),
+                "lastVerifiedAt": now.isoformat(),
+                "pendingCount": 0,
+            },
+            "signature": _base64url(bytes(64)),
+        }
+    )
+    payload = document.model_dump(mode="json", by_alias=True)
+    payload["signature"] = _base64url(private_key.sign(_authority_signing_bytes(document)))
+    return json.dumps(payload, separators=(",", ":")).encode()
 
 
 def test_dashboard_targets_can_extend_and_hide_defaults(tmp_path: Path) -> None:
@@ -184,9 +255,7 @@ def test_sync_status_is_sanitized_and_attached_with_conservative_freshness(
             }
         },
     }
-    monitor.runtime.settings.cloud_sync_status_path.write_text(
-        json.dumps(status), encoding="utf-8"
-    )
+    monitor.runtime.settings.cloud_sync_status_path.write_text(json.dumps(status), encoding="utf-8")
     observations = load_cloud_sync_observations(monitor.runtime.settings.cloud_sync_status_path)
     watch = next(target for target in monitor.targets()[0] if target.id == "watch")
     payload = DashboardMonitor._attach_services(  # pyright: ignore[reportPrivateUsage]
@@ -213,6 +282,106 @@ def test_sync_status_is_sanitized_and_attached_with_conservative_freshness(
     assert "privateError" not in payload["sync"]["observation"]
 
 
+def test_local_status_cannot_self_declare_product_authority(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    status = {
+        "schemaVersion": 2,
+        "generatedAt": now.isoformat(),
+        "projects": {
+            "journal": {
+                "result": "success",
+                "source": "product-authority",
+                "lastAttemptAt": now.isoformat(),
+                "lastVerifiedAt": now.isoformat(),
+                "pendingCount": 0,
+            }
+        },
+    }
+    path = tmp_path / "cloud-sync-status.json"
+    path.write_text(json.dumps(status), encoding="utf-8")
+
+    assert load_cloud_sync_observations(path) == {}
+
+
+def test_signed_authority_status_rejects_tampering_expiry_and_product_mismatch() -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    payload = _signed_authority_status(private_key, now=now)
+
+    observation, issue = verify_authority_status(payload, target, now)
+    assert issue is None
+    assert observation is not None
+    assert observation.source == "product-authority"
+    assert observation.pending_count == 0
+
+    tampered = json.loads(payload)
+    tampered["observation"]["pendingCount"] = 1
+    assert verify_authority_status(json.dumps(tampered).encode(), target, now) == (
+        None,
+        "authority_signature_invalid",
+    )
+
+    expired = _signed_authority_status(
+        private_key,
+        now=now,
+        issued_at=now - timedelta(minutes=4),
+        expires_at=now - timedelta(minutes=1),
+    )
+    assert verify_authority_status(expired, target, now) == (None, "authority_status_expired")
+
+    wrong_product = _signed_authority_status(private_key, now=now, product_id="watch")
+    assert verify_authority_status(wrong_product, target, now) == (
+        None,
+        "authority_product_mismatch",
+    )
+
+
+def test_authority_endpoint_rejects_loopback_and_non_cloud_profiles() -> None:
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    with pytest.raises(ValueError, match="cannot target loopback"):
+        DashboardTarget.model_validate(
+            {
+                **_authority_target(public_key).model_dump(),
+                "authority_status": {
+                    "url": "https://127.0.0.1/status",
+                    "public_key": public_key,
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="requires a cloud_primary"):
+        DashboardTarget(
+            id="local",
+            name="Local",
+            description="Local runtime",
+            icon="service",
+            accent="#fff",
+            health_url="http://127.0.0.1:8790/healthz",
+            ready_url="http://127.0.0.1:8790/readyz",
+            sync=DashboardSyncProfile(
+                compliance="missing",
+                data_plane="local_only",
+                pc_off=PcOffCapability(
+                    read_available=False,
+                    write_available=False,
+                    continued_sync=False,
+                ),
+                local_dependency="runtime",
+            ),
+            authority_status=AuthorityStatusEndpoint(
+                url="https://authority.example.test/status",
+                public_key=public_key,
+            ),
+        )
+
+
 def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
     now = datetime.now(UTC)
     profile = DashboardSyncProfile(
@@ -235,7 +404,9 @@ def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
     )
 
     assert _sync_truth(profile, fresh, "online", now)["state"] == "fresh"
-    assert _sync_truth(profile, fresh, "offline", now)["state"] == "offline"
+    # The local MCP card can be offline while the cloud authority still has a
+    # verifiable fresh state; those two facts must not overwrite each other.
+    assert _sync_truth(profile, fresh, "offline", now)["state"] == "fresh"
     assert _sync_truth(profile, None, "online", now) == {
         "state": "unknown",
         "lastVerifiedAt": None,
@@ -247,3 +418,11 @@ def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
     assert _sync_truth(profile, stale, "online", now)["state"] == "stale"
     blocked = fresh.model_copy(update={"pending_count": 2})
     assert _sync_truth(profile, blocked, "online", now)["state"] == "blocked"
+
+    mirror_only = fresh.model_copy(update={"source": "pc-sync"})
+    assert _sync_truth(profile, mirror_only, "online", now) == {
+        "state": "unknown",
+        "lastVerifiedAt": now.isoformat(),
+        "pendingCount": 0,
+        "blockerReason": "authority_not_observed",
+    }

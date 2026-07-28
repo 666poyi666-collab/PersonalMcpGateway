@@ -81,7 +81,7 @@ def build_admin_app(runtime: GatewayRuntime) -> Starlette:
 
     async def dashboard_asset(request: Request) -> FileResponse | JSONResponse:
         name = request.path_params["name"]
-        if name not in {"dashboard.css", "dashboard.js"}:
+        if name not in {"dashboard.css", "dashboard.js", "dashboard-profile.js"}:
             return JSONResponse({"error": "not_found"}, status_code=404)
         media_type = "text/css" if name.endswith(".css") else "text/javascript"
         return FileResponse(STATIC_ROOT / name, media_type=media_type)

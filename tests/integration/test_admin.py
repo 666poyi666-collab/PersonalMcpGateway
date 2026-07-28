@@ -57,8 +57,10 @@ async def test_admin_endpoints_authorization_and_bundle(tmp_path: Path) -> None:
         assert forced["generatedAt"] != snapshot["generatedAt"]
         stylesheet = await client.get("/admin/assets/dashboard.css")
         script = await client.get("/admin/assets/dashboard.js")
+        profile_script = await client.get("/admin/assets/dashboard-profile.js")
         assert stylesheet.status_code == 200 and "project-grid" in stylesheet.text
         assert script.status_code == 200 and "dashboard-data" in script.text
+        assert profile_script.status_code == 200 and "prepareExchange" in profile_script.text
         assert (await client.get("/admin/assets/private.txt")).status_code == 404
         assert (await client.get("/admin/modules")).json() == {"modules": []}
         assert (await client.get("/admin/errors?limit=1")).json() == {"errors": []}

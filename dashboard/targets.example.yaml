@@ -18,4 +18,10 @@ targets:
         write_available: false
         continued_sync: false
       local_dependency: runtime  # none | uplink | runtime
+    # Only for an independently verified cloud_primary authority. This is a
+    # public Ed25519 verifier, never a device token, OAuth credential, or secret.
+    # authority_status:
+    #   url: https://authority.example.invalid/sync/v2/status
+    #   public_key: unpadded-base64url-32-byte-ed25519-public-key
+    #   max_age_seconds: 900
     enabled: true

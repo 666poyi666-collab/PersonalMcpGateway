@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import json
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -10,6 +13,8 @@ from urllib.parse import urlparse
 
 import httpx
 import yaml
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from personal_mcp_gateway.admin import fleet
@@ -38,9 +43,7 @@ class DashboardSyncProfile(BaseModel):
             if self.pc_off.continued_sync:
                 raise ValueError("snapshot_mirror cannot claim continued sync")
         if self.data_plane == "local_only" and (
-            self.pc_off.read_available
-            or self.pc_off.write_available
-            or self.pc_off.continued_sync
+            self.pc_off.read_available or self.pc_off.write_available or self.pc_off.continued_sync
         ):
             raise ValueError("local_only cannot claim power-off availability")
         if self.pc_off.continued_sync and not (
@@ -61,6 +64,10 @@ SyncFailureReason = Literal[
 SyncTruthState = Literal["fresh", "stale", "offline", "blocked", "unknown"]
 SyncBlockerReason = Literal[
     "authority_not_observed",
+    "authority_fetch_failed",
+    "authority_signature_invalid",
+    "authority_status_expired",
+    "authority_product_mismatch",
     "implementation_incomplete",
     "pc_off_acceptance_pending",
     "pc_runtime_required",
@@ -70,6 +77,13 @@ SyncBlockerReason = Literal[
     "local_data_unavailable",
     "local_items_unavailable",
     "no_local_entries",
+]
+
+AuthorityIssue = Literal[
+    "authority_fetch_failed",
+    "authority_signature_invalid",
+    "authority_status_expired",
+    "authority_product_mismatch",
 ]
 
 
@@ -84,14 +98,12 @@ class CloudSyncItemObservation(BaseModel):
 
     result: Literal["success", "failed"]
     last_attempt_at: datetime = Field(alias="lastAttemptAt")
-    last_successful_push_at: datetime | None = Field(
-        default=None, alias="lastSuccessfulPushAt"
-    )
+    last_successful_push_at: datetime | None = Field(default=None, alias="lastSuccessfulPushAt")
     reason: SyncFailureReason | None = None
 
-    _timestamps_are_aware = field_validator(
-        "last_attempt_at", "last_successful_push_at"
-    )(_require_aware)
+    _timestamps_are_aware = field_validator("last_attempt_at", "last_successful_push_at")(
+        _require_aware
+    )
 
 
 def _empty_sync_items() -> dict[str, CloudSyncItemObservation]:
@@ -104,9 +116,7 @@ class CloudSyncObservation(BaseModel):
     result: Literal["success", "partial", "failed", "no_changes"]
     source: Literal["pc-sync", "product-authority"]
     last_attempt_at: datetime = Field(alias="lastAttemptAt")
-    last_successful_push_at: datetime | None = Field(
-        default=None, alias="lastSuccessfulPushAt"
-    )
+    last_successful_push_at: datetime | None = Field(default=None, alias="lastSuccessfulPushAt")
     last_complete_push_at: datetime | None = Field(default=None, alias="lastCompletePushAt")
     pushed_items: int = Field(default=0, alias="pushedItems", ge=0)
     skipped_items: int = Field(default=0, alias="skippedItems", ge=0)
@@ -118,8 +128,7 @@ class CloudSyncObservation(BaseModel):
     items: dict[str, CloudSyncItemObservation] = Field(default_factory=_empty_sync_items)
 
     _timestamps_are_aware = field_validator(
-        "last_attempt_at", "last_successful_push_at", "last_complete_push_at",
-        "last_verified_at"
+        "last_attempt_at", "last_successful_push_at", "last_complete_push_at", "last_verified_at"
     )(_require_aware)
 
 
@@ -137,6 +146,106 @@ class CloudSyncStatusDocument(BaseModel):
     _generated_at_is_aware = field_validator("generated_at")(_require_aware)
 
 
+def _decode_base64url(value: str) -> bytes:
+    if not value or not all(char.isalnum() or char in "-_" for char in value):
+        raise ValueError("value must be unpadded base64url")
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("value must be unpadded base64url") from exc
+
+
+class AuthorityStatusEndpoint(BaseModel):
+    """Pinned public verifier for a product-authority status document."""
+
+    url: str
+    public_key: str
+    max_age_seconds: int = Field(default=900, ge=60, le=86_400)
+
+    @field_validator("url")
+    @classmethod
+    def require_https(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("authority status endpoint must be an HTTPS URL without user info")
+        if parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("authority status endpoint cannot target loopback")
+        return value
+
+    @field_validator("public_key")
+    @classmethod
+    def require_ed25519_public_key(cls, value: str) -> str:
+        if len(_decode_base64url(value)) != 32:
+            raise ValueError("authority status public_key must be a 32-byte Ed25519 key")
+        return value
+
+
+class AuthorityStatusDocument(BaseModel):
+    """Signed public metadata only; this contract never contains business data."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal[1] = Field(alias="schemaVersion")
+    product_id: str = Field(alias="productId", pattern=r"^[a-z][a-z0-9_]*$")
+    issued_at: datetime = Field(alias="issuedAt")
+    expires_at: datetime = Field(alias="expiresAt")
+    observation: CloudSyncObservation
+    signature: str
+
+    _timestamps_are_aware = field_validator("issued_at", "expires_at")(_require_aware)
+
+    @field_validator("signature")
+    @classmethod
+    def require_ed25519_signature(cls, value: str) -> str:
+        if len(_decode_base64url(value)) != 64:
+            raise ValueError("authority status signature must be an Ed25519 signature")
+        return value
+
+    @model_validator(mode="after")
+    def require_authority_observation(self) -> Self:
+        if self.expires_at <= self.issued_at:
+            raise ValueError("authority status expiry must follow issuance")
+        if self.observation.source != "product-authority":
+            raise ValueError("authority status source must be product-authority")
+        return self
+
+
+def _authority_signing_bytes(document: AuthorityStatusDocument) -> bytes:
+    payload = document.model_dump(mode="json", by_alias=True, exclude={"signature"})
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+
+
+def verify_authority_status(
+    payload: bytes,
+    target: DashboardTarget,
+    now: datetime,
+) -> tuple[CloudSyncObservation | None, AuthorityIssue | None]:
+    """Fail closed unless a fresh document validates against the target's pinned key."""
+    endpoint = target.authority_status
+    if endpoint is None:
+        return None, "authority_fetch_failed"
+    if now.tzinfo is None:
+        raise ValueError("authority verification clock must include a timezone")
+    if len(payload) > 64_000:
+        return None, "authority_fetch_failed"
+    try:
+        document = AuthorityStatusDocument.model_validate_json(payload)
+    except (ValueError, UnicodeDecodeError):
+        return None, "authority_signature_invalid"
+    if document.product_id != target.id:
+        return None, "authority_product_mismatch"
+    if document.issued_at > now or document.expires_at <= now:
+        return None, "authority_status_expired"
+    if (now - document.issued_at).total_seconds() > endpoint.max_age_seconds:
+        return None, "authority_status_expired"
+    try:
+        key = Ed25519PublicKey.from_public_bytes(_decode_base64url(endpoint.public_key))
+        key.verify(_decode_base64url(document.signature), _authority_signing_bytes(document))
+    except (InvalidSignature, ValueError):
+        return None, "authority_signature_invalid"
+    return document.observation, None
+
+
 class DashboardTarget(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     name: str
@@ -149,6 +258,7 @@ class DashboardTarget(BaseModel):
     mcp_service: str | None = None
     tunnel_service: str | None = None
     sync: DashboardSyncProfile | None = None
+    authority_status: AuthorityStatusEndpoint | None = None
     enabled: bool = True
 
     @field_validator("health_url", "ready_url", "tunnel_ready_url")
@@ -166,6 +276,12 @@ class DashboardTarget(BaseModel):
         if not internal and not loopback:
             raise ValueError("Dashboard targets must use loopback HTTP endpoints")
         return value
+
+    @model_validator(mode="after")
+    def restrict_authority_status_to_cloud_primary(self) -> Self:
+        if self.authority_status and (self.sync is None or self.sync.data_plane != "cloud_primary"):
+            raise ValueError("authority_status requires a cloud_primary sync profile")
+        return self
 
 
 def _empty_targets() -> list[DashboardTarget]:
@@ -277,7 +393,14 @@ def load_cloud_sync_observations(path: Path) -> dict[str, CloudSyncObservation]:
         document = CloudSyncStatusDocument.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return document.projects
+    # This file is written by the Windows-side watchdog. It is a useful mirror
+    # for snapshot widgets, but it is not a product authority and may never
+    # self-upgrade a cloud-primary card by declaring source=product-authority.
+    return {
+        project_id: observation
+        for project_id, observation in document.projects.items()
+        if observation.source == "pc-sync"
+    }
 
 
 def _snapshot_state(
@@ -323,18 +446,21 @@ def _last_verified_at(observation: CloudSyncObservation | None) -> datetime | No
 def _sync_truth(
     profile: DashboardSyncProfile,
     observation: CloudSyncObservation | None,
-    target_state: str,
+    _target_state: str,
     now: datetime,
+    authority_issue: AuthorityIssue | None = None,
 ) -> dict[str, Any]:
     """Produce only a conservative, evidence-backed dashboard sync state."""
     verified_at = _last_verified_at(observation)
     pending_count = observation.pending_count if observation else None
     if observation and pending_count is None:
-        pending_count = max(0, observation.total_items - sum(
-            1
-            for item in observation.items.values()
-            if item.last_successful_push_at is not None
-        ))
+        pending_count = max(
+            0,
+            observation.total_items
+            - sum(
+                1 for item in observation.items.values() if item.last_successful_push_at is not None
+            ),
+        )
 
     def result(
         state: SyncTruthState,
@@ -349,20 +475,25 @@ def _sync_truth(
 
     if profile.data_plane == "local_only":
         return result("blocked", "pc_runtime_required")
-    if target_state == "offline":
-        return result("offline", "local_mcp_unreachable")
     if profile.compliance == "missing":
         return result("blocked", "implementation_incomplete")
     if profile.compliance != "complete":
         return result("blocked", "pc_off_acceptance_pending")
+    if authority_issue == "authority_status_expired":
+        return result("stale", authority_issue)
+    if authority_issue in {"authority_signature_invalid", "authority_product_mismatch"}:
+        return result("blocked", authority_issue)
+    if authority_issue == "authority_fetch_failed":
+        return result("unknown", authority_issue)
     if observation is None:
         return result("unknown", "authority_not_observed")
+    # The local probe only says whether this Windows-hosted MCP process is up.
+    # A cloud-primary sync badge must be backed by the product authority itself,
+    # never by a stale PC-side mirror or by the local process state.
+    if observation.source != "product-authority":
+        return result("unknown", "authority_not_observed")
     if observation.result == "failed":
-        blocker = (
-            observation.blocker_reason
-            or observation.reason
-            or "cloud_push_failed"
-        )
+        blocker = observation.blocker_reason or observation.reason or "cloud_push_failed"
         return result("offline", blocker)
     if observation.blocker_reason:
         return result("blocked", observation.blocker_reason)
@@ -381,6 +512,7 @@ def _sync_payload(
     observation: CloudSyncObservation | None,
     now: datetime,
     target_state: str,
+    authority_issue: AuthorityIssue | None = None,
 ) -> dict[str, Any]:
     runtime: dict[str, Any]
     if observation is None:
@@ -398,7 +530,7 @@ def _sync_payload(
         "localDependency": profile.local_dependency,
         "staleAfterSeconds": profile.stale_after_seconds,
         "snapshotState": _snapshot_state(profile, observation, now),
-        "truth": _sync_truth(profile, observation, target_state, now),
+        "truth": _sync_truth(profile, observation, target_state, now, authority_issue),
         "observation": runtime,
     }
 
@@ -435,15 +567,22 @@ class DashboardMonitor:
             }
             | {fleet.WATCHDOG_SERVICE}
         )
-        service_states, probed, sync_observations = await asyncio.gather(
+        service_states, probed, local_sync_observations, authority_sync = await asyncio.gather(
             asyncio.to_thread(fleet.query_service_states, service_names),
             self._probe_all(targets),
             asyncio.to_thread(
                 load_cloud_sync_observations, self.runtime.settings.cloud_sync_status_path
             ),
+            self._fetch_authority_observations(targets),
         )
+        authority_observations, authority_issues = authority_sync
+        sync_observations = {**local_sync_observations, **authority_observations}
         target_states = self._attach_services(
-            targets, probed, service_states, sync_observations=sync_observations
+            targets,
+            probed,
+            service_states,
+            sync_observations=sync_observations,
+            authority_issues=authority_issues,
         )
         activity, recent, widgets = await asyncio.gather(
             self._activity(), self._recent_invocations(), self.widgets.snapshot()
@@ -497,14 +636,73 @@ class DashboardMonitor:
                 await asyncio.gather(*(self._probe_target(client, target) for target in targets))
             )
 
+    async def _fetch_authority_observations(
+        self,
+        targets: list[DashboardTarget],
+    ) -> tuple[dict[str, CloudSyncObservation], dict[str, AuthorityIssue]]:
+        configured = [target for target in targets if target.authority_status is not None]
+        if not configured:
+            return {}, {}
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(3.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            results = await asyncio.gather(
+                *(self._fetch_authority_observation(client, target) for target in configured)
+            )
+        observations: dict[str, CloudSyncObservation] = {}
+        issues: dict[str, AuthorityIssue] = {}
+        for target, observation, issue in results:
+            if observation is not None:
+                observations[target.id] = observation
+            if issue is not None:
+                issues[target.id] = issue
+        return observations, issues
+
+    @staticmethod
+    async def _fetch_authority_observation(
+        client: httpx.AsyncClient,
+        target: DashboardTarget,
+    ) -> tuple[DashboardTarget, CloudSyncObservation | None, AuthorityIssue | None]:
+        endpoint = target.authority_status
+        if endpoint is None:
+            return target, None, "authority_fetch_failed"
+        try:
+            async with client.stream(
+                "GET",
+                endpoint.url,
+                headers={"Accept": "application/json"},
+            ) as response:
+                if response.status_code != 200:
+                    return target, None, "authority_fetch_failed"
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > 64_000:
+                    return target, None, "authority_fetch_failed"
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > 64_000:
+                        return target, None, "authority_fetch_failed"
+                    chunks.append(chunk)
+        except (httpx.HTTPError, ValueError):
+            return target, None, "authority_fetch_failed"
+        observation, issue = verify_authority_status(
+            b"".join(chunks), target, datetime.now(UTC)
+        )
+        return target, observation, issue
+
     @staticmethod
     def _attach_services(
         targets: list[DashboardTarget],
         probed: list[dict[str, Any]],
         service_states: dict[str, str],
         sync_observations: dict[str, CloudSyncObservation] | None = None,
+        authority_issues: dict[str, AuthorityIssue] | None = None,
     ) -> list[dict[str, Any]]:
         observed = sync_observations or {}
+        issues = authority_issues or {}
         now = datetime.now(UTC)
         for target, payload in zip(targets, probed, strict=True):
             if target.mcp_service and isinstance(payload.get("mcp"), dict):
@@ -523,6 +721,7 @@ class DashboardMonitor:
                     observed.get(target.id),
                     now,
                     str(payload.get("state", "unknown")),
+                    issues.get(target.id),
                 )
                 if target.sync
                 else None

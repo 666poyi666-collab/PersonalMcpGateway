@@ -292,12 +292,12 @@
         "coverage": "No cloud MCP projection exists. Any future projection must remain metadata-only and cannot expose NetEase credentials, media URLs, audio bytes, caches, or playback diagnostics."
       },
       "sync": {
-        "status": "missing",
+        "status": "partial",
         "dataPlane": "cloud_primary",
-        "mode": "encrypted_playback_preferences_not_implemented",
+        "mode": "encrypted_allowlist_sync_local_implemented_remote_unverified",
         "supportsPcOff": false,
         "supportsBidirectionalDelta": false,
-        "pcOffBehavior": "The required encrypted state plane for queue references, favorites, progress and preferences is not implemented. NetEase cookie/token, media URL, audio bytes and cache remain excluded."
+        "pcOffBehavior": "The Android client locally implements AES-256-GCM synchronization for allow-listed queue references, favorites, progress and preferences; deployment, device provisioning and PC-off evidence remain absent. NetEase cookie/token, media URL, audio bytes and cache remain excluded."
       },
       "requirementsMet": false,
       "priority": "P0"
@@ -410,12 +410,12 @@
         "coverage": "The app reads FocusLink focus state locally, but no verified projection exists for this product's encrypted rules, completion records or configuration."
       },
       "sync": {
-        "status": "missing",
+        "status": "partial",
         "dataPlane": "cloud_primary",
-        "mode": "focuslink_authority_reuse_not_implemented",
+        "mode": "focuslink_authority_reuse_local_implemented_remote_unverified",
         "supportsPcOff": false,
         "supportsBidirectionalDelta": false,
-        "pcOffBehavior": "The application must reuse FocusLink account authority and device identity for encrypted rules, state, completions and configuration. It currently only reads live focus state."
+        "pcOffBehavior": "The local encrypted v2 guard sync reuses FocusLink account authority and device identity for rules, state, completions and configuration, and compiles locally. Deployment, real-device key flows and PC-off evidence remain incomplete."
       },
       "requirementsMet": false,
       "priority": "P0"
