@@ -4,6 +4,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from personal_mcp_gateway.admin.dashboard import DashboardMonitor
 from personal_mcp_gateway.core.errors import GatewayError
 from personal_mcp_gateway.core.result import failure, success
 from personal_mcp_gateway.core.runtime import GatewayRuntime
@@ -16,6 +17,20 @@ def build_mcp_server(runtime: GatewayRuntime) -> FastMCP:
     @mcp.tool(description="Get gateway and module health", structured_output=True)
     async def personal_system_status() -> dict[str, Any]:
         return success("personal", "system_status", await runtime.system_status())
+
+    @mcp.tool(
+        description=(
+            "Get cloud-authority sync freshness and safe operational summaries. "
+            "Never returns encrypted product bodies, tokens, cookies, keys, or diagnostics."
+        ),
+        structured_output=True,
+    )
+    async def personal_cloud_sync_overview() -> dict[str, Any]:
+        return success(
+            "personal",
+            "cloud_sync_overview",
+            await DashboardMonitor(runtime).cloud_mcp_summary(),
+        )
 
     @mcp.tool(description="List installed adapter modules", structured_output=True)
     async def personal_list_modules() -> dict[str, Any]:

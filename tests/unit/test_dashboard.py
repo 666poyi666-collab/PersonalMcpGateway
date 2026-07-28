@@ -17,6 +17,7 @@ from personal_mcp_gateway.admin.dashboard import (
     PcOffCapability,
     _authority_signing_bytes,  # pyright: ignore[reportPrivateUsage]
     _sync_truth,  # pyright: ignore[reportPrivateUsage]
+    cloud_mcp_summary,
     load_cloud_sync_observations,
     verify_authority_status,
 )
@@ -425,4 +426,59 @@ def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
         "lastVerifiedAt": now.isoformat(),
         "pendingCount": 0,
         "blockerReason": "authority_not_observed",
+    }
+
+
+def test_cloud_mcp_summary_is_an_allowlist_not_a_dashboard_passthrough() -> None:
+    payload = cloud_mcp_summary(
+        {
+            "generatedAt": "2026-07-28T12:00:00+00:00",
+            "targets": [
+                {
+                    "id": "journal",
+                    "name": "private name must not escape",
+                    "sync": {
+                        "pcOff": {
+                            "readAvailable": True,
+                            "writeAvailable": True,
+                            "continuedSync": False,
+                        },
+                        "truth": {
+                            "state": "fresh",
+                            "lastVerifiedAt": "2026-07-28T11:59:00+00:00",
+                            "pendingCount": 2,
+                            "blockerReason": None,
+                        },
+                        "observation": {
+                            "revision": 12,
+                            "ciphertext": "must-not-escape",
+                            "token": "must-not-escape",
+                            "body": "must-not-escape",
+                        },
+                    },
+                }
+            ],
+            "widgets": [{"content": "must-not-escape"}],
+            "errors": [{"token": "must-not-escape"}],
+        }
+    )
+
+    assert payload == {
+        "schemaVersion": 1,
+        "generatedAt": "2026-07-28T12:00:00+00:00",
+        "products": [
+            {
+                "productId": "journal",
+                "revision": 12,
+                "freshness": "fresh",
+                "lastVerifiedAt": "2026-07-28T11:59:00+00:00",
+                "pendingCount": 2,
+                "blockerReason": None,
+                "pcOff": {
+                    "readAvailable": True,
+                    "writeAvailable": True,
+                    "continuedSync": False,
+                },
+            }
+        ],
     }

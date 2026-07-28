@@ -124,6 +124,9 @@ class CloudSyncObservation(BaseModel):
     reason: SyncFailureReason | None = None
     last_verified_at: datetime | None = Field(default=None, alias="lastVerifiedAt")
     pending_count: int | None = Field(default=None, alias="pendingCount", ge=0)
+    # This is an authority checkpoint, not an entity revision.  Keeping it
+    # separate makes the dashboard/MCP surface useful without exposing data.
+    revision: int | None = Field(default=None, ge=0)
     blocker_reason: SyncBlockerReason | None = Field(default=None, alias="blockerReason")
     items: dict[str, CloudSyncItemObservation] = Field(default_factory=_empty_sync_items)
 
@@ -535,6 +538,76 @@ def _sync_payload(
     }
 
 
+def cloud_mcp_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Return the deliberately small cloud-MCP status contract.
+
+    The dashboard snapshot also contains local service probes, widgets,
+    diagnostics, and recent activity.  None of those are cloud authority data,
+    so this projection never forwards them.  It also intentionally copies
+    individual fields instead of returning ``observation`` wholesale: future
+    authority documents cannot accidentally add ciphertext or credentials to
+    the MCP surface.
+    """
+
+    products: list[dict[str, Any]] = []
+    candidate_targets = snapshot.get("targets")
+    targets: list[object] = (
+        cast(list[object], candidate_targets) if isinstance(candidate_targets, list) else []
+    )
+    for candidate in targets:
+        if not isinstance(candidate, dict):
+            continue
+        target = cast(dict[str, Any], candidate)
+        product_id = target.get("id")
+        sync = target.get("sync")
+        if not isinstance(product_id, str) or not isinstance(sync, dict):
+            continue
+        sync_data = cast(dict[str, Any], sync)
+        truth_input = sync_data.get("truth")
+        observation_input = sync_data.get("observation")
+        truth: dict[str, Any] = (
+            cast(dict[str, Any], truth_input) if isinstance(truth_input, dict) else {}
+        )
+        observation: dict[str, Any] = (
+            cast(dict[str, Any], observation_input)
+            if isinstance(observation_input, dict)
+            else {}
+        )
+        revision = observation.get("revision")
+        state = truth.get("state")
+        verified_at = truth.get("lastVerifiedAt")
+        pending_count = truth.get("pendingCount")
+        blocker_reason = truth.get("blockerReason")
+        pc_off_input = sync_data.get("pcOff")
+        pc_off = cast(dict[str, Any], pc_off_input) if isinstance(pc_off_input, dict) else {}
+        products.append(
+            {
+                "productId": product_id,
+                "revision": revision if isinstance(revision, int) and revision >= 0 else None,
+                "freshness": state
+                if state in {"fresh", "stale", "offline", "blocked", "unknown"}
+                else "unknown",
+                "lastVerifiedAt": verified_at if isinstance(verified_at, str) else None,
+                "pendingCount": pending_count
+                if isinstance(pending_count, int) and pending_count >= 0
+                else None,
+                "blockerReason": blocker_reason if isinstance(blocker_reason, str) else None,
+                "pcOff": {
+                    "readAvailable": pc_off.get("readAvailable") is True,
+                    "writeAvailable": pc_off.get("writeAvailable") is True,
+                    "continuedSync": pc_off.get("continuedSync") is True,
+                },
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "generatedAt": snapshot.get("generatedAt")
+        if isinstance(snapshot.get("generatedAt"), str)
+        else None,
+        "products": products,
+    }
+
+
 class DashboardMonitor:
     def __init__(self, runtime: GatewayRuntime) -> None:
         self.runtime = runtime
@@ -554,6 +627,11 @@ class DashboardMonitor:
             self._cache = await self._build_snapshot()
             self._cached_at = time.monotonic()
             return self._cache
+
+    async def cloud_mcp_summary(self) -> dict[str, Any]:
+        """Build the status-only cloud-MCP projection from verified truth."""
+
+        return cloud_mcp_summary(await self.snapshot())
 
     async def _build_snapshot(self) -> dict[str, Any]:
         probe_started = time.perf_counter()

@@ -12,6 +12,7 @@ def test_tool_list_is_stable(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, modules_dir=repository_root / "modules")
     server = build_mcp_server(build_runtime(settings))
     assert tool_names(server) == [
+        "personal_cloud_sync_overview",
         "personal_diagnostics",
         "personal_get_module_status",
         "personal_get_recent_errors",
