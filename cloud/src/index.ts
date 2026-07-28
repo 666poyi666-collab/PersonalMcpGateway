@@ -356,7 +356,15 @@ function challenge(request: Request): Response {
 async function oauthDependencyProbe(env: Env): Promise<Record<string, unknown>> {
   if (!oauthConfigValid(env)) return { configured: false, metadata: false, jwks: false, introspection: false };
   const probe = async (url: string, init?: RequestInit): Promise<Response | null> => {
-    try { return await fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(5_000) }); } catch { return null; }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      return await fetch(url, { ...init, redirect: "error", signal: controller.signal });
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
   };
   const [metadata, jwks, tokenStatus] = await Promise.all([
     probe(`${env.OAUTH_ISSUER}/.well-known/oauth-authorization-server`, { headers: { accept: "application/json" } }),
