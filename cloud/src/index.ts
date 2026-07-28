@@ -26,6 +26,8 @@ interface Env {
   OAUTH_RS_CLIENT_SECRET?: string;
   AUTHORITY_CONFIG_JSON: string;
   AUTHORITY_CHECKPOINTS: DurableObjectNamespace;
+  AUTHORITY_SERVICE?: Fetcher;
+  OAUTH_AS_SERVICE?: Fetcher;
 }
 
 export interface AuthorityConfig {
@@ -275,16 +277,48 @@ async function readBoundedJson(request: Request, maxBytes: number): Promise<Boun
   }
 }
 
+// Cloudflare Workers blocks worker-to-worker subrequests over the public
+// *.workers.dev hostnames (error 1042). Sibling workers are therefore reached
+// through service bindings; resolveBindingFetch maps a target URL to the binding
+// that serves it and falls back to the public network for everything else.
+function resolveBindingFetch(env: Env, url: string): Fetcher | undefined {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  const bindings: Array<[string, Fetcher | undefined]> = [
+    ["personal-mcp-authority-staging.focuslink-poyi-6465e9.workers.dev", env.AUTHORITY_SERVICE],
+    ["poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev", env.OAUTH_AS_SERVICE],
+  ];
+  for (const [boundHostname, binding] of bindings) {
+    if (hostname === boundHostname && binding) return binding;
+  }
+  return undefined;
+}
+
 async function fetchBoundedHttp(
   url: string,
   init: RequestInit,
   maxBytes: number,
   timeoutMs = 5_000,
+  fetcher?: Fetcher,
 ): Promise<BoundedHttpResponse | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, redirect: "error", signal: controller.signal });
+    const dispatch = fetcher === undefined
+      ? (input: RequestInfo | URL, requestInit?: RequestInit) => fetch(input, requestInit)
+      : typeof fetcher === "function"
+        ? (input: RequestInfo | URL, requestInit?: RequestInit) => (fetcher as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, requestInit)
+        : (input: RequestInfo | URL, requestInit?: RequestInit) => fetcher.fetch(input as RequestInfo, requestInit);
+    const response = await dispatch(url, { ...init, redirect: "manual", signal: controller.signal });
+    // redirect:"manual" surfaces 3xx instead of following; treat any redirect as a failure.
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      return null;
+    }
     const declared = Number(response.headers.get("content-length") ?? "0");
     if (declared > maxBytes) {
       await response.body?.cancel();
@@ -318,8 +352,8 @@ async function fetchBoundedHttp(
   }
 }
 
-async function fetchBounded(url: string): Promise<Uint8Array | null> {
-  const response = await fetchBoundedHttp(url, { method: "GET", headers: { accept: "application/json" } }, MAX_AUTHORITY_BYTES);
+async function fetchBounded(url: string, fetcher?: Fetcher): Promise<Uint8Array | null> {
+  const response = await fetchBoundedHttp(url, { method: "GET", headers: { accept: "application/json" } }, MAX_AUTHORITY_BYTES, 5_000, fetcher);
   return response?.ok ? response.bytes : null;
 }
 
@@ -328,7 +362,7 @@ export async function verifyAuthority(
   config: AuthorityConfig,
   now = Date.now(),
 ): Promise<{ verified: VerifiedAuthority | null; issue: AuthorityIssue | null }> {
-  const bytes = await fetchBounded(config.url);
+  const bytes = await fetchBounded(config.url, resolveBindingFetch(env, config.url));
   if (!bytes) return { verified: null, issue: "authority_fetch_failed" };
   let document: unknown;
   try { document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { return { verified: null, issue: "authority_signature_invalid" }; }
@@ -454,7 +488,7 @@ async function introspect(env: Env, token: string, payload: JWTPayload): Promise
       method: "POST",
       headers: { authorization: `Basic ${basic}`, "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: new URLSearchParams({ token }).toString(),
-    }, 16_384);
+    }, 16_384, 5_000, resolveBindingFetch(env, env.OAUTH_INTROSPECTION_URL));
     if (!response?.ok || !response.contentType.toLowerCase().includes("application/json")) return false;
     const body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes)) as Record<string, unknown>;
     const scope = typeof body.scope === "string" ? body.scope.split(/\s+/) : [];
@@ -504,8 +538,8 @@ function challenge(request: Request): Response {
 async function oauthDependencyProbe(env: Env): Promise<Record<string, unknown>> {
   if (!oauthConfigValid(env)) return { configured: false, metadata: false, jwks: false, introspection: false };
   const [metadata, jwks, tokenStatus] = await Promise.all([
-    fetchBoundedHttp(`${env.OAUTH_ISSUER}/.well-known/oauth-authorization-server`, { method: "GET", headers: { accept: "application/json" } }, 64_000),
-    fetchBoundedHttp(env.OAUTH_JWKS_URL, { method: "GET", headers: { accept: "application/json" } }, 128_000),
+    fetchBoundedHttp(`${env.OAUTH_ISSUER}/.well-known/oauth-authorization-server`, { method: "GET", headers: { accept: "application/json" } }, 64_000, 5_000, resolveBindingFetch(env, `${env.OAUTH_ISSUER}/.well-known/oauth-authorization-server`)),
+    fetchBoundedHttp(env.OAUTH_JWKS_URL, { method: "GET", headers: { accept: "application/json" } }, 128_000, 5_000, resolveBindingFetch(env, env.OAUTH_JWKS_URL)),
     fetchBoundedHttp(env.OAUTH_INTROSPECTION_URL, {
       method: "POST",
       headers: {
@@ -513,7 +547,7 @@ async function oauthDependencyProbe(env: Env): Promise<Record<string, unknown>> 
         "content-type": "application/x-www-form-urlencoded",
       },
       body: "token=readiness-probe-invalid-token",
-    }, 16_384),
+    }, 16_384, 5_000, resolveBindingFetch(env, env.OAUTH_INTROSPECTION_URL)),
   ]);
   let metadataValid = false;
   if (metadata?.ok && metadata.contentType.toLowerCase().includes("application/json")) {

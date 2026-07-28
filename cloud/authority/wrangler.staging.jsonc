@@ -1,0 +1,27 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "personal-mcp-authority-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-28",
+  "account_id": "6465e9d49bcdb88adde245a7f7a74acc",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "vars": {
+    "ENVIRONMENT": "staging"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTHORITY_ISSUER",
+        "class_name": "AuthorityIssuer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "authority-issuer-v1",
+      "new_sqlite_classes": ["AuthorityIssuer"]
+    }
+  ]
+}

@@ -7,13 +7,13 @@
   "preview_urls": false,
   "vars": {
     "ENVIRONMENT": "staging",
-    "DEPLOYMENT_REVISION": "pending",
+    "DEPLOYMENT_REVISION": "b84a7f3",
     "OAUTH_ISSUER": "https://poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev",
     "OAUTH_AUDIENCE": "https://personal-mcp-gateway-staging.focuslink-poyi-6465e9.workers.dev/mcp",
     "OAUTH_JWKS_URL": "https://poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev/jwks.json",
     "OAUTH_INTROSPECTION_URL": "https://poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev/introspect",
     "OAUTH_RS_CLIENT_ID": "personal-mcp-gateway-staging",
-    "AUTHORITY_CONFIG_JSON": "[]"
+    "AUTHORITY_CONFIG_JSON": "[{\"productId\":\"journal\",\"url\":\"https://personal-mcp-authority-staging.focuslink-poyi-6465e9.workers.dev/authority/journal\",\"publicKey\":\"IxS92GtLtJwoAFjF3_dLIkmG74wBFgvbyRkhK1_ZgDk\",\"maxAgeSeconds\":3600},{\"productId\":\"identity-focus\",\"url\":\"https://personal-mcp-authority-staging.focuslink-poyi-6465e9.workers.dev/authority/identity-focus\",\"publicKey\":\"IxS92GtLtJwoAFjF3_dLIkmG74wBFgvbyRkhK1_ZgDk\",\"maxAgeSeconds\":3600},{\"productId\":\"watch\",\"url\":\"https://personal-mcp-authority-staging.focuslink-poyi-6465e9.workers.dev/authority/watch\",\"publicKey\":\"IxS92GtLtJwoAFjF3_dLIkmG74wBFgvbyRkhK1_ZgDk\",\"maxAgeSeconds\":3600},{\"productId\":\"suixin\",\"url\":\"https://personal-mcp-authority-staging.focuslink-poyi-6465e9.workers.dev/authority/suixin\",\"publicKey\":\"IxS92GtLtJwoAFjF3_dLIkmG74wBFgvbyRkhK1_ZgDk\",\"maxAgeSeconds\":3600}]"
   },
   "durable_objects": {
     "bindings": [
@@ -23,6 +23,16 @@
       }
     ]
   },
+  "services": [
+    {
+      "binding": "AUTHORITY_SERVICE",
+      "service": "personal-mcp-authority-staging"
+    },
+    {
+      "binding": "OAUTH_AS_SERVICE",
+      "service": "poyi-oauth-as-staging"
+    }
+  ],
   "migrations": [
     {
       "tag": "authority-checkpoint-v1",
