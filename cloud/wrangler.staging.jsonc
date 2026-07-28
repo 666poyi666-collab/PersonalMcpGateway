@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "personal-mcp-gateway-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-29",
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "ENVIRONMENT": "staging",
+    "DEPLOYMENT_REVISION": "pending",
+    "OAUTH_ISSUER": "https://poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev",
+    "OAUTH_AUDIENCE": "https://personal-mcp-gateway-staging.focuslink-poyi-6465e9.workers.dev/mcp",
+    "OAUTH_JWKS_URL": "https://poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev/jwks.json",
+    "OAUTH_INTROSPECTION_URL": "https://poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev/introspect",
+    "OAUTH_RS_CLIENT_ID": "personal-mcp-gateway-staging",
+    "AUTHORITY_CONFIG_JSON": "[]"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "AUTHORITY_CHECKPOINTS",
+      "id": "17ef34b9ce6a4c28827a7c480d5aad30"
+    }
+  ]
+}

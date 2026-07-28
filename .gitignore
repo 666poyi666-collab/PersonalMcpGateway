@@ -1,5 +1,7 @@
 .env
+.dev.vars
 .venv/
+node_modules/
 *.py[cod]
 __pycache__/
 .pytest_cache/
@@ -7,6 +9,7 @@ __pycache__/
 evidence/
 .ruff_cache/
 .coverage
+.coverage.*
 coverage.xml
 test-results.xml
 inspector-tools.txt
@@ -21,3 +24,5 @@ build/
 *.dpapi
 support-bundle-*.zip
 .pyright/
+cloud/.wrangler/
+cloud/.wrangler-dry/

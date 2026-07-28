@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "resource": "/mcp",
+  "requiredScope": "gateway:read",
+  "tools": [
+    {
+      "name": "personal_cloud_sync_overview",
+      "operation": "cloud_mcp_summary",
+      "readOnly": true
+    }
+  ],
+  "products": ["identity-focus", "journal", "watch", "suixin"],
+  "gatewayProfile": {
+    "compliance": "partial",
+    "supportsPcOff": false,
+    "supportsBidirectionalDelta": false
+  }
+}
