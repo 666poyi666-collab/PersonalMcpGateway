@@ -75,8 +75,9 @@ not.
 ### FocusLink public-origin rule
 
 FocusLink has exactly one public canonical origin: `foxlink-cloud-mcp`. That
-origin serves `/sync/v1/exchange`, `/mcp`, `/readyz`, and OAuth protected-resource
-metadata. Its exchange adapter transparently forwards writes to the internal
+origin serves `/sync/v2/exchange`, `/sync/v2/status`, `/mcp`, `/readyz`, and
+OAuth protected-resource metadata. Its exchange adapter transparently forwards
+writes to the internal
 FocusLink Account Durable Object `/v2/sync` authority. The direct Worker/DO is an
 implementation dependency, not a second official MCP, `cloudBaseUrl`, or
 canonical route, and it must not appear in the project manifest. Its legacy
@@ -316,9 +317,20 @@ A project is `complete` only when all applicable gates pass:
 9. Deletion propagates as a tombstone and does not resurrect on another client.
 10. Device-offline commands expose honest state and expire safely.
 11. Contract, migration, auth, redaction, and power-off end-to-end tests pass.
+12. The release evidence binds every required source tree hash to a concrete
+    deployment version, hashes all sanitized artifacts, matches the registered
+    remote probes, records the required physical ADB roles, and contains exactly
+    three ordered PC-off rounds covering create, update, and delete.
 
 An online Worker plus a recent Windows snapshot satisfies gates 1-2 only. It
 does not satisfy gates 5-7.
+
+`sync.status: complete` and `supportsPcOff: true` are a coupled, evidence-backed
+claim. Either value without a valid release-evidence manifest is a registry
+error, and reports must display the capability as unverified rather than
+supported. Device serials, IP addresses, OAuth codes, bearer tokens, pair nonces,
+cookies, and secret material are forbidden in evidence; use role names and
+SHA-256 attestations instead.
 
 ## 7. Migration order
 

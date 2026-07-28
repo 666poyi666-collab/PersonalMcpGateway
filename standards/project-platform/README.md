@@ -47,6 +47,16 @@ test-command, and remote-probe declarations. Run their active checks with
 `-VerifyEvidence`; `-Strict -Live` also runs them. A manifest cannot promote
 itself to `complete` merely by setting `supportsPcOff: true`.
 
+The completion declaration is a release-evidence manifest, not a free-form note.
+It binds every required source tree to its deployed version, hashes every
+sanitized evidence file, restricts probes to the registered HTTPS origin, records
+physical ADB devices without serial numbers, and requires exactly three PC-off
+rounds covering create, update, and delete. See `FINAL_EVIDENCE.md` for the exact
+contract. A `complete` row is shown as PC-off capable only after this evidence is
+valid; a status-only claim is rendered as `声明无效/证据缺失`.
+Structural-only runs render an otherwise valid claim as `待主动证据复核`; they
+never contribute it to the fully compliant count.
+
 Scaffold the required per-project declaration for a new repository:
 
 ```powershell

@@ -11,7 +11,7 @@
       "dataPlane": "cloud_primary",
       "mcpExposure": "resource",
       "coverage": "missing",
-      "reason": ""
+      "reason": "Replace with the approved data-policy reason."
     }
   ],
   "mcp": {
@@ -30,9 +30,11 @@
     "status": "missing",
     "dataPlane": "cloud_primary",
     "authority": "cloud",
+    "contractId": "sync-envelope-v1",
+    "envelopeVersion": 1,
     "routes": {
-      "exchange": "/sync/v1/exchange",
-      "status": "/sync/v1/status"
+      "exchange": "/sync/v2/exchange",
+      "status": "/sync/v2/status"
     },
     "supportsPcOff": false,
     "supportsBidirectionalDelta": false

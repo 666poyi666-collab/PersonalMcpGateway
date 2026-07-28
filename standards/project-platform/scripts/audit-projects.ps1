@@ -38,10 +38,28 @@ function Test-StringSetEqual([object[]]$Left, [object[]]$Right) {
     return $null -eq (Compare-Object -ReferenceObject $leftValues -DifferenceObject $rightValues)
 }
 
+function Compare-SyncCursor([string]$Left, [string]$Right) {
+    if ($Left -notmatch '^c[0-9a-z]+$' -or $Right -notmatch '^c[0-9a-z]+$') {
+        return $null
+    }
+    $leftDigits = $Left.Substring(1).TrimStart('0')
+    $rightDigits = $Right.Substring(1).TrimStart('0')
+    if (-not $leftDigits) { $leftDigits = '0' }
+    if (-not $rightDigits) { $rightDigits = '0' }
+    if ($leftDigits.Length -lt $rightDigits.Length) { return -1 }
+    if ($leftDigits.Length -gt $rightDigits.Length) { return 1 }
+    return [System.StringComparer]::Ordinal.Compare($leftDigits, $rightDigits)
+}
+
+function Test-PlausibleSha256([string]$Value) {
+    if ($Value -notmatch '^[0-9a-fA-F]{64}$') { return $false }
+    return @($Value.ToLowerInvariant().ToCharArray() | Sort-Object -Unique).Count -ge 8
+}
+
 function Test-HttpEndpoint([string]$Url) {
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 15
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 15 -MaximumRedirection 0
         $timer.Stop()
         return [pscustomobject]@{
             Url = $Url
@@ -62,15 +80,120 @@ function Test-HttpEndpoint([string]$Url) {
     }
 }
 
-function Get-HttpStatus([string]$Url) {
+function Get-HttpStatus([string]$Url, [string]$Method = 'GET') {
     try {
-        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 15
+        $response = Invoke-WebRequest -Uri $Url -Method $Method -UseBasicParsing -TimeoutSec 15 `
+            -MaximumRedirection 0
         return [int]$response.StatusCode
     } catch {
         if ($null -ne $_.Exception.Response) {
             return [int]$_.Exception.Response.StatusCode
         }
         return 0
+    }
+}
+
+function Get-Sha256Text([string]$Value) {
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        $bytes = $encoding.GetBytes($Value)
+        return ([System.BitConverter]::ToString(
+                $algorithm.ComputeHash($bytes)
+            )).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
+function Get-DirectorySourceTreeHash([string]$Root, [object[]]$IncludePaths) {
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        return [pscustomobject]@{ Ok = $false; Hash = ''; Error = 'source root is missing' }
+    }
+    if (@($IncludePaths).Count -eq 0) {
+        return [pscustomobject]@{ Ok = $false; Hash = ''; Error = 'includePaths is empty' }
+    }
+
+    $resolvedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $files = New-Object 'System.Collections.Generic.Dictionary[string,System.IO.FileInfo]' (
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    $blockedDirectories = @(
+        '.git', '.wrangler', '.venv', 'node_modules', 'dist', 'build', 'coverage',
+        '__pycache__', '.pytest_cache'
+    )
+    foreach ($include in @($IncludePaths)) {
+        $relative = [string]$include
+        if ([string]::IsNullOrWhiteSpace($relative) -or
+            [System.IO.Path]::IsPathRooted($relative)) {
+            return [pscustomobject]@{
+                Ok = $false; Hash = ''; Error = "unsafe includePath: $relative"
+            }
+        }
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $relative))
+        if (-not $candidate.StartsWith(
+                $resolvedRoot + '\',
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            return [pscustomobject]@{
+                Ok = $false; Hash = ''; Error = "includePath escapes source root: $relative"
+            }
+        }
+        if (-not (Test-Path -LiteralPath $candidate)) {
+            return [pscustomobject]@{
+                Ok = $false; Hash = ''; Error = "includePath is missing: $relative"
+            }
+        }
+        $reparsePoints = if (Test-Path -LiteralPath $candidate -PathType Container) {
+            @(Get-ChildItem -LiteralPath $candidate -Recurse -Force | Where-Object {
+                    $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
+                })
+        } else {
+            @(
+                Get-Item -LiteralPath $candidate -Force | Where-Object {
+                    $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
+                }
+            )
+        }
+        if ($reparsePoints.Count -gt 0) {
+            return [pscustomobject]@{
+                Ok = $false; Hash = ''; Error = "includePath contains a reparse point: $relative"
+            }
+        }
+        $candidates = if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            @(Get-Item -LiteralPath $candidate -Force)
+        } else {
+            @(Get-ChildItem -LiteralPath $candidate -Recurse -Force -File)
+        }
+        foreach ($file in $candidates) {
+            $fileRelative = $file.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/')
+            $segments = @($fileRelative -split '[\\/]')
+            if (@($segments | Where-Object { $_ -in $blockedDirectories }).Count -gt 0) {
+                continue
+            }
+            $leaf = [string]$segments[-1]
+            if ($leaf -eq '.dev.vars' -or $leaf -eq 'auth.json' -or
+                $leaf -match '^\.env(?:\.|$)' -or
+                $leaf -match '\.(?:pem|key|p12|pfx)$') {
+                continue
+            }
+            $files[$file.FullName] = $file
+        }
+    }
+    if ($files.Count -eq 0) {
+        return [pscustomobject]@{ Ok = $false; Hash = ''; Error = 'source tree is empty' }
+    }
+
+    $records = foreach ($file in @($files.Values | Sort-Object FullName)) {
+        $relative = $file.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/')
+        $normalized = $relative.Replace('\', '/')
+        $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$normalized`0$($file.Length)`0$hash"
+    }
+    return [pscustomobject]@{
+        Ok = $true
+        Hash = Get-Sha256Text (($records -join "`n") + "`n")
+        Error = ''
     }
 }
 
@@ -330,7 +453,9 @@ function Test-FocusLinkManifest(
             'MCP OAuth and device exchange credentials must be declared separate'
         )
     }
-    if ($ManifestRaw -match 'focuslink:pair' -or $ManifestRaw -match 'devices:manage') {
+    if (@($Manifest.mcp.requiredScopes | Where-Object {
+                $_ -in @('focuslink:pair', 'devices:manage')
+            }).Count -gt 0) {
         Add-ManifestIssue $IssueList $ProjectId (
             'pairing permissions must never be registered as OAuth scopes'
         )
@@ -450,6 +575,113 @@ function Test-ManifestAgainstRegistry(
     }
 }
 
+function Test-EvidenceClaim(
+    [string]$ProjectId,
+    [string]$EvidenceId,
+    [string]$ExpectedKind,
+    [string]$Claim,
+    [hashtable]$EvidenceById,
+    [hashtable]$EvidenceDocumentById,
+    [System.Collections.Generic.List[string]]$GapList
+) {
+    if (-not $EvidenceById.ContainsKey($EvidenceId) -or
+        -not $EvidenceDocumentById.ContainsKey($EvidenceId)) {
+        $GapList.Add("$ProjectId/${EvidenceId}: bound evidence is missing or invalid")
+        return
+    }
+    if ($EvidenceById[$EvidenceId].kind -ne $ExpectedKind -or
+        ([string]$EvidenceDocumentById[$EvidenceId].claimSha256).ToLowerInvariant() -ne
+        (Get-Sha256Text $Claim)) {
+        $GapList.Add("$ProjectId/${EvidenceId}: evidence kind or claim binding mismatch")
+    }
+}
+
+function ConvertTo-WindowsProcessArgument([string]$Argument) {
+    if ($Argument -notmatch '[\s"]') { return $Argument }
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $slashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq '\') {
+            $slashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append(('').PadLeft(($slashes * 2 + 1), [char]'\'))
+            [void]$builder.Append('"')
+            $slashes = 0
+            continue
+        }
+        if ($slashes -gt 0) {
+            [void]$builder.Append(('').PadLeft($slashes, [char]'\'))
+        }
+        $slashes = 0
+        [void]$builder.Append($character)
+    }
+    if ($slashes -gt 0) {
+        [void]$builder.Append(('').PadLeft(($slashes * 2), [char]'\'))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Invoke-TrustedEvidenceCommand(
+    [object]$Command,
+    [string]$Root
+) {
+    $scriptPath = [string]$Command.scriptPath
+    $resolvedScript = [System.IO.Path]::GetFullPath((Join-Path $Root $scriptPath))
+    if (-not $resolvedScript.StartsWith(
+            $Root + '\', [System.StringComparison]::OrdinalIgnoreCase
+        ) -or -not (Test-Path -LiteralPath $resolvedScript -PathType Leaf)) {
+        return [pscustomobject]@{ Ok = $false; ExitCode = -1; Reason = 'script_missing' }
+    }
+    $actualHash = (Get-FileHash -LiteralPath $resolvedScript -Algorithm SHA256).Hash
+    if ($actualHash -ne ([string]$Command.scriptSha256).ToUpperInvariant()) {
+        return [pscustomobject]@{ Ok = $false; ExitCode = -1; Reason = 'script_hash_mismatch' }
+    }
+    $commandInfo = Get-Command ([string]$Command.executable) -CommandType Application `
+        -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $commandInfo) {
+        return [pscustomobject]@{ Ok = $false; ExitCode = -1; Reason = 'executable_missing' }
+    }
+    $arguments = @($resolvedScript) + @($Command.arguments)
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = $commandInfo.Source
+    $processInfo.Arguments = @(
+        $arguments | ForEach-Object { ConvertTo-WindowsProcessArgument ([string]$_) }
+    ) -join ' '
+    $processInfo.WorkingDirectory = $Root
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $processInfo
+    try {
+        if (-not $process.Start()) {
+            return [pscustomobject]@{ Ok = $false; ExitCode = -1; Reason = 'start_failed' }
+        }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit([int]$Command.timeoutSeconds * 1000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            return [pscustomobject]@{ Ok = $false; ExitCode = -1; Reason = 'timeout' }
+        }
+        $process.WaitForExit()
+        $null = $stdout.GetAwaiter().GetResult()
+        $null = $stderr.GetAwaiter().GetResult()
+        return [pscustomobject]@{
+            Ok = $process.ExitCode -eq 0; ExitCode = $process.ExitCode; Reason = ''
+        }
+    } catch {
+        return [pscustomobject]@{ Ok = $false; ExitCode = -1; Reason = 'process_error' }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Test-CompletionEvidence(
     [object]$Manifest,
     [object]$Project,
@@ -461,6 +693,7 @@ function Test-CompletionEvidence(
     $requiresEvidence = $Manifest.sync.status -eq 'complete' -or (
         $Manifest.mcp.status -eq 'complete' -and $Manifest.mcp.dataPlane -ne 'local_only'
     )
+    $requiresPcOffEvidence = $Manifest.sync.status -eq 'complete'
 
     if ($Manifest.sync.status -ne 'complete' -and $Manifest.sync.supportsPcOff -eq $true) {
         Add-ManifestIssue $IssueList $projectId (
@@ -472,6 +705,34 @@ function Test-CompletionEvidence(
             'sync.status=complete requires supportsPcOff=true'
         )
     }
+    if ($Manifest.sync.status -ne 'complete' -and
+        $Manifest.sync.supportsBidirectionalDelta -eq $true) {
+        Add-ManifestIssue $IssueList $projectId (
+            'supportsBidirectionalDelta cannot be true while sync.status is not complete'
+        )
+    }
+    if ($Manifest.sync.status -eq 'complete' -and
+        $Manifest.sync.supportsBidirectionalDelta -ne $true) {
+        Add-ManifestIssue $IssueList $projectId (
+            'sync.status=complete requires supportsBidirectionalDelta=true'
+        )
+    }
+    if ($Manifest.sync.status -eq 'complete' -and @(
+            $Manifest.dataInventory | Where-Object { $_.coverage -in @('partial', 'missing') }
+        ).Count -gt 0) {
+        Add-ManifestIssue $IssueList $projectId (
+            'sync.status=complete requires complete-or-exempt dataInventory coverage'
+        )
+    }
+    if ($Manifest.mcp.status -eq 'complete' -and @(
+            $Manifest.dataInventory | Where-Object {
+                $_.mcpExposure -ne 'none' -and $_.coverage -in @('partial', 'missing')
+            }
+        ).Count -gt 0) {
+        Add-ManifestIssue $IssueList $projectId (
+            'mcp.status=complete requires complete-or-exempt exposed inventory coverage'
+        )
+    }
     if (-not $requiresEvidence) { return }
 
     $verification = $Manifest.verification
@@ -480,38 +741,38 @@ function Test-CompletionEvidence(
         return
     }
     foreach ($field in @(
-            'implementationCommit', 'deployedRevision', 'evidenceFiles',
-            'testCommands', 'remoteProbes'
+            'sourceDeployments', 'releaseSetSha256', 'evidenceFiles', 'testCommands',
+            'remoteProbes'
         )) {
         if (-not (Test-HasProperty $verification $field)) {
             $GapList.Add("${projectId}: verification is missing $field")
         }
     }
 
-    $commit = [string]$verification.implementationCommit
-    if ($commit -notmatch '^[0-9a-fA-F]{7,40}$') {
-        $GapList.Add("${projectId}: invalid implementationCommit")
-    } else {
-        & git -C $Project.manifestRepositoryPath cat-file -e "$commit`^{commit}" 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            $GapList.Add("${projectId}: implementationCommit is not present in the canonical repo")
-        } else {
-            & git -C $Project.manifestRepositoryPath merge-base --is-ancestor $commit HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                $GapList.Add("${projectId}: implementationCommit is not contained by current HEAD")
+    if ($requiresPcOffEvidence) {
+        foreach ($field in @('adbDevices', 'pcOffRounds')) {
+            if (-not (Test-HasProperty $verification $field)) {
+                $GapList.Add("${projectId}: PC-off verification is missing $field")
             }
         }
     }
-    if ([string]::IsNullOrWhiteSpace([string]$verification.deployedRevision)) {
-        $GapList.Add("${projectId}: deployedRevision must be non-empty")
-    }
 
     $root = [System.IO.Path]::GetFullPath([string]$Project.manifestRepositoryPath).TrimEnd('\')
-    $evidenceIds = @()
+    $evidenceById = @{}
+    $evidenceDocumentById = @{}
     foreach ($evidence in @($verification.evidenceFiles)) {
-        $evidenceIds += [string]$evidence.id
+        $evidenceId = [string]$evidence.id
+        if ([string]::IsNullOrWhiteSpace($evidenceId)) {
+            $GapList.Add("${projectId}: evidence file has an empty id")
+            continue
+        }
+        if ($evidenceById.ContainsKey($evidenceId)) {
+            $GapList.Add("${projectId}: duplicate evidence id $evidenceId")
+            continue
+        }
+        $evidenceById[$evidenceId] = $evidence
         if ([System.IO.Path]::IsPathRooted([string]$evidence.path)) {
-            $GapList.Add("$projectId/$($evidence.id): evidence path must be repository-relative")
+            $GapList.Add("$projectId/${evidenceId}: evidence path must be repository-relative")
             continue
         }
         $evidencePath = [System.IO.Path]::GetFullPath((Join-Path $root $evidence.path))
@@ -519,54 +780,519 @@ function Test-CompletionEvidence(
                 $root + '\',
                 [System.StringComparison]::OrdinalIgnoreCase
             )) {
-            $GapList.Add("$projectId/$($evidence.id): evidence path escapes the repository")
+            $GapList.Add("$projectId/${evidenceId}: evidence path escapes the repository")
             continue
         }
         if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
-            $GapList.Add("$projectId/$($evidence.id): evidence file is missing")
+            $GapList.Add("$projectId/${evidenceId}: evidence file is missing")
             continue
         }
         $actualHash = (Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash
         if ($actualHash -ne ([string]$evidence.sha256).ToUpperInvariant()) {
-            $GapList.Add("$projectId/$($evidence.id): evidence SHA256 mismatch")
+            $GapList.Add("$projectId/${evidenceId}: evidence SHA256 mismatch")
+        }
+        if ([System.IO.Path]::GetExtension($evidencePath) -ne '.json') {
+            $GapList.Add("$projectId/${evidenceId}: evidence summary must be JSON")
+            continue
+        }
+        try {
+            $document = Get-Content -LiteralPath $evidencePath -Raw -Encoding UTF8 |
+                ConvertFrom-Json
+        } catch {
+            $GapList.Add("$projectId/${evidenceId}: evidence summary is invalid JSON")
+            continue
+        }
+        $allowedEvidenceFields = @(
+            'schemaVersion', 'id', 'kind', 'result', 'capturedAt',
+            'producerCommandId', 'claimSha256'
+        )
+        $documentFields = @($document.PSObject.Properties.Name)
+        $capturedAt = [DateTimeOffset]::MinValue
+        if (-not (Test-StringSetEqual $documentFields $allowedEvidenceFields) -or
+            $document.schemaVersion -ne 1 -or
+            $document.id -ne $evidenceId -or
+            $document.kind -ne $evidence.kind -or
+            $document.result -ne 'pass' -or
+            -not [DateTimeOffset]::TryParse([string]$document.capturedAt, [ref]$capturedAt) -or
+            $capturedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(5) -or
+            [string]$document.producerCommandId -eq '' -or
+            -not (Test-PlausibleSha256 ([string]$document.claimSha256))) {
+            $GapList.Add("$projectId/${evidenceId}: evidence summary contract failed")
+            continue
+        }
+        $evidenceDocumentById[$evidenceId] = $document
+    }
+
+    $acceptance = if ($requiresPcOffEvidence) {
+        $Project.sync.acceptanceEvidence
+    } else {
+        $Project.mcp.acceptanceEvidence
+    }
+    if ($null -eq $acceptance) {
+        $GapList.Add("${projectId}: complete cloud capability has no centralized acceptanceEvidence")
+        return
+    }
+
+    $testCommands = @($verification.testCommands)
+    $testCommandIds = @($testCommands | ForEach-Object { [string]$_.id })
+    foreach ($duplicate in @($testCommandIds | Group-Object | Where-Object Count -gt 1)) {
+        $GapList.Add("${projectId}: duplicate test command id $($duplicate.Name)")
+    }
+    $requiredTestCommands = @($acceptance.requiredTestCommands)
+    $requiredTestCommandIds = @($requiredTestCommands | ForEach-Object { [string]$_.id })
+    if ($requiredTestCommandIds.Count -eq 0) {
+        $IssueList.Add("${projectId}: requiredTestCommands must not be empty")
+    } elseif (-not (Test-StringSetEqual $testCommandIds $requiredTestCommandIds)) {
+        $GapList.Add("${projectId}: test command set does not match acceptance requirements")
+    }
+    foreach ($command in $requiredTestCommands) {
+        $scriptPath = [string]$command.scriptPath
+        $commandText = ([string]$command.executable) + ' ' + $scriptPath + ' ' + (
+            @($command.arguments) -join ' '
+        )
+        if ($command.executable -notin @('node', 'python', 'powershell', 'pwsh') -or
+            [System.IO.Path]::IsPathRooted($scriptPath) -or
+            $scriptPath -match '(^|[\\/])\.\.([\\/]|$)' -or
+            [int]$command.timeoutSeconds -lt 1 -or [int]$command.timeoutSeconds -gt 600 -or
+            -not (Test-PlausibleSha256 ([string]$command.scriptSha256)) -or
+            $commandText -match '(?i)Bearer\s+[A-Za-z0-9._~-]+' -or
+            $commandText -match '(?i)(?:fl2|fla)_[A-Za-z0-9_-]{20,}' -or
+            $commandText -match '(?i)--(?:token|secret|nonce|code|cookie)(?:=|\s|$)' -or
+            $commandText -match '(?i)Authorization\s*:') {
+            $GapList.Add("$projectId/$($command.id): central test command is not trusted")
         }
     }
-    if ($projectId -eq 'watchintervals') {
-        foreach ($requiredId in @('remote-exchange', 'pc-off-e2e', 'restart-catchup')) {
-            if ($requiredId -notin $evidenceIds) {
-                $GapList.Add("${projectId}: completion evidence is missing $requiredId")
+    foreach ($evidenceId in $evidenceDocumentById.Keys) {
+        $producerCommandId = [string]$evidenceDocumentById[$evidenceId].producerCommandId
+        if ($producerCommandId -notin $testCommandIds) {
+            $GapList.Add("$projectId/${evidenceId}: evidence producer command is not registered")
+        }
+    }
+
+    $sourceEntries = @($verification.sourceDeployments)
+    $sourceIds = @($sourceEntries | ForEach-Object { [string]$_.id })
+    foreach ($duplicate in @($sourceIds | Group-Object | Where-Object Count -gt 1)) {
+        $GapList.Add("${projectId}: duplicate source deployment id $($duplicate.Name)")
+    }
+    $requiredSources = @($acceptance.requiredSources)
+    $requiredSourceIds = @($requiredSources | ForEach-Object { [string]$_.id })
+    if ($requiredSources.Count -eq 0) {
+        $IssueList.Add("${projectId}: acceptanceEvidence.requiredSources must not be empty")
+    } elseif (-not (Test-StringSetEqual $sourceIds $requiredSourceIds)) {
+        $GapList.Add("${projectId}: source deployment set does not match required source set")
+    }
+    $releaseRecords = @($sourceEntries | Sort-Object id | ForEach-Object {
+            @(
+                [string]$_.id, [string]$_.kind, [string]$_.commit,
+                [string]$_.treeHashAlgorithm, ([string]$_.treeHash).ToLowerInvariant(),
+                ([string]$_.deployedVersion).Trim(), [string]$_.deployedAt
+            ) -join '|'
+        })
+    $computedReleaseSetSha256 = Get-Sha256Text (($releaseRecords -join "`n") + "`n")
+    if (-not (Test-PlausibleSha256 ([string]$verification.releaseSetSha256)) -or
+        ([string]$verification.releaseSetSha256).ToLowerInvariant() -ne
+        $computedReleaseSetSha256) {
+        $GapList.Add("${projectId}: releaseSetSha256 does not bind the source deployments")
+    }
+    $latestDeploymentAt = [DateTimeOffset]::MinValue
+    foreach ($source in $sourceEntries) {
+        $deployedAt = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse([string]$source.deployedAt, [ref]$deployedAt) -or
+            $deployedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(5)) {
+            $GapList.Add("$projectId/$($source.id): deployment time is invalid")
+            continue
+        }
+        if ($deployedAt -gt $latestDeploymentAt) { $latestDeploymentAt = $deployedAt }
+    }
+    foreach ($evidenceId in $evidenceDocumentById.Keys) {
+        $capturedAt = [DateTimeOffset]::MinValue
+        if ([DateTimeOffset]::TryParse(
+                [string]$evidenceDocumentById[$evidenceId].capturedAt,
+                [ref]$capturedAt
+            ) -and $capturedAt -lt $latestDeploymentAt) {
+            $GapList.Add("$projectId/${evidenceId}: evidence predates the release set")
+        }
+    }
+    foreach ($sourceRule in $requiredSources) {
+        $sourceId = [string]$sourceRule.id
+        $matches = @($sourceEntries | Where-Object id -eq $sourceId)
+        if ($matches.Count -ne 1) { continue }
+        $entry = $matches[0]
+        $sourceEvidenceId = [string]$entry.evidenceId
+        if (-not $evidenceById.ContainsKey($sourceEvidenceId)) {
+            $GapList.Add("$projectId/${sourceId}: deployment evidence id is missing")
+        }
+        $deployedVersion = ([string]$entry.deployedVersion).Trim()
+        if (-not $deployedVersion -or
+            $deployedVersion -match '^(?:unknown|pending|latest|n/?a|tbd|none)$') {
+            $GapList.Add("$projectId/${sourceId}: deployedVersion is not verifiable")
+        }
+        $sourceClaim = @(
+            'source', $sourceId, [string]$entry.kind, [string]$entry.commit,
+            [string]$entry.treeHashAlgorithm, ([string]$entry.treeHash).ToLowerInvariant(),
+            $deployedVersion, [string]$entry.deployedAt, $computedReleaseSetSha256
+        ) -join '|'
+        Test-EvidenceClaim $projectId $sourceEvidenceId 'source-deployment' (
+            $sourceClaim
+        ) $evidenceById $evidenceDocumentById $GapList
+        if ($entry.kind -ne $sourceRule.kind) {
+            $GapList.Add("$projectId/${sourceId}: source kind does not match the registry")
+            continue
+        }
+        $declaredTree = ([string]$entry.treeHash).ToLowerInvariant()
+        if ($declaredTree -match '^0+$') {
+            $GapList.Add("$projectId/${sourceId}: source tree hash is a placeholder")
+            continue
+        }
+        $sourcePath = [string]$sourceRule.path
+        if ($sourceRule.kind -eq 'git') {
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) {
+                $GapList.Add("$projectId/${sourceId}: Git source root is missing")
+                continue
+            }
+            $commit = [string]$entry.commit
+            if ($commit -notmatch '^[0-9a-fA-F]{7,64}$') {
+                $GapList.Add("$projectId/${sourceId}: invalid implementation commit")
+                continue
+            }
+            try {
+                & git -C $sourcePath cat-file -e "$commit`^{commit}" 2>$null
+            } catch {
+                $GapList.Add("$projectId/${sourceId}: implementation commit is missing")
+                continue
+            }
+            if ($LASTEXITCODE -ne 0) {
+                $GapList.Add("$projectId/${sourceId}: implementation commit is missing")
+                continue
+            }
+            try {
+                $actualTree = [string](& git -C $sourcePath rev-parse "$commit`^{tree}" 2>$null)
+            } catch {
+                $GapList.Add("$projectId/${sourceId}: source tree cannot be resolved")
+                continue
+            }
+            $actualTree = $actualTree.Trim().ToLowerInvariant()
+            $actualAlgorithm = if ($actualTree.Length -eq 64) {
+                'git-tree-sha256'
+            } else {
+                'git-tree-sha1'
+            }
+            if ($entry.treeHashAlgorithm -ne $actualAlgorithm -or
+                $declaredTree -ne $actualTree) {
+                $GapList.Add("$projectId/${sourceId}: source tree hash does not match commit")
+            }
+            try {
+                & git -C $sourcePath merge-base --is-ancestor $commit HEAD 2>$null
+            } catch {
+                $GapList.Add("$projectId/${sourceId}: implementation commit cannot be compared to HEAD")
+                continue
+            }
+            if ($LASTEXITCODE -ne 0) {
+                $GapList.Add("$projectId/${sourceId}: implementation commit is not in current HEAD")
+            }
+            $sourcePathspec = @(
+                '.', ':(exclude).poyi/**', ':(exclude)evidence/**',
+                ':(exclude)standards/project-platform/reports/**'
+            )
+            try {
+                & git -C $sourcePath diff --quiet $commit HEAD -- @sourcePathspec
+                $committedSourceChanged = $LASTEXITCODE -ne 0
+                & git -C $sourcePath diff --quiet -- @sourcePathspec
+                $workingSourceChanged = $LASTEXITCODE -ne 0
+                & git -C $sourcePath diff --cached --quiet -- @sourcePathspec
+                $stagedSourceChanged = $LASTEXITCODE -ne 0
+                $sourceStatus = @(
+                    & git -C $sourcePath status --porcelain --untracked-files=all -- @sourcePathspec
+                )
+                $untrackedSourceChanged = $sourceStatus.Count -gt 0
+            } catch {
+                $GapList.Add("$projectId/${sourceId}: source drift check failed")
+                continue
+            }
+            if ($committedSourceChanged -or $workingSourceChanged -or $stagedSourceChanged -or
+                $untrackedSourceChanged) {
+                $GapList.Add(
+                    "$projectId/${sourceId}: source changed after the recorded deployment tree"
+                )
+            }
+        } elseif ($sourceRule.kind -eq 'directory') {
+            if ($entry.treeHashAlgorithm -ne 'sha256-path-content-v1') {
+                $GapList.Add("$projectId/${sourceId}: directory source uses the wrong hash algorithm")
+                continue
+            }
+            $treeResult = Get-DirectorySourceTreeHash $sourcePath @($sourceRule.includePaths)
+            if (-not $treeResult.Ok) {
+                $GapList.Add("$projectId/${sourceId}: $($treeResult.Error)")
+            } elseif ($declaredTree -ne $treeResult.Hash) {
+                $GapList.Add("$projectId/${sourceId}: directory source tree SHA256 mismatch")
+            }
+        }
+    }
+
+    $remoteEntries = @($verification.remoteProbes)
+    $remoteIds = @($remoteEntries | ForEach-Object { [string]$_.id })
+    foreach ($duplicate in @($remoteIds | Group-Object | Where-Object Count -gt 1)) {
+        $GapList.Add("${projectId}: duplicate remote probe id $($duplicate.Name)")
+    }
+    $approvedBaseUrls = @(
+        $Project.publicCloudBaseUrl,
+        $Project.mcp.cloudBaseUrl,
+        $Project.sync.cloudBaseUrl
+    ) | Where-Object { $_ } | Sort-Object -Unique
+    foreach ($probe in $remoteEntries) {
+        $probeId = [string]$probe.id
+        $probeSource = @(
+            $sourceEntries | Where-Object id -eq ([string]$probe.sourceDeploymentId)
+        )
+        $probeDeploymentVersion = if ($probeSource.Count -eq 1) {
+            [string]$probeSource[0].deployedVersion
+        } else {
+            $GapList.Add("$projectId/${probeId}: remote probe source deployment is missing")
+            ''
+        }
+        $probeClaim = @(
+            'probe', $probeId, [string]$probe.method, [string]$probe.url,
+            [string]$probe.expectedStatus, [string]$probe.sourceDeploymentId,
+            $probeDeploymentVersion, $computedReleaseSetSha256
+        ) -join '|'
+        Test-EvidenceClaim $projectId ([string]$probe.evidenceId) 'remote-probe' (
+            $probeClaim
+        ) $evidenceById $evidenceDocumentById $GapList
+        try {
+            $probeUri = [uri]([string]$probe.url)
+            $probeOrigin = "$($probeUri.Scheme)://$($probeUri.Authority)"
+            $approvedOrigins = @($approvedBaseUrls | ForEach-Object {
+                    $uri = [uri]([string]$_)
+                    "$($uri.Scheme)://$($uri.Authority)"
+                })
+            if ($probeUri.Scheme -ne 'https' -or $probeUri.UserInfo -or
+                $probeUri.Query -or $probeUri.Fragment -or
+                $probeOrigin -notin $approvedOrigins) {
+                $GapList.Add("$projectId/${probeId}: remote probe is outside the approved origin")
+            }
+        } catch {
+            $GapList.Add("$projectId/${probeId}: remote probe URL is invalid")
+        }
+    }
+    $requiredRemoteProbes = @($acceptance.requiredRemoteProbes)
+    if ($requiredRemoteProbes.Count -eq 0) {
+        $IssueList.Add("${projectId}: acceptanceEvidence.requiredRemoteProbes must not be empty")
+    }
+    foreach ($probeRule in $requiredRemoteProbes) {
+        $probeId = [string]$probeRule.id
+        $matches = @($remoteEntries | Where-Object id -eq $probeId)
+        if ($matches.Count -ne 1) {
+            $GapList.Add("${projectId}: required remote probe is missing: $probeId")
+            continue
+        }
+        $probe = $matches[0]
+        $baseUrl = [string]($approvedBaseUrls | Select-Object -First 1)
+        $expectedUrl = $baseUrl.TrimEnd('/') + [string]$probeRule.path
+        if ($probe.method -ne $probeRule.method -or
+            [string]$probe.url -ne $expectedUrl -or
+            [int]$probe.expectedStatus -ne [int]$probeRule.expectedStatus -or
+            $probe.sourceDeploymentId -ne $probeRule.sourceDeploymentId) {
+            $GapList.Add("$projectId/${probeId}: remote probe does not match the registry")
+        }
+    }
+
+    foreach ($requiredId in @($acceptance.requiredEvidenceIds)) {
+        if (-not $evidenceById.ContainsKey([string]$requiredId)) {
+            $GapList.Add("${projectId}: completion evidence is missing $requiredId")
+        }
+    }
+
+    $chatGptRule = $acceptance.requiredChatGptMcp
+    if ($null -ne $chatGptRule) {
+        $chatGptEvidence = $verification.chatgptMcp
+        if ($null -eq $chatGptEvidence) {
+            $GapList.Add("${projectId}: ChatGPT OAuth MCP evidence is missing")
+        } else {
+            if ($chatGptEvidence.appId -ne $chatGptRule.appId -or
+                $chatGptEvidence.appVersionId -ne $chatGptRule.appVersionId -or
+                $chatGptEvidence.mcpUrl -ne $chatGptRule.mcpUrl -or
+                $chatGptEvidence.oauthConnected -ne $true -or
+                -not (Test-StringSetEqual @($chatGptEvidence.toolNames) @(
+                        $chatGptRule.requiredTools
+                    ))) {
+                $GapList.Add(
+                    "${projectId}: ChatGPT evidence does not match the registered OAuth app/version/tools"
+                )
+            }
+            if (-not $evidenceById.ContainsKey([string]$chatGptEvidence.evidenceId)) {
+                $GapList.Add("${projectId}: ChatGPT OAuth MCP evidence id is missing")
+            }
+            $sortedTools = @($chatGptEvidence.toolNames | Sort-Object) -join ','
+            $chatGptClaim = @(
+                'chatgpt', [string]$chatGptEvidence.appId,
+                [string]$chatGptEvidence.appVersionId, [string]$chatGptEvidence.mcpUrl,
+                [string]$chatGptEvidence.oauthConnected, $sortedTools,
+                $computedReleaseSetSha256
+            ) -join '|'
+            Test-EvidenceClaim $projectId ([string]$chatGptEvidence.evidenceId) (
+                'chatgpt-oauth-mcp'
+            ) $chatGptClaim $evidenceById $evidenceDocumentById $GapList
+        }
+    }
+
+    if ($requiresPcOffEvidence) {
+        if ([int]$acceptance.requiredPcOffRounds -ne 3) {
+            $IssueList.Add("${projectId}: requiredPcOffRounds must be exactly 3")
+        }
+        $devices = @($verification.adbDevices)
+        $deviceRoles = @($devices | ForEach-Object { [string]$_.role })
+        foreach ($duplicate in @($deviceRoles | Group-Object | Where-Object Count -gt 1)) {
+            $GapList.Add("${projectId}: duplicate ADB device role $($duplicate.Name)")
+        }
+        $requiredRoles = @($acceptance.requiredAdbRoles | ForEach-Object { [string]$_ })
+        if ($requiredRoles.Count -eq 0) {
+            $IssueList.Add("${projectId}: requiredAdbRoles must not be empty")
+        } elseif (-not (Test-StringSetEqual $deviceRoles $requiredRoles)) {
+            $GapList.Add("${projectId}: ADB physical-device roles do not match acceptance requirements")
+        }
+        $attestationHashes = @($devices | ForEach-Object {
+                ([string]$_.deviceAttestationSha256).ToLowerInvariant()
+            })
+        if (@($attestationHashes | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+            $GapList.Add("${projectId}: ADB device attestations are not unique")
+        }
+        foreach ($device in $devices) {
+            $role = [string]$device.role
+            if ($device.physicalDevice -ne $true -or $device.emulator -ne $false -or
+                $device.adbState -ne 'device') {
+                $GapList.Add("$projectId/${role}: ADB evidence is not a connected physical device")
+            }
+            if (-not (Test-PlausibleSha256 ([string]$device.artifactSha256)) -or
+                -not (Test-PlausibleSha256 ([string]$device.deviceAttestationSha256))) {
+                $GapList.Add("$projectId/${role}: ADB evidence contains a placeholder hash")
+            }
+            $deviceSource = @(
+                $sourceEntries | Where-Object id -eq ([string]$device.sourceDeploymentId)
+            )
+            if ($deviceSource.Count -ne 1 -or
+                ([string]$device.sourceTreeHash).ToLowerInvariant() -ne
+                ([string]$deviceSource[0].treeHash).ToLowerInvariant() -or
+                ((Test-HasProperty $acceptance 'requiredDeviceSourceDeploymentId') -and
+                    $device.sourceDeploymentId -ne $acceptance.requiredDeviceSourceDeploymentId)) {
+                $GapList.Add("$projectId/${role}: APK evidence is not bound to the required source tree")
+            }
+            $deviceClaim = @(
+                'adb', $role, [string]$device.packageName, [string]$device.appVersion,
+                ([string]$device.artifactSha256).ToLowerInvariant(),
+                ([string]$device.deviceAttestationSha256).ToLowerInvariant(),
+                [string]$device.sourceDeploymentId,
+                ([string]$device.sourceTreeHash).ToLowerInvariant(),
+                $computedReleaseSetSha256
+            ) -join '|'
+            Test-EvidenceClaim $projectId ([string]$device.evidenceId) 'adb-device' (
+                $deviceClaim
+            ) $evidenceById $evidenceDocumentById $GapList
+        }
+
+        $rounds = @($verification.pcOffRounds)
+        if ($rounds.Count -ne 3) {
+            $GapList.Add("${projectId}: exactly three PC-off rounds are required")
+        }
+        $roundNumbers = @($rounds | ForEach-Object { [int]$_.round })
+        if (-not (Test-StringSetEqual $roundNumbers @(1, 2, 3))) {
+            $GapList.Add("${projectId}: PC-off round numbers must be exactly 1, 2, and 3")
+        }
+        $mutationKinds = @($rounds | ForEach-Object { [string]$_.mutationKind })
+        $requiredKinds = @($acceptance.requiredMutationKinds | ForEach-Object { [string]$_ })
+        if (-not (Test-StringSetEqual $mutationKinds $requiredKinds)) {
+            $GapList.Add("${projectId}: PC-off rounds must cover the required mutation kinds")
+        }
+        $requiredInteractionRoles = if (Test-HasProperty $acceptance 'requiredInteractionRoles') {
+            @($acceptance.requiredInteractionRoles | ForEach-Object { [string]$_ })
+        } else {
+            $requiredRoles
+        }
+        $roundSourceRoles = @($rounds | ForEach-Object { [string]$_.sourceDeviceRole })
+        if (-not (Test-StringSetEqual $roundSourceRoles $requiredInteractionRoles)) {
+            $GapList.Add("${projectId}: PC-off rounds do not cover every required device role")
+        }
+        $roundEvidenceIds = @($rounds | ForEach-Object { [string]$_.evidenceId })
+        if (@($roundEvidenceIds | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+            $GapList.Add("${projectId}: every PC-off round needs distinct evidence")
+        }
+        $afterRevisions = @()
+        foreach ($round in $rounds) {
+            $roundId = "pc-off-round-$($round.round)"
+            if ($round.pcUnavailable -ne $true -or $round.localServicesStopped -ne $true -or
+                $round.mcpReadWhilePcUnavailable -ne $true -or
+                $round.restartCatchupVerified -ne $true -or
+                $round.exactlyOnceVerified -ne $true) {
+                $GapList.Add("$projectId/${roundId}: required PC-off assertions did not all pass")
+            }
+            $cursorOrder = Compare-SyncCursor (
+                [string]$round.cloudRevisionBefore
+            ) ([string]$round.cloudRevisionAfter)
+            if ($null -eq $cursorOrder -or $cursorOrder -ge 0) {
+                $GapList.Add("$projectId/${roundId}: cloud revision is invalid or did not advance")
+            }
+            $afterRevisions += [string]$round.cloudRevisionAfter
+            if ($round.mutationKind -eq 'delete' -and $round.tombstoneVerified -ne $true) {
+                $GapList.Add("$projectId/${roundId}: delete round did not verify a tombstone")
+            }
+            if ([string]$round.sourceDeviceRole -notin $deviceRoles) {
+                $GapList.Add("$projectId/${roundId}: source device has no ADB evidence")
+            }
+            $roundClaim = @(
+                'pc-off', [string]$round.round, [string]$round.mutationKind,
+                [string]$round.sourceDeviceRole, [string]$round.pcIsolationMode,
+                [string]$round.cloudRevisionBefore, [string]$round.cloudRevisionAfter,
+                [string]$round.startedAt, [string]$round.finishedAt,
+                $computedReleaseSetSha256
+            ) -join '|'
+            Test-EvidenceClaim $projectId ([string]$round.evidenceId) 'pc-off-round' (
+                $roundClaim
+            ) $evidenceById $evidenceDocumentById $GapList
+            $startedAt = [DateTimeOffset]::MinValue
+            $finishedAt = [DateTimeOffset]::MinValue
+            if (-not [DateTimeOffset]::TryParse([string]$round.startedAt, [ref]$startedAt) -or
+                -not [DateTimeOffset]::TryParse([string]$round.finishedAt, [ref]$finishedAt) -or
+                $finishedAt -le $startedAt) {
+                $GapList.Add("$projectId/${roundId}: timestamps are invalid or unordered")
+            }
+        }
+        if (@($afterRevisions | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+            $GapList.Add("${projectId}: PC-off rounds reused a cloud revision")
+        }
+        $orderedRounds = @($rounds | Sort-Object { [int]$_.round })
+        for ($index = 1; $index -lt $orderedRounds.Count; $index++) {
+            if ([string]$orderedRounds[$index].cloudRevisionBefore -ne
+                [string]$orderedRounds[$index - 1].cloudRevisionAfter) {
+                $GapList.Add("${projectId}: PC-off round revision chain is discontinuous")
+                break
+            }
+            $previousFinishedAt = [DateTimeOffset]::MinValue
+            $currentStartedAt = [DateTimeOffset]::MinValue
+            if ([DateTimeOffset]::TryParse(
+                    [string]$orderedRounds[$index - 1].finishedAt,
+                    [ref]$previousFinishedAt
+                ) -and [DateTimeOffset]::TryParse(
+                    [string]$orderedRounds[$index].startedAt,
+                    [ref]$currentStartedAt
+                ) -and $currentStartedAt -lt $previousFinishedAt) {
+                $GapList.Add("${projectId}: PC-off rounds overlap or are out of order")
+                break
             }
         }
     }
 
     if (-not $RunActiveChecks) { return }
 
-    foreach ($command in @($verification.testCommands)) {
-        $executable = [string]$command.executable
-        if (-not $executable) {
-            $GapList.Add("$projectId/$($command.id): test executable is empty")
-            continue
-        }
-        Push-Location $root
-        try {
-            & $executable @($command.arguments) 2>&1 | Out-Null
-            $actualExitCode = $LASTEXITCODE
-            if ($null -eq $actualExitCode) { $actualExitCode = 0 }
-        } catch {
-            $actualExitCode = -1
-        } finally {
-            Pop-Location
-        }
-        if ($actualExitCode -ne [int]$command.expectedExitCode) {
+    foreach ($command in $requiredTestCommands) {
+        $commandResult = Invoke-TrustedEvidenceCommand $command $root
+        if (-not $commandResult.Ok) {
             $GapList.Add(
-                "$projectId/$($command.id): test exited $actualExitCode, expected " +
-                "$($command.expectedExitCode)"
+                "$projectId/$($command.id): trusted test command failed ($($commandResult.Reason))"
             )
         }
     }
 
     foreach ($probe in @($verification.remoteProbes)) {
-        $actualStatus = Get-HttpStatus ([string]$probe.url)
+        $actualStatus = Get-HttpStatus ([string]$probe.url) ([string]$probe.method)
         if ($actualStatus -ne [int]$probe.expectedStatus) {
             $GapList.Add(
                 "$projectId/$($probe.id): remote probe returned $actualStatus, expected " +
@@ -574,6 +1300,8 @@ function Test-CompletionEvidence(
             )
         }
     }
+    # Commands are not trusted to leave their inputs untouched; revalidate all static bindings.
+    Test-CompletionEvidence $Manifest $Project $false $IssueList $GapList
 }
 
 function Test-OAuthOwnerTrust(
@@ -908,6 +1636,7 @@ $manifestGaps = New-Object System.Collections.Generic.List[string]
 $contractGaps = New-Object System.Collections.Generic.List[string]
 $evidenceGaps = New-Object System.Collections.Generic.List[string]
 $capabilityGaps = New-Object System.Collections.Generic.List[string]
+$runActiveEvidenceChecks = [bool]($VerifyEvidence -or ($Strict -and $Live))
 $securityBlockers = @($registry.securityFindings | Where-Object {
     $_.blocksRelease -eq $true -and $_.status -ne 'resolved'
 })
@@ -990,7 +1719,11 @@ foreach ($project in $registry.projects) {
         $gitDirectory = Join-Path $path '.git'
         if ((Test-Path -LiteralPath (Join-Path $gitDirectory 'HEAD')) -and
             (Test-Path -LiteralPath (Join-Path $gitDirectory 'config'))) {
-            $remote = (& git -C $path remote get-url origin 2>$null | Select-Object -First 1)
+            try {
+                $remote = (& git -C $path remote get-url origin 2>$null | Select-Object -First 1)
+            } catch {
+                $remote = $null
+            }
             if ($remote) {
                 $allowed = @($project.repositoryUrls | ForEach-Object {
                     Normalize-RepositoryUrl $_
@@ -1004,6 +1737,10 @@ foreach ($project in $registry.projects) {
 
     $manifestFound = $false
     $manifestValid = $false
+    $manifestSupportsPcOff = $false
+    $manifestRequiresEvidence = $false
+    $manifestEvidenceVerified = $false
+    $manifestCompletionEligible = $false
     $manifestPath = ''
     if ($project.lifecycle -eq 'active') {
         if (-not $project.manifestRepositoryPath) {
@@ -1024,7 +1761,13 @@ foreach ($project in $registry.projects) {
                     $issueCountBefore = $issues.Count
                     $evidenceGapCountBefore = $evidenceGaps.Count
                     $manifestRaw = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8
+                    $manifestHashBefore = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
                     $manifest = $manifestRaw | ConvertFrom-Json
+                    $manifestSupportsPcOff = $manifest.sync.supportsPcOff -eq $true
+                    $manifestRequiresEvidence = $manifest.sync.status -eq 'complete' -or (
+                        $manifest.mcp.status -eq 'complete' -and
+                        $manifest.mcp.dataPlane -ne 'local_only'
+                    )
                     if ($manifestValidatorPython) {
                         $schemaOutput = @(
                             & $manifestValidatorPython $manifestValidatorScript (
@@ -1043,15 +1786,33 @@ foreach ($project in $registry.projects) {
                     ) $manifestRaw $project $registry $expectedRoutes $issues
                     Test-CompletionEvidence (
                         $manifest
-                    ) $project ([bool]($VerifyEvidence -or ($Strict -and $Live))) (
+                    ) $project $runActiveEvidenceChecks (
                         $issues
                     ) $evidenceGaps
+                    if ($runActiveEvidenceChecks -and
+                        $manifestHashBefore -ne (
+                            Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256
+                        ).Hash) {
+                        $evidenceGaps.Add(
+                            "$($project.id): manifest changed while active evidence commands were running"
+                        )
+                    }
                     $manifestValid = (
                         $issues.Count -eq $issueCountBefore -and
                         $evidenceGaps.Count -eq $evidenceGapCountBefore
                     )
+                    $manifestEvidenceVerified = (
+                        $manifestRequiresEvidence -and $runActiveEvidenceChecks -and
+                        $manifestValid
+                    )
+                    $manifestCompletionEligible = $manifestValid -and (
+                        -not $manifestRequiresEvidence -or $manifestEvidenceVerified
+                    )
                 } catch {
-                    $issues.Add("$($project.id) manifest: invalid JSON at $manifestPath")
+                    $issues.Add(
+                        "$($project.id) manifest validation failed ($($_.Exception.GetType().Name)): " +
+                        $_.Exception.Message
+                    )
                 }
             }
         }
@@ -1070,6 +1831,10 @@ foreach ($project in $registry.projects) {
         Id = $project.id
         Found = $manifestFound
         Valid = $manifestValid
+        SupportsPcOff = $manifestSupportsPcOff
+        RequiresEvidence = $manifestRequiresEvidence
+        EvidenceVerified = $manifestEvidenceVerified
+        CompletionEligible = $manifestCompletionEligible
         Path = $manifestPath
     }
 }
@@ -1109,6 +1874,107 @@ if ($focusProject.Count -eq 1) {
             'focuslink: upstream must remain honestly edge-contained, noncanonical, and not private'
         )
     }
+    $acceptance = $focus.sync.acceptanceEvidence
+    $requiredSourceKinds = @{
+        'focuslink-client' = 'git'
+        'foxlink-cloud-mcp' = 'git'
+        'poyi-oauth-as' = 'directory'
+    }
+    $requiredSourcePaths = @{
+        'focuslink-client' = [string]$focus.manifestRepositoryPath
+        'foxlink-cloud-mcp' = 'C:\开发\mcp开发\foxlink-cloud-mcp'
+        'poyi-oauth-as' = [string]$registry.oauthOwnerTrust.repositoryPath
+    }
+    $sourceRules = @($acceptance.requiredSources)
+    $sourcePolicyValid = $sourceRules.Count -eq $requiredSourceKinds.Count
+    foreach ($sourceId in $requiredSourceKinds.Keys) {
+        $match = @($sourceRules | Where-Object id -eq $sourceId)
+        $sourcePolicyValid = $sourcePolicyValid -and $match.Count -eq 1 -and
+            $match[0].kind -eq $requiredSourceKinds[$sourceId] -and
+            (Normalize-PathValue ([string]$match[0].path)) -eq
+            (Normalize-PathValue $requiredSourcePaths[$sourceId])
+    }
+    $oauthSource = @($sourceRules | Where-Object id -eq 'poyi-oauth-as')
+    $sourcePolicyValid = $sourcePolicyValid -and $oauthSource.Count -eq 1 -and
+        (Test-StringSetEqual @($oauthSource[0].includePaths) @(
+                'src', 'scripts', 'migrations', 'tests', 'package.json',
+                'package-lock.json', 'tsconfig.json', 'vitest.config.mjs',
+                'wrangler.jsonc', 'wrangler.test.jsonc', 'README.md'
+            ))
+    $requiredProbePolicy = @{
+        health = @('GET', '/healthz', 200, 'foxlink-cloud-mcp')
+        ready = @('GET', '/readyz', 200, 'foxlink-cloud-mcp')
+        'oauth-resource-metadata' = @(
+            'GET', '/.well-known/oauth-protected-resource/mcp', 200, 'foxlink-cloud-mcp'
+        )
+        'sync-status-auth-challenge' = @(
+            'GET', '/sync/v2/status', 401, 'foxlink-cloud-mcp'
+        )
+    }
+    $probeRules = @($acceptance.requiredRemoteProbes)
+    $probePolicyValid = $probeRules.Count -eq $requiredProbePolicy.Count
+    foreach ($probeId in $requiredProbePolicy.Keys) {
+        $match = @($probeRules | Where-Object id -eq $probeId)
+        $expected = $requiredProbePolicy[$probeId]
+        $probePolicyValid = $probePolicyValid -and $match.Count -eq 1 -and
+            $match[0].method -eq $expected[0] -and
+            $match[0].path -eq $expected[1] -and
+            [int]$match[0].expectedStatus -eq [int]$expected[2] -and
+            $match[0].sourceDeploymentId -eq $expected[3]
+    }
+    $requiredTestCommandPolicy = @{
+        'verify-source-deployments' = @(
+            'node', 'scripts/release-evidence/verify-source-deployments.mjs', 120
+        )
+        'verify-remote-probes' = @(
+            'node', 'scripts/release-evidence/verify-remote-probes.mjs', 120
+        )
+        'verify-adb-physical-devices' = @(
+            'node', 'scripts/release-evidence/verify-adb-physical-devices.mjs', 180
+        )
+        'verify-pc-off-rounds' = @(
+            'node', 'scripts/release-evidence/verify-pc-off-rounds.mjs', 300
+        )
+        'verify-chatgpt-oauth-mcp' = @(
+            'node', 'scripts/release-evidence/verify-chatgpt-oauth-mcp.mjs', 180
+        )
+    }
+    $testCommandRules = @($acceptance.requiredTestCommands)
+    $testCommandPolicyValid = $testCommandRules.Count -eq $requiredTestCommandPolicy.Count
+    foreach ($commandId in $requiredTestCommandPolicy.Keys) {
+        $match = @($testCommandRules | Where-Object id -eq $commandId)
+        $expected = $requiredTestCommandPolicy[$commandId]
+        $testCommandPolicyValid = $testCommandPolicyValid -and $match.Count -eq 1 -and
+            $match[0].executable -eq $expected[0] -and
+            $match[0].scriptPath -eq $expected[1] -and
+            [int]$match[0].timeoutSeconds -eq [int]$expected[2] -and
+            @($match[0].arguments).Count -eq 0
+    }
+    $chatGptPolicy = $acceptance.requiredChatGptMcp
+    if (-not $sourcePolicyValid -or -not $probePolicyValid -or -not $testCommandPolicyValid -or
+        -not (Test-StringSetEqual @($acceptance.requiredAdbRoles) @(
+                'phone', 'tablet', 'watch'
+            )) -or
+        $acceptance.requiredDeviceSourceDeploymentId -ne 'focuslink-client' -or
+        -not (Test-StringSetEqual @($acceptance.requiredInteractionRoles) @(
+                'phone', 'tablet', 'watch'
+            )) -or
+        [int]$acceptance.requiredPcOffRounds -ne 3 -or
+        -not (Test-StringSetEqual @($acceptance.requiredMutationKinds) @(
+                'create', 'update', 'delete'
+            )) -or
+        -not (Test-StringSetEqual @($acceptance.requiredEvidenceIds) @(
+                'chatgpt-oauth-mcp'
+            )) -or
+        $chatGptPolicy.appId -ne 'asdk_app_6a6863c3636481919adeb26f92d8546c' -or
+        $chatGptPolicy.appVersionId -ne 'asdk_app_v_6a6863c4c3808191b17156ce1cea8606' -or
+        $chatGptPolicy.mcpUrl -ne "$fixedFoxlinkOrigin/mcp" -or
+        -not (Test-StringSetEqual @($chatGptPolicy.requiredTools) @(
+                'focuslink_get_status', 'focuslink_get_today_summary',
+                'focuslink_list_focus_records', 'focuslink_get_task_summary'
+            ))) {
+        $issues.Add('focuslink: acceptance-evidence policy is weaker than the release gate')
+    }
     if ($focus.sync.pairing.status -ne 'closed_pending_as_binding_and_joint_e2e' -or
         $focus.sync.pairing.offers.access -ne 'internal_service_binding_only' -or
         $focus.sync.pairing.offers.serviceCredential -ne 'aud_action_bound_non_oauth' -or
@@ -1123,16 +1989,41 @@ if ($focusProject.Count -eq 1) {
     $focusManifestValid = @(
         $manifestRows | Where-Object { $_.Id -eq 'focuslink' -and $_.Valid }
     ).Count -eq 1
-    $focusContractComplete = (
-        $focus.mcp.status -eq 'complete' -and $focus.sync.status -eq 'complete'
+    $focusReleaseClaimed = (
+        $focus.mcp.status -eq 'complete' -and $focus.sync.status -eq 'complete' -and
+        $focusManifestValid
     )
+    if ($foxlinkService.Count -eq 1) {
+        $supportManifestPath = Join-Path $foxlinkService[0].path '.poyi\project-platform.json'
+        if (-not (Test-Path -LiteralPath $supportManifestPath -PathType Leaf)) {
+            $issues.Add('focuslink: foxlink support manifest is missing')
+        } else {
+            try {
+                $supportManifest = Get-Content -LiteralPath $supportManifestPath -Raw `
+                    -Encoding UTF8 | ConvertFrom-Json
+                if ($supportManifest.sync.routes.exchange -ne '/sync/v2/exchange' -or
+                    $supportManifest.sync.routes.status -ne '/sync/v2/status' -or
+                    $supportManifest.sync.routes.pairOffers -ne '/sync/v1/pair/offers' -or
+                    $supportManifest.sync.routes.pairExchange -ne '/sync/v1/pair/exchange' -or
+                    $supportManifest.sync.contractId -ne 'sync-envelope-v1' -or
+                    $supportManifest.sync.envelopeVersion -ne 1 -or
+                    $supportManifest.sync.cloudBaseUrl -ne $fixedFoxlinkOrigin) {
+                    $issues.Add(
+                        'focuslink: foxlink support manifest must register the canonical v2 routes'
+                    )
+                }
+            } catch {
+                $issues.Add('focuslink: foxlink support manifest is invalid JSON')
+            }
+        }
+    }
     if ($foxlinkService.Count -ne 1 -or
         $foxlinkService[0].role -ne 'canonical_public_gateway' -or
         $foxlinkService[0].publicCanonical -ne $true -or
         $foxlinkService[0].registrationTarget -ne $true -or
         $foxlinkService[0].registeredInManifest -ne $focusManifestValid -or
-        $foxlinkService[0].canonicalContractDeployed -ne $focusContractComplete -or
-        $foxlinkService[0].deployed -ne $focusContractComplete -or
+        $foxlinkService[0].canonicalContractDeployed -ne $focusReleaseClaimed -or
+        $foxlinkService[0].deployed -ne $focusReleaseClaimed -or
         $foxlinkService[0].health -ne "$fixedFoxlinkOrigin/healthz") {
         $issues.Add(
             'focuslink: foxlink canonical registration/deployment flags do not match evidence'
@@ -1197,15 +2088,25 @@ if ($Live) {
 
 $allRuntimeProjects = @($registry.projects | Where-Object { $_.runtimeProject })
 $validManifestProjectIds = @($manifestRows | Where-Object Valid | ForEach-Object Id)
+$completionEligibleProjectIds = @(
+    $manifestRows | Where-Object CompletionEligible | ForEach-Object Id
+)
+$unverifiedCompletionClaims = @(
+    $manifestRows | Where-Object {
+        $_.Valid -and $_.RequiresEvidence -and -not $_.EvidenceVerified
+    }
+)
+$evidenceClaimRows = @($manifestRows | Where-Object RequiresEvidence)
+$verifiedEvidenceClaims = @($evidenceClaimRows | Where-Object EvidenceVerified)
 $completeProjects = @($activeProjects | Where-Object {
     $_.mcp.status -in @('complete', 'exempt') -and
     $_.sync.status -in @('complete', 'exempt') -and
-    $_.id -in $validManifestProjectIds
+    $_.id -in $completionEligibleProjectIds
 })
 $completeAllProjects = @($allRuntimeProjects | Where-Object {
     $_.mcp.status -in @('complete', 'exempt') -and
     $_.sync.status -in @('complete', 'exempt') -and
-    ($_.lifecycle -ne 'active' -or $_.id -in $validManifestProjectIds)
+    ($_.lifecycle -ne 'active' -or $_.id -in $completionEligibleProjectIds)
 })
 
 $lines = New-Object System.Collections.Generic.List[string]
@@ -1220,6 +2121,7 @@ $lines.Add(
 )
 $lines.Add(
     "Canonical manifest：**$($validManifestProjectIds.Count)/$($activeProjects.Count)**；" +
+    "主动证据已复核：**$($verifiedEvidenceClaims.Count)/$($evidenceClaimRows.Count)**；" +
     "合同副本缺口：**$($contractGaps.Count)**；完成证据缺口：**$($evidenceGaps.Count)**。"
 )
 
@@ -1243,6 +2145,9 @@ foreach ($project in $registry.projects) {
     $manifest = @($manifestRows | Where-Object Id -eq $project.id | Select-Object -First 1)
     $manifestState = if ($project.lifecycle -eq 'archived') {
         '不适用'
+    } elseif ($manifest.Count -and $manifest[0].Valid -and
+        $manifest[0].RequiresEvidence -and -not $manifest[0].EvidenceVerified) {
+        '结构已校验/主动证据未复核'
     } elseif ($manifest.Count -and $manifest[0].Valid) {
         '已校验'
     } elseif ($manifest.Count -and $manifest[0].Found) {
@@ -1252,8 +2157,14 @@ foreach ($project in $registry.projects) {
     }
     $pcOff = if ($project.lifecycle -eq 'archived') {
         '已封存'
+    } elseif ($project.sync.status -eq 'complete' -and $manifest.Count -and
+        $manifest[0].CompletionEligible -and $manifest[0].SupportsPcOff) {
+        '已验证支持'
+    } elseif ($project.sync.status -eq 'complete' -and $manifest.Count -and
+        $manifest[0].Valid -and $manifest[0].SupportsPcOff) {
+        '待主动证据复核'
     } elseif ($project.sync.status -eq 'complete') {
-        '支持'
+        '声明无效/证据缺失'
     } elseif ($project.sync.status -eq 'exempt') {
         '明确豁免'
     } else {
@@ -1358,6 +2269,14 @@ $lines.Add('')
 if ($evidenceGaps.Count -eq 0) { $lines.Add('- 无') }
 foreach ($gap in $evidenceGaps) { $lines.Add("- $gap") }
 
+$lines.Add('')
+$lines.Add('## 待主动复核的完成声明')
+$lines.Add('')
+if ($unverifiedCompletionClaims.Count -eq 0) { $lines.Add('- 无') }
+foreach ($claim in $unverifiedCompletionClaims) {
+    $lines.Add("- $($claim.Id): 必须使用 -VerifyEvidence 或 -Strict -Live 复核")
+}
+
 if ($issues.Count -gt 0) {
     $lines.Add('')
     $lines.Add('## 注册表或声明错误')
@@ -1377,6 +2296,8 @@ Set-Content -LiteralPath $resolvedReport -Value ($lines -join "`r`n") -Encoding 
     ManifestGaps = $manifestGaps.Count
     ContractGaps = $contractGaps.Count
     EvidenceGaps = $evidenceGaps.Count
+    UnverifiedCompletionClaims = $unverifiedCompletionClaims.Count
+    ActiveEvidenceChecks = $runActiveEvidenceChecks
     CapabilityGaps = $capabilityGaps.Count
     FullyCompliantProjects = $completeProjects.Count
     SecurityFindings = @($registry.securityFindings).Count
@@ -1395,10 +2316,19 @@ if ($ManifestStrict -and (
     )) {
     exit 2
 }
+if ($VerifyEvidence -and (
+        $manifestGaps.Count -gt 0 -or
+        $contractGaps.Count -gt 0 -or
+        $evidenceGaps.Count -gt 0 -or
+        @($healthResults.Values | Where-Object { -not $_.Ok }).Count -gt 0
+    )) {
+    exit 2
+}
 if ($Strict -and (
         $manifestGaps.Count -gt 0 -or
         $contractGaps.Count -gt 0 -or
         $evidenceGaps.Count -gt 0 -or
+        $unverifiedCompletionClaims.Count -gt 0 -or
         $capabilityGaps.Count -gt 0 -or
         $securityBlockers.Count -gt 0 -or
         @($healthResults.Values | Where-Object { -not $_.Ok }).Count -gt 0

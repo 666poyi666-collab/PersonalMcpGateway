@@ -307,6 +307,141 @@
             "requiresRateLimit": true
           }
         },
+        "acceptanceEvidence": {
+          "requiredSources": [
+            {
+              "id": "focuslink-client",
+              "path": "C:\\Users\\poyi\\Desktop\\time1",
+              "kind": "git"
+            },
+            {
+              "id": "foxlink-cloud-mcp",
+              "path": "C:\\开发\\mcp开发\\foxlink-cloud-mcp",
+              "kind": "git"
+            },
+            {
+              "id": "poyi-oauth-as",
+              "path": "C:\\开发\\mcp开发\\poyi-oauth-as",
+              "kind": "directory",
+              "includePaths": [
+                "src",
+                "scripts",
+                "migrations",
+                "tests",
+                "package.json",
+                "package-lock.json",
+                "tsconfig.json",
+                "vitest.config.mjs",
+                "wrangler.jsonc",
+                "wrangler.test.jsonc",
+                "README.md"
+              ]
+            }
+          ],
+          "requiredRemoteProbes": [
+            {
+              "id": "health",
+              "method": "GET",
+              "path": "/healthz",
+              "expectedStatus": 200,
+              "sourceDeploymentId": "foxlink-cloud-mcp"
+            },
+            {
+              "id": "ready",
+              "method": "GET",
+              "path": "/readyz",
+              "expectedStatus": 200,
+              "sourceDeploymentId": "foxlink-cloud-mcp"
+            },
+            {
+              "id": "oauth-resource-metadata",
+              "method": "GET",
+              "path": "/.well-known/oauth-protected-resource/mcp",
+              "expectedStatus": 200,
+              "sourceDeploymentId": "foxlink-cloud-mcp"
+            },
+            {
+              "id": "sync-status-auth-challenge",
+              "method": "GET",
+              "path": "/sync/v2/status",
+              "expectedStatus": 401,
+              "sourceDeploymentId": "foxlink-cloud-mcp"
+            }
+          ],
+          "requiredAdbRoles": [
+            "phone",
+            "tablet",
+            "watch"
+          ],
+          "requiredDeviceSourceDeploymentId": "focuslink-client",
+          "requiredInteractionRoles": [
+            "phone",
+            "tablet",
+            "watch"
+          ],
+          "requiredPcOffRounds": 3,
+          "requiredMutationKinds": [
+            "create",
+            "update",
+            "delete"
+          ],
+          "requiredEvidenceIds": [
+            "chatgpt-oauth-mcp"
+          ],
+          "requiredTestCommands": [
+            {
+              "id": "verify-source-deployments",
+              "executable": "node",
+              "scriptPath": "scripts/release-evidence/verify-source-deployments.mjs",
+              "arguments": [],
+              "timeoutSeconds": 120,
+              "scriptSha256": null
+            },
+            {
+              "id": "verify-remote-probes",
+              "executable": "node",
+              "scriptPath": "scripts/release-evidence/verify-remote-probes.mjs",
+              "arguments": [],
+              "timeoutSeconds": 120,
+              "scriptSha256": null
+            },
+            {
+              "id": "verify-adb-physical-devices",
+              "executable": "node",
+              "scriptPath": "scripts/release-evidence/verify-adb-physical-devices.mjs",
+              "arguments": [],
+              "timeoutSeconds": 180,
+              "scriptSha256": null
+            },
+            {
+              "id": "verify-pc-off-rounds",
+              "executable": "node",
+              "scriptPath": "scripts/release-evidence/verify-pc-off-rounds.mjs",
+              "arguments": [],
+              "timeoutSeconds": 300,
+              "scriptSha256": null
+            },
+            {
+              "id": "verify-chatgpt-oauth-mcp",
+              "executable": "node",
+              "scriptPath": "scripts/release-evidence/verify-chatgpt-oauth-mcp.mjs",
+              "arguments": [],
+              "timeoutSeconds": 180,
+              "scriptSha256": null
+            }
+          ],
+          "requiredChatGptMcp": {
+            "appId": "asdk_app_6a6863c3636481919adeb26f92d8546c",
+            "appVersionId": "asdk_app_v_6a6863c4c3808191b17156ce1cea8606",
+            "mcpUrl": "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev/mcp",
+            "requiredTools": [
+              "focuslink_get_status",
+              "focuslink_get_today_summary",
+              "focuslink_list_focus_records",
+              "focuslink_get_task_summary"
+            ]
+          }
+        },
         "legacyIngressRoute": "/sync/push",
         "legacyIngressStatus": 410,
         "forbiddenPublicWrites": [
