@@ -15,10 +15,18 @@
     "OAUTH_RS_CLIENT_ID": "personal-mcp-gateway-staging",
     "AUTHORITY_CONFIG_JSON": "[]"
   },
-  "kv_namespaces": [
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTHORITY_CHECKPOINTS",
+        "class_name": "AuthorityCheckpoint"
+      }
+    ]
+  },
+  "migrations": [
     {
-      "binding": "AUTHORITY_CHECKPOINTS",
-      "id": "17ef34b9ce6a4c28827a7c480d5aad30"
+      "tag": "authority-checkpoint-v1",
+      "new_classes": ["AuthorityCheckpoint"]
     }
   ]
 }

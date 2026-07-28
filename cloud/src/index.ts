@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 const PRODUCTS = ["identity-focus", "journal", "watch", "suixin"] as const;
 const REQUIRED_SCOPE = "gateway:read";
@@ -25,7 +25,7 @@ interface Env {
   OAUTH_RS_CLIENT_ID: string;
   OAUTH_RS_CLIENT_SECRET?: string;
   AUTHORITY_CONFIG_JSON: string;
-  AUTHORITY_CHECKPOINTS: KVNamespace;
+  AUTHORITY_CHECKPOINTS: DurableObjectNamespace;
 }
 
 export interface AuthorityConfig {
@@ -61,6 +61,15 @@ interface VerifiedAuthority {
   truth: AuthorityTruth;
   truthHash: string;
   publicKeyHash: string;
+}
+
+interface AuthorityCheckpointRecord {
+  schemaVersion: 1;
+  environment: string;
+  productId: ProductId;
+  publicKeyHash: string;
+  revision: number;
+  truthHash: string;
 }
 
 interface ProductSummary {
@@ -126,16 +135,36 @@ async function sha256(value: Uint8Array | string): Promise<string> {
     .join("");
 }
 
+function asciiJsonString(value: string): string {
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function canonicalJson(value: unknown): string {
+  if (typeof value === "string") return asciiJsonString(value);
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const object = value as Record<string, unknown>;
-  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  return `{${Object.keys(object).sort().map((key) => `${asciiJsonString(key)}:${canonicalJson(object[key])}`).join(",")}}`;
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
   const actual = Object.keys(value).sort();
   return actual.length === expected.length && actual.every((key, index) => key === [...expected].sort()[index]);
+}
+
+function isCheckpointRecord(value: unknown): value is AuthorityCheckpointRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return hasExactKeys(record, ["schemaVersion", "environment", "productId", "publicKeyHash", "revision", "truthHash"])
+    && record.schemaVersion === 1
+    && typeof record.environment === "string"
+    && isProductId(record.productId)
+    && typeof record.publicKeyHash === "string"
+    && /^[0-9a-f]{64}$/.test(record.publicKeyHash)
+    && Number.isSafeInteger(record.revision)
+    && (record.revision as number) >= 0
+    && typeof record.truthHash === "string"
+    && /^[0-9a-f]{64}$/.test(record.truthHash);
 }
 
 function parseTimestamp(value: unknown): number | null {
@@ -194,17 +223,59 @@ export function parseAuthorityConfig(raw: string): Map<ProductId, AuthorityConfi
   return result;
 }
 
-async function fetchBounded(url: string): Promise<Uint8Array | null> {
+interface BoundedHttpResponse {
+  ok: boolean;
+  status: number;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+async function fetchBoundedHttp(
+  url: string,
+  init: RequestInit,
+  maxBytes: number,
+  timeoutMs = 5_000,
+): Promise<BoundedHttpResponse | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { method: "GET", redirect: "error", headers: { accept: "application/json" } });
-    if (!response.ok) return null;
+    const response = await fetch(url, { ...init, redirect: "error", signal: controller.signal });
     const declared = Number(response.headers.get("content-length") ?? "0");
-    if (declared > MAX_AUTHORITY_BYTES) return null;
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    return bytes.length <= MAX_AUTHORITY_BYTES ? bytes : null;
+    if (declared > maxBytes) {
+      await response.body?.cancel();
+      return null;
+    }
+    if (!response.body) return { ok: response.ok, status: response.status, contentType: response.headers.get("content-type") ?? "", bytes: new Uint8Array() };
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { ok: response.ok, status: response.status, contentType: response.headers.get("content-type") ?? "", bytes };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
+}
+
+async function fetchBounded(url: string): Promise<Uint8Array | null> {
+  const response = await fetchBoundedHttp(url, { method: "GET", headers: { accept: "application/json" } }, MAX_AUTHORITY_BYTES);
+  return response?.ok ? response.bytes : null;
 }
 
 export async function verifyAuthority(
@@ -241,19 +312,30 @@ export async function verifyAuthority(
     return { verified: null, issue: "authority_signature_invalid" };
   }
   const truthHash = await sha256(canonicalJson(document.truth));
+  const publicKeyHash = await sha256(publicKey);
   try {
-    const checkpointKey = `authority:${config.productId}`;
-    const prior = await env.AUTHORITY_CHECKPOINTS.get<{ revision: number; truthHash: string }>(checkpointKey, "json");
-    if (prior && (document.truth.revision < prior.revision || (document.truth.revision === prior.revision && truthHash !== prior.truthHash))) {
+    const id = env.AUTHORITY_CHECKPOINTS.idFromName(config.productId);
+    const checkpoint = env.AUTHORITY_CHECKPOINTS.get(id);
+    const response = await checkpoint.fetch("https://authority-checkpoint.internal/accept", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: 1,
+        environment: env.ENVIRONMENT,
+        productId: config.productId,
+        publicKeyHash,
+        revision: document.truth.revision,
+        truthHash,
+      } satisfies AuthorityCheckpointRecord),
+    });
+    if (response.status === 409) {
       return { verified: null, issue: "authority_revision_rollback" };
     }
-    if (!prior || document.truth.revision > prior.revision) {
-      await env.AUTHORITY_CHECKPOINTS.put(checkpointKey, JSON.stringify({ revision: document.truth.revision, truthHash }));
-    }
+    if (!response.ok) return { verified: null, issue: "authority_checkpoint_unavailable" };
   } catch {
     return { verified: null, issue: "authority_checkpoint_unavailable" };
   }
-  return { verified: { truth: document.truth, truthHash, publicKeyHash: await sha256(publicKey) }, issue: null };
+  return { verified: { truth: document.truth, truthHash, publicKeyHash }, issue: null };
 }
 
 function unknownProduct(productId: ProductId, issue: AuthorityIssue): ProductSummary {
@@ -269,14 +351,21 @@ function unknownProduct(productId: ProductId, issue: AuthorityIssue): ProductSum
   };
 }
 
-async function cloudSummary(env: Env): Promise<{ summary: Record<string, unknown>; verifiedCount: number }> {
+async function cloudSummary(env: Env): Promise<{ summary: Record<string, unknown>; verifiedCount: number; operationalCount: number }> {
   const config = parseAuthorityConfig(env.AUTHORITY_CONFIG_JSON);
+  const operational = new Set<ProductId>();
   const products = await Promise.all(PRODUCTS.map(async (productId): Promise<ProductSummary> => {
     const product = config.get(productId);
     if (!product) return unknownProduct(productId, "authority_not_configured");
     const result = await verifyAuthority(env, product);
     if (!result.verified) return unknownProduct(productId, result.issue ?? "authority_signature_invalid");
     const truth = result.verified.truth;
+    if (truth.freshness === "fresh"
+      && truth.pendingCount === 0
+      && truth.blockerReason === null
+      && Date.now() - Date.parse(truth.lastVerifiedAt) < product.maxAgeSeconds * 1_000) {
+      operational.add(productId);
+    }
     return {
       productId,
       revision: truth.revision,
@@ -296,6 +385,7 @@ async function cloudSummary(env: Env): Promise<{ summary: Record<string, unknown
       products,
     },
     verifiedCount: products.filter((product) => product.authorityVerification.state === "verified").length,
+    operationalCount: operational.size,
   };
 }
 
@@ -307,19 +397,32 @@ function oauthConfigValid(env: Env): boolean {
   return Boolean(issuer && audience && jwks && introspection && issuer!.origin === jwks!.origin && issuer!.origin === introspection!.origin && env.OAUTH_RS_CLIENT_ID && env.OAUTH_RS_CLIENT_SECRET && env.OAUTH_RS_CLIENT_SECRET.length >= 32);
 }
 
-async function introspect(env: Env, token: string): Promise<boolean> {
+function exactAudience(value: unknown, audience: string): boolean {
+  return value === audience || (Array.isArray(value) && value.length === 1 && value[0] === audience);
+}
+
+async function introspect(env: Env, token: string, payload: JWTPayload): Promise<boolean> {
   if (!oauthConfigValid(env)) return false;
   try {
     const basic = btoa(`${env.OAUTH_RS_CLIENT_ID}:${env.OAUTH_RS_CLIENT_SECRET}`);
-    const response = await fetch(env.OAUTH_INTROSPECTION_URL, {
+    const response = await fetchBoundedHttp(env.OAUTH_INTROSPECTION_URL, {
       method: "POST",
-      redirect: "error",
       headers: { authorization: `Basic ${basic}`, "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: new URLSearchParams({ token }).toString(),
-    });
-    if (!response.ok || Number(response.headers.get("content-length") ?? "0") > 16_384) return false;
-    const body = await response.json<Record<string, unknown>>();
-    return body.active === true && body.aud === env.OAUTH_AUDIENCE && typeof body.scope === "string" && body.scope.split(/\s+/).includes(REQUIRED_SCOPE);
+    }, 16_384);
+    if (!response?.ok || !response.contentType.toLowerCase().includes("application/json")) return false;
+    const body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes)) as Record<string, unknown>;
+    const scope = typeof body.scope === "string" ? body.scope.split(/\s+/) : [];
+    return body.active === true
+      && exactAudience(body.aud, env.OAUTH_AUDIENCE)
+      && scope.includes(REQUIRED_SCOPE)
+      && body.iss === payload.iss
+      && body.sub === payload.sub
+      && body.jti === payload.jti
+      && body.exp === payload.exp
+      && (body.token_type === undefined || String(body.token_type).toLowerCase() === "bearer")
+      && (body.resource === undefined || body.resource === env.OAUTH_AUDIENCE)
+      && (payload.client_id === undefined || body.client_id === payload.client_id);
   } catch {
     return false;
   }
@@ -340,7 +443,7 @@ async function authenticate(request: Request, env: Env): Promise<boolean> {
     });
     const scope = typeof payload.scope === "string" ? payload.scope.split(/\s+/) : [];
     if (!scope.includes(REQUIRED_SCOPE) || payload.resource !== env.OAUTH_AUDIENCE || typeof payload.sub !== "string" || typeof payload.jti !== "string") return false;
-    return await introspect(env, match[1]!);
+    return await introspect(env, match[1]!, payload);
   } catch {
     return false;
   }
@@ -355,34 +458,69 @@ function challenge(request: Request): Response {
 
 async function oauthDependencyProbe(env: Env): Promise<Record<string, unknown>> {
   if (!oauthConfigValid(env)) return { configured: false, metadata: false, jwks: false, introspection: false };
-  const probe = async (url: string, init?: RequestInit): Promise<Response | null> => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    try {
-      return await fetch(url, { ...init, redirect: "error", signal: controller.signal });
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timeout);
-    }
-  };
   const [metadata, jwks, tokenStatus] = await Promise.all([
-    probe(`${env.OAUTH_ISSUER}/.well-known/oauth-authorization-server`, { headers: { accept: "application/json" } }),
-    probe(env.OAUTH_JWKS_URL, { headers: { accept: "application/json" } }),
-    probe(env.OAUTH_INTROSPECTION_URL, {
+    fetchBoundedHttp(`${env.OAUTH_ISSUER}/.well-known/oauth-authorization-server`, { method: "GET", headers: { accept: "application/json" } }, 64_000),
+    fetchBoundedHttp(env.OAUTH_JWKS_URL, { method: "GET", headers: { accept: "application/json" } }, 128_000),
+    fetchBoundedHttp(env.OAUTH_INTROSPECTION_URL, {
       method: "POST",
       headers: {
         authorization: `Basic ${btoa(`${env.OAUTH_RS_CLIENT_ID}:${env.OAUTH_RS_CLIENT_SECRET}`)}`,
         "content-type": "application/x-www-form-urlencoded",
       },
       body: "token=readiness-probe-invalid-token",
-    }),
+    }, 16_384),
   ]);
-  let introspection = false;
-  if (tokenStatus?.ok) {
-    try { introspection = (await tokenStatus.json<Record<string, unknown>>()).active === false; } catch { introspection = false; }
+  let metadataValid = false;
+  if (metadata?.ok && metadata.contentType.toLowerCase().includes("application/json")) {
+    try {
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(metadata.bytes)) as Record<string, unknown>;
+      const authorization = typeof value.authorization_endpoint === "string" ? exactHttpsUrl(value.authorization_endpoint) : null;
+      const token = typeof value.token_endpoint === "string" ? exactHttpsUrl(value.token_endpoint) : null;
+      const scopes = Array.isArray(value.scopes_supported) ? value.scopes_supported : [];
+      metadataValid = value.issuer === env.OAUTH_ISSUER
+        && value.jwks_uri === env.OAUTH_JWKS_URL
+        && value.introspection_endpoint === env.OAUTH_INTROSPECTION_URL
+        && authorization?.origin === new URL(env.OAUTH_ISSUER).origin
+        && token?.origin === new URL(env.OAUTH_ISSUER).origin
+        && scopes.includes(REQUIRED_SCOPE);
+    } catch {
+      metadataValid = false;
+    }
   }
-  return { configured: true, metadata: metadata?.ok === true, jwks: jwks?.ok === true, introspection };
+  let jwksValid = false;
+  if (jwks?.ok && jwks.contentType.toLowerCase().includes("application/json")) {
+    try {
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(jwks.bytes)) as Record<string, unknown>;
+      const keys = Array.isArray(value.keys) ? value.keys : [];
+      const kids = new Set<string>();
+      jwksValid = keys.length >= 1 && keys.length <= 10 && keys.every((candidate) => {
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+        const key = candidate as Record<string, unknown>;
+        const kid = typeof key.kid === "string" ? key.kid : "";
+        if (!kid || kids.has(kid)) return false;
+        kids.add(kid);
+        return key.kty === "RSA"
+          && key.alg === "RS256"
+          && key.use === "sig"
+          && typeof key.n === "string"
+          && base64UrlBytes(key.n) !== null
+          && typeof key.e === "string"
+          && base64UrlBytes(key.e) !== null
+          && !["d", "p", "q", "dp", "dq", "qi", "oth"].some((field) => field in key);
+      });
+    } catch {
+      jwksValid = false;
+    }
+  }
+  let introspection = false;
+  if (tokenStatus?.ok && tokenStatus.contentType.toLowerCase().includes("application/json")) {
+    try {
+      introspection = (JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(tokenStatus.bytes)) as Record<string, unknown>).active === false;
+    } catch {
+      introspection = false;
+    }
+  }
+  return { configured: true, metadata: metadataValid, jwks: jwksValid, introspection };
 }
 
 async function ready(env: Env): Promise<Response> {
@@ -394,16 +532,16 @@ async function ready(env: Env): Promise<Response> {
     oauthProbeError = true;
     oauth = { configured: oauthConfigValid(env), metadata: false, jwks: false, introspection: false };
   }
-  let authority: { summary: Record<string, unknown>; verifiedCount: number };
+  let authority: { summary: Record<string, unknown>; verifiedCount: number; operationalCount: number };
   let authorityProbeError = false;
   try {
     authority = await cloudSummary(env);
   } catch {
     authorityProbeError = true;
-    authority = { summary: {}, verifiedCount: 0 };
+    authority = { summary: {}, verifiedCount: 0, operationalCount: 0 };
   }
   const oauthReady = Object.values(oauth).every((value) => value === true);
-  const authorityReady = authority.verifiedCount === PRODUCTS.length;
+  const authorityReady = authority.verifiedCount === PRODUCTS.length && authority.operationalCount === PRODUCTS.length;
   return json({
     ready: oauthReady && authorityReady,
     environment: env.ENVIRONMENT,
@@ -413,6 +551,7 @@ async function ready(env: Env): Promise<Response> {
       authorities: {
         configured: parseAuthorityConfig(env.AUTHORITY_CONFIG_JSON).size,
         verified: authority.verifiedCount,
+        operational: authority.operationalCount,
         required: PRODUCTS.length,
         probeError: authorityProbeError,
       },
@@ -445,6 +584,52 @@ async function mcp(request: Request, env: Env): Promise<Response> {
     return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: { ok: true, project: "personal", operation: "cloud_mcp_summary", data: value } } });
   }
   return json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } }, 404);
+}
+
+export class AuthorityCheckpoint {
+  constructor(
+    private readonly state: DurableObjectState,
+    private readonly env: Env,
+  ) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method !== "POST" || url.pathname !== "/accept") return json({ accepted: false }, 404);
+    if (Number(request.headers.get("content-length") ?? "0") > 4_096) return json({ accepted: false }, 413);
+    let candidate: unknown;
+    try {
+      candidate = await request.json();
+    } catch {
+      return json({ accepted: false }, 400);
+    }
+    if (!isCheckpointRecord(candidate) || candidate.environment !== this.env.ENVIRONMENT) {
+      return json({ accepted: false, reason: "checkpoint_invalid" }, 503);
+    }
+    try {
+      const result = await this.state.storage.transaction(async (transaction) => {
+        const prior = await transaction.get<unknown>("checkpoint");
+        if (prior !== undefined && !isCheckpointRecord(prior)) return "unavailable" as const;
+        if (prior !== undefined && (prior.environment !== candidate.environment || prior.productId !== candidate.productId)) {
+          return "unavailable" as const;
+        }
+        if (prior !== undefined) {
+          if (candidate.revision < prior.revision) return "rollback" as const;
+          if (candidate.revision === prior.revision
+            && (candidate.truthHash !== prior.truthHash || candidate.publicKeyHash !== prior.publicKeyHash)) {
+            return "rollback" as const;
+          }
+          if (candidate.revision === prior.revision) return "accepted" as const;
+        }
+        await transaction.put("checkpoint", candidate);
+        return "accepted" as const;
+      });
+      if (result === "rollback") return json({ accepted: false, reason: "rollback" }, 409);
+      if (result === "unavailable") return json({ accepted: false, reason: "checkpoint_invalid" }, 503);
+      return json({ accepted: true });
+    } catch {
+      return json({ accepted: false, reason: "checkpoint_unavailable" }, 503);
+    }
+  }
 }
 
 export default {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import worker, {
+  AuthorityCheckpoint,
   base64Url,
   canonicalJson,
   parseAuthorityConfig,
@@ -56,6 +57,7 @@ describe("authority fail-closed contract", () => {
 
   it("uses Python-compatible recursive sorted-key canonical JSON", () => {
     expect(canonicalJson({ z: 1, a: { y: true, x: null } })).toBe('{"a":{"x":null,"y":true},"z":1}');
+    expect(canonicalJson({ blockerReason: "设备离线 🚫" })).toBe('{"blockerReason":"\\u8bbe\\u5907\\u79bb\\u7ebf \\ud83d\\udeab"}');
   });
 });
 
@@ -112,6 +114,22 @@ describe("public staging boundary", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("rejects 200 HTML and semantically invalid OAuth metadata/JWKS", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response("<html>not oauth</html>", { status: 200, headers: { "content-type": "text/html" } });
+    try {
+      const response = await worker.fetch(
+        new Request("https://gateway.example/readyz"),
+        { ...env, OAUTH_RS_CLIENT_SECRET: "s".repeat(64) } as never,
+      );
+      const body = await response.json() as { dependencies: { oauth: { metadata: boolean; jwks: boolean; introspection: boolean } } };
+      expect(response.status).toBe(503);
+      expect(body.dependencies.oauth).toMatchObject({ metadata: false, jwks: false, introspection: false });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("signed staging authority verification", () => {
@@ -136,11 +154,29 @@ describe("signed staging authority verification", () => {
       return { ...unsigned, signature: base64Url(new Uint8Array(signature)) };
     };
     let body = await makeDocument(7);
-    const checkpoints = new Map<string, { revision: number; truthHash: string }>();
+    const checkpoints = new Map<string, unknown>();
+    const state = {
+      storage: {
+        async transaction<T>(callback: (transaction: { get(key: string): Promise<unknown>; put(key: string, value: unknown): Promise<void> }) => Promise<T>) {
+          return await callback({
+            async get(key: string) { return checkpoints.get(key); },
+            async put(key: string, value: unknown) { checkpoints.set(key, value); },
+          });
+        },
+      },
+    };
+    const checkpointObject = new AuthorityCheckpoint(state as never, { ENVIRONMENT: "staging" } as never);
     const env = {
+      ENVIRONMENT: "staging",
       AUTHORITY_CHECKPOINTS: {
-        async get(key: string) { return checkpoints.get(key) ?? null; },
-        async put(key: string, value: string) { checkpoints.set(key, JSON.parse(value)); },
+        idFromName(name: string) { return name; },
+        get() {
+          return {
+            async fetch(input: string, init: RequestInit) {
+              return await checkpointObject.fetch(new Request(input, init));
+            },
+          };
+        },
       },
     };
     const config = { productId: "journal" as const, url: "https://journal.example/sync/v2/status", publicKey, maxAgeSeconds: 900 };
@@ -161,6 +197,10 @@ describe("signed staging authority verification", () => {
 
       body = await makeDocument(6);
       expect(await verifyAuthority(env as never, config, now)).toMatchObject({ verified: null, issue: "authority_revision_rollback" });
+
+      checkpoints.set("checkpoint", {});
+      body = await makeDocument(9);
+      expect(await verifyAuthority(env as never, config, now)).toMatchObject({ verified: null, issue: "authority_checkpoint_unavailable" });
     } finally {
       globalThis.fetch = originalFetch;
     }
