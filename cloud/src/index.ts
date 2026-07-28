@@ -230,6 +230,51 @@ interface BoundedHttpResponse {
   bytes: Uint8Array;
 }
 
+type BoundedJsonResult =
+  | { ok: true; value: unknown }
+  | { ok: false; tooLarge: boolean };
+
+async function readBoundedJson(request: Request, maxBytes: number): Promise<BoundedJsonResult> {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const declared = Number(contentLength);
+    if (!Number.isSafeInteger(declared) || declared < 0 || declared > maxBytes) {
+      await request.body?.cancel();
+      return { ok: false, tooLarge: true };
+    }
+  }
+  if (!request.body) return { ok: false, tooLarge: false };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel();
+        return { ok: false, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return {
+      ok: true,
+      value: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown,
+    };
+  } catch {
+    return { ok: false, tooLarge: false };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function fetchBoundedHttp(
   url: string,
   init: RequestInit,
@@ -561,13 +606,15 @@ async function ready(env: Env): Promise<Response> {
 
 async function mcp(request: Request, env: Env): Promise<Response> {
   if (!(await authenticate(request, env))) return challenge(request);
-  let body: Record<string, unknown>;
-  try {
-    if (Number(request.headers.get("content-length") ?? "0") > 64_000) return json({ error: "request_too_large" }, 413);
-    body = await request.json<Record<string, unknown>>();
-  } catch {
+  const parsed = await readBoundedJson(request, 64_000);
+  if (!parsed.ok) {
+    if (parsed.tooLarge) return json({ error: "request_too_large" }, 413);
     return json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
   }
+  if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
+    return json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } }, 400);
+  }
+  const body = parsed.value as Record<string, unknown>;
   const id = body.id ?? null;
   if (body.jsonrpc !== "2.0" || typeof body.method !== "string") return json({ jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } }, 400);
   if (body.method === "initialize") {
@@ -595,13 +642,9 @@ export class AuthorityCheckpoint {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method !== "POST" || url.pathname !== "/accept") return json({ accepted: false }, 404);
-    if (Number(request.headers.get("content-length") ?? "0") > 4_096) return json({ accepted: false }, 413);
-    let candidate: unknown;
-    try {
-      candidate = await request.json();
-    } catch {
-      return json({ accepted: false }, 400);
-    }
+    const parsed = await readBoundedJson(request, 4_096);
+    if (!parsed.ok) return json({ accepted: false }, parsed.tooLarge ? 413 : 400);
+    const candidate = parsed.value;
     if (!isCheckpointRecord(candidate) || candidate.environment !== this.env.ENVIRONMENT) {
       return json({ accepted: false, reason: "checkpoint_invalid" }, 503);
     }

@@ -133,6 +133,17 @@ describe("public staging boundary", () => {
 });
 
 describe("signed staging authority verification", () => {
+  it("bounds checkpoint JSON without trusting Content-Length", async () => {
+    const checkpointObject = new AuthorityCheckpoint({ storage: {} } as never, { ENVIRONMENT: "staging" } as never);
+    const request = new Request("https://authority-checkpoint.internal/accept", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(5_000) }),
+    });
+    expect(request.headers.get("content-length")).toBeNull();
+    expect((await checkpointObject.fetch(request)).status).toBe(413);
+  });
+
   it("accepts a valid Ed25519 document and rejects tamper, expiry, product mismatch, and rollback", async () => {
     const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const publicKey = base64Url(new Uint8Array(await crypto.subtle.exportKey("raw", keys.publicKey)));
