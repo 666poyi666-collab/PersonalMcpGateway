@@ -147,6 +147,36 @@ async def test_projects_without_repos_hints_at_the_docs(tmp_path: Path) -> None:
     assert "options.repos" in widgets[0]["data"]["empty"]
 
 
+async def test_projects_does_not_treat_a_nested_folder_as_the_repository(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "nested"
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-b", "main", str(repo))
+    nested.mkdir()
+    write_config(
+        tmp_path,
+        f"""
+widgets:
+  - id: projects
+    type: projects
+    title: 项目
+    options:
+      repos:
+        - {nested}
+""",
+    )
+
+    widget = (await build_hub(tmp_path).snapshot())[0]
+    assert widget["data"]["items"][0]["subtitle"] == "不是 Git 仓库"
+
+
 async def test_remote_rejects_anything_that_is_not_loopback(tmp_path: Path) -> None:
     write_config(
         tmp_path,

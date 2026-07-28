@@ -792,12 +792,10 @@ def test_every_partial_sync_contract_declaration_is_registered_with_a_consumer()
             "complete",
         }:
             continue
-        manifest_path = Path(cast(str, project["manifestRepositoryPath"])) / cast(
-            str, project["manifestRelativePath"]
-        )
-        manifest_value = load_json(manifest_path)
-        contract_id = cast(str, manifest_value["sync"]["contractId"])
-        assert project["sync"]["contractId"] == contract_id
+        # This contract test owns the canonical registry only. External
+        # manifests can be missing, frozen, or on an independent revision and
+        # are validated by the explicit cross-repository audit workflow.
+        contract_id = cast(str, project["sync"]["contractId"])
         assert contract_id in contracts
         contract = contracts[contract_id]
         assert project["id"] in contract["projectIds"]

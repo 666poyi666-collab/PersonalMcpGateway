@@ -374,6 +374,16 @@ class WidgetHub:
         if not path.is_dir():
             item["subtitle"] = "路径不存在"
             return item
+        top_level = _git(path, "rev-parse", "--show-toplevel")
+        try:
+            is_repository_root = (
+                top_level is not None and Path(top_level).resolve() == path.resolve()
+            )
+        except OSError:
+            is_repository_root = False
+        if not is_repository_root:
+            item["subtitle"] = "不是 Git 仓库"
+            return item
         branch = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
         if branch is None:
             item["subtitle"] = "不是 Git 仓库"
