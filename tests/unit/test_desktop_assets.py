@@ -111,7 +111,7 @@ def test_sync_chips_distinguish_cloud_snapshot_and_local_semantics() -> None:
     assert "chip.dataset.plane = plane;" in script
     assert "chip.dataset.state = sync && sync.compliance" in script
     assert "observation.lastSuccessfulPushAt" in script
-    assert 'vitals.append(syncChip(target.sync))' in script
+    assert "vitals.append(syncChip(target.sync))" in script
     assert 'continuity.classList.add("gw-sync-chip")' in script
     assert '.sync-chip[data-plane="snapshot_mirror"]' in style
     assert '.sync-chip[data-plane="local_only"]' in style

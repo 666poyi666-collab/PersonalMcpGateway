@@ -434,9 +434,7 @@ def sync_project(project: dict, previous: dict | None = None) -> dict:
                 prior_items.get(tool, {}),
                 result="failed",
                 attempted_at=attempted_at,
-                reason=(
-                    "local_data_unavailable" if tool in skipped_tools else "cloud_push_failed"
-                ),
+                reason=("local_data_unavailable" if tool in skipped_tools else "cloud_push_failed"),
             )
             for tool in tools
         }

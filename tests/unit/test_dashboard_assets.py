@@ -23,7 +23,7 @@ def test_dashboard_profile_uses_local_encrypted_outbox_without_credentials() -> 
 
     assert 'const DB_NAME = "poyi-dashboard-profile-v1"' in profile
     assert "indexedDB.open(DB_NAME, DB_VERSION)" in profile
-    assert 'const key = existingKey ? null : await crypto.subtle.generateKey(' in profile
+    assert "const key = existingKey ? null : await crypto.subtle.generateKey(" in profile
     assert '["encrypt", "decrypt"]' in profile
     assert 'database.transaction(["entities", "outbox", "meta"], "readwrite")' in profile
     assert "prepareExchange" in profile

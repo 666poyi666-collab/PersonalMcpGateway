@@ -135,9 +135,7 @@ def test_v2_layout_is_marked_for_one_time_renderer_migration(tmp_path: Path) -> 
 
     assert loaded.project_layout_version == 2
     assert loaded.project_layout_version < PROJECT_LAYOUT_VERSION
-    assert loaded.project_layout == {
-        "watch": {"x": 420, "y": 0, "w": 580, "h": 360, "order": 1}
-    }
+    assert loaded.project_layout == {"watch": {"x": 420, "y": 0, "w": 580, "h": 360, "order": 1}}
 
 
 def test_legacy_grid_layout_is_kept_for_renderer_migration() -> None:
