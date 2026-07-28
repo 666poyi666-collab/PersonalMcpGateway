@@ -28,7 +28,7 @@ interface Env {
   AUTHORITY_CHECKPOINTS: KVNamespace;
 }
 
-interface AuthorityConfig {
+export interface AuthorityConfig {
   productId: ProductId;
   url: string;
   publicKey: string;
@@ -207,7 +207,7 @@ async function fetchBounded(url: string): Promise<Uint8Array | null> {
   }
 }
 
-async function verifyAuthority(
+export async function verifyAuthority(
   env: Env,
   config: AuthorityConfig,
   now = Date.now(),

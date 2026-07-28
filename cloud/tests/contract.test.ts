@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import worker, { canonicalJson, parseAuthorityConfig, unknownProduct, validateAuthorityShape } from "../src/index";
+import worker, {
+  base64Url,
+  canonicalJson,
+  parseAuthorityConfig,
+  unknownProduct,
+  validateAuthorityShape,
+  verifyAuthority,
+} from "../src/index";
 
 const truth = {
   revision: 7,
@@ -101,6 +108,59 @@ describe("public staging boundary", () => {
       );
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ ready: false });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("signed staging authority verification", () => {
+  it("accepts a valid Ed25519 document and rejects tamper, expiry, product mismatch, and rollback", async () => {
+    const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const publicKey = base64Url(new Uint8Array(await crypto.subtle.exportKey("raw", keys.publicKey)));
+    const now = Date.parse("2026-07-29T00:05:00Z");
+    const makeDocument = async (revision: number, overrides: Record<string, unknown> = {}) => {
+      const unsigned = {
+        schemaVersion: 1,
+        productId: "journal",
+        issuedAt: "2026-07-29T00:04:00Z",
+        expiresAt: "2026-07-29T00:14:00Z",
+        truth: { ...truth, revision, lastVerifiedAt: "2026-07-29T00:03:59Z" },
+        ...overrides,
+      };
+      const signature = await crypto.subtle.sign(
+        "Ed25519",
+        keys.privateKey,
+        new TextEncoder().encode(canonicalJson(unsigned)),
+      );
+      return { ...unsigned, signature: base64Url(new Uint8Array(signature)) };
+    };
+    let body = await makeDocument(7);
+    const checkpoints = new Map<string, { revision: number; truthHash: string }>();
+    const env = {
+      AUTHORITY_CHECKPOINTS: {
+        async get(key: string) { return checkpoints.get(key) ?? null; },
+        async put(key: string, value: string) { checkpoints.set(key, JSON.parse(value)); },
+      },
+    };
+    const config = { productId: "journal" as const, url: "https://journal.example/sync/v2/status", publicKey, maxAgeSeconds: 900 };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    try {
+      expect(await verifyAuthority(env as never, config, now)).toMatchObject({ issue: null, verified: { truth: { revision: 7 } } });
+
+      body = structuredClone(body);
+      body.truth.revision = 8;
+      expect(await verifyAuthority(env as never, config, now)).toMatchObject({ verified: null, issue: "authority_signature_invalid" });
+
+      body = await makeDocument(8, { issuedAt: "2026-07-28T23:40:00Z", expiresAt: "2026-07-28T23:50:00Z" });
+      expect(await verifyAuthority(env as never, config, now)).toMatchObject({ verified: null, issue: "authority_status_expired" });
+
+      body = await makeDocument(8, { productId: "watch" });
+      expect(await verifyAuthority(env as never, config, now)).toMatchObject({ verified: null, issue: "authority_product_mismatch" });
+
+      body = await makeDocument(6);
+      expect(await verifyAuthority(env as never, config, now)).toMatchObject({ verified: null, issue: "authority_revision_rollback" });
     } finally {
       globalThis.fetch = originalFetch;
     }
