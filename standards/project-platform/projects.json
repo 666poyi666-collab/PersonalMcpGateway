@@ -91,6 +91,7 @@
       "id": "sync-envelope-v1",
       "projectIds": [
         "daylight-journal",
+        "personal-mcp-gateway",
         "watchintervals",
         "focuslink",
         "suixinyiting",
@@ -100,6 +101,16 @@
       "requestFixtureRelativePath": "contracts/sync-envelope-v1.request.fixture.json",
       "responseFixtureRelativePath": "contracts/sync-envelope-v1.response.fixture.json",
       "consumers": [
+        {
+          "id": "personal-gateway-dashboard-profile",
+          "projectIds": [
+            "personal-mcp-gateway"
+          ],
+          "repositoryPath": "C:\\开发\\mcp开发\\PersonalMcpGateway",
+          "schemaRelativePath": "standards/project-platform/contracts/sync-envelope-v1.schema.json",
+          "requestFixtureRelativePath": "standards/project-platform/contracts/sync-envelope-v1.request.fixture.json",
+          "responseFixtureRelativePath": "standards/project-platform/contracts/sync-envelope-v1.response.fixture.json"
+        },
         {
           "id": "journal-cloud-worker",
           "projectIds": [
@@ -608,12 +619,17 @@
         "coverage": "All five approved runtime diagnostics tools are reachable through the authenticated tunnel while Windows is running. The tunnel is transport, not a cloud runtime or durable diagnostics store."
       },
       "sync": {
-        "status": "missing",
+        "status": "partial",
         "dataPlane": "cloud_primary",
-        "mode": "encrypted_dashboard_profile_not_implemented",
+        "contractId": "sync-envelope-v1",
+        "envelopeVersion": 1,
+        "mode": "encrypted_dashboard_profile_local_staged_remote_unverified",
+        "canonicalExchangeRoute": "/sync/v2/exchange",
+        "localImplementationStatus": "browser_encrypted_outbox_exchange_boundary_implemented",
+        "remoteVerificationStatus": "missing",
         "supportsPcOff": false,
         "supportsBidirectionalDelta": false,
-        "pcOffBehavior": "Runtime diagnostics remain local-only. The separately scoped encrypted dashboard profile for layout, tile sizes, pinned items and preferences is not yet connected to a cloud authority."
+        "pcOffBehavior": "Runtime diagnostics remain local-only. The encrypted dashboard-profile client has an atomic local outbox, cursor, conflict handling and bidirectional SyncEnvelopeV1 exchange boundary, but no configured cloud authority transport, pairing flow or remote verification."
       },
       "requirementsMet": false,
       "priority": "P1"

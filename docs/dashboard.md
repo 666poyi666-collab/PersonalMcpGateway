@@ -74,11 +74,11 @@ The mutation binds product, entity, revision, and operation into AES-GCM AAD. It
 diagnostics, token, cookie, OAuth credential, media URL, media cache, journal text, or health data.
 
 The bundle intentionally does not post to the network or contain a sync credential. It exposes a
-local `prepareExchange`/`applyExchange` boundary for a future paired device client, and it preserves
-outbox data until an acknowledged response and materialized cursor succeed together. Until a
-separate encrypted cloud authority, device enrollment, recovery flow, staging proof, and PC-off
-acceptance exist, this is local encrypted durability only: the project platform manifest remains
-`sync.status: missing` and `supportsPcOff: false`.
+local `prepareExchange`/`applyExchange` boundary for a paired device client, and it preserves outbox
+data until an acknowledged response and materialized cursor succeed together. This is a real local
+SyncEnvelopeV1 implementation, so the project platform manifest is `sync.status: partial`. No cloud
+authority transport, pairing flow, recovery flow, remote verification, or PC-off acceptance is
+configured; `supportsPcOff` and `supportsBidirectionalDelta` therefore remain `false`.
 
 ## Add a target
 

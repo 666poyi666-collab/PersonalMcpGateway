@@ -588,7 +588,17 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
     }
     assert gateway_manifest["runtimeDiagnostics"] == gateway["runtimeDiagnostics"]
     assert gateway_manifest["mcp"]["cloudBaseUrl"] is None
+    assert gateway_manifest["sync"]["status"] == gateway["sync"]["status"] == "partial"
+    assert gateway_manifest["sync"]["mode"] == gateway["sync"]["mode"]
+    assert gateway["sync"]["mode"] == ("encrypted_dashboard_profile_local_staged_remote_unverified")
     assert gateway_manifest["sync"]["supportsPcOff"] is False
+    assert gateway_manifest["sync"]["supportsBidirectionalDelta"] is False
+    profile_inventory = next(
+        item
+        for item in cast(list[JsonObject], gateway_manifest["dataInventory"])
+        if item["id"] == "dashboard-profile"
+    )
+    assert profile_inventory["coverage"] == "partial"
 
     focus = by_id["focuslink"]
     foxlink_origin = "https://foxlink-mcp.focuslink-poyi-6465e9.workers.dev"
@@ -668,9 +678,15 @@ def test_canonical_registry_gateway_manifest_and_focus_topology() -> None:
         for contract in cast(list[JsonObject], registry["protocolContracts"])
         if contract["id"] == "sync-envelope-v1"
     )
-    assert {"focuslink", "suixinyiting", "do-not-phone"} <= set(
+    assert {"focuslink", "suixinyiting", "do-not-phone", "personal-mcp-gateway"} <= set(
         cast(list[str], sync_contract["projectIds"])
     )
+    gateway_consumer = next(
+        consumer
+        for consumer in cast(list[JsonObject], sync_contract["consumers"])
+        if consumer["id"] == "personal-gateway-dashboard-profile"
+    )
+    assert gateway_consumer["projectIds"] == ["personal-mcp-gateway"]
     mcp_contract = cast(list[JsonObject], registry["mcpContracts"])[0]
     assert mcp_contract["id"] == "focuslink-cloud-mcp-v1"
     assert mcp_contract["requiredScopes"] == ["focuslink:read"]

@@ -392,17 +392,50 @@ function Test-GatewayManifest(
     }
     $profileItem = @($Manifest.dataInventory | Where-Object id -eq 'dashboard-profile')
     if ($profileItem.Count -ne 1 -or $profileItem[0].dataPlane -ne 'cloud_primary' -or
-        $profileItem[0].mcpExposure -ne 'none') {
+        $profileItem[0].mcpExposure -ne 'none' -or
+        $profileItem[0].coverage -ne 'partial') {
         Add-ManifestIssue $IssueList $ProjectId (
-            'dashboard-profile inventory must exist exactly once as cloud_primary with no MCP exposure'
+            'dashboard-profile inventory must be partial cloud_primary with no MCP exposure'
         )
     }
-    if ($Manifest.sync.status -ne 'missing' -or $Manifest.sync.authority -ne 'cloud' -or
+    if ($Manifest.sync.status -ne 'partial' -or $Manifest.sync.authority -ne 'cloud' -or
+        $Manifest.sync.mode -ne 'encrypted_dashboard_profile_local_staged_remote_unverified' -or
+        $Manifest.sync.localImplementationStatus -ne (
+            'browser_encrypted_outbox_exchange_boundary_implemented'
+        ) -or
+        $Manifest.sync.remoteVerificationStatus -ne 'missing' -or
         $Manifest.sync.supportsPcOff -ne $false -or
         $Manifest.sync.supportsBidirectionalDelta -ne $false) {
         Add-ManifestIssue $IssueList $ProjectId (
-            'Gateway dashboard profile sync must remain missing/cloud with both PC-off capabilities false'
+            'Gateway dashboard profile sync must stay local-staged partial/cloud with ' +
+            'remote verification missing and both PC-off capabilities false'
         )
+    }
+    $profileScript = Join-Path $Project.manifestRepositoryPath (
+        'src\personal_mcp_gateway\admin\static\dashboard-profile.js'
+    )
+    if (-not (Test-Path -LiteralPath $profileScript -PathType Leaf)) {
+        Add-ManifestIssue $IssueList $ProjectId 'dashboard profile implementation is missing'
+    } else {
+        $profileSource = Get-Content -LiteralPath $profileScript -Raw -Encoding UTF8
+        foreach ($required in @(
+                'name: "AES-GCM"',
+                'database.transaction(["entities", "outbox", "meta"], "readwrite")',
+                'prepareExchange',
+                'applyExchange',
+                'objectStore("conflicts")'
+            )) {
+            if (-not $profileSource.Contains($required)) {
+                Add-ManifestIssue $IssueList $ProjectId (
+                    "dashboard profile partial implementation is missing: $required"
+                )
+            }
+        }
+        if ($profileSource.Contains('fetch(')) {
+            Add-ManifestIssue $IssueList $ProjectId (
+                'dashboard profile must not claim a configured remote transport'
+            )
+        }
     }
 }
 

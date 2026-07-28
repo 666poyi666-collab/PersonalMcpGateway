@@ -341,10 +341,10 @@ SHA-256 attestations instead.
 3. Make `foxlink-cloud-mcp` the only FocusLink public origin, adapt canonical
    exchange to the internal DO `/v2/sync` authority, and retire legacy snapshot
    writes with `410 Gone`.
-4. Add an encrypted Personal Gateway dashboard-profile entity for layout,
-   density, pinned projects and non-sensitive preferences; keep runtime
-   diagnostics `local_only` and never turn historical heartbeat/audit records
-   into claims of live PC state.
+4. Connect the locally staged encrypted Personal Gateway dashboard-profile
+   entity to a paired cloud authority, then verify recovery and PC-off behavior;
+   keep runtime diagnostics `local_only` and never turn historical
+   heartbeat/audit records into claims of live PC state.
 5. Give SuixinYiTing a minimal encrypted state plane for playback preferences,
    queue references, favorites/progress and configuration while excluding
    NetEase cookies/tokens, media URLs, audio bytes and caches. Let 不做手机控

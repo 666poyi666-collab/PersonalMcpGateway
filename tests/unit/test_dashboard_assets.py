@@ -28,6 +28,7 @@ def test_dashboard_profile_uses_local_encrypted_outbox_without_credentials() -> 
     assert 'database.transaction(["entities", "outbox", "meta"], "readwrite")' in profile
     assert "prepareExchange" in profile
     assert "applyExchange" in profile
+    assert 'transaction.objectStore("conflicts")' in profile
     assert "exportKey" not in profile
     assert "Authorization" not in profile
     assert "fetch(" not in profile

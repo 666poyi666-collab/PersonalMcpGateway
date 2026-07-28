@@ -34,8 +34,8 @@
       "classification": "private",
       "dataPlane": "cloud_primary",
       "mcpExposure": "none",
-      "coverage": "missing",
-      "reason": "The encrypted profile for dashboard layout, tile sizing, pinned projects and preferences is not connected to a cloud SyncEnvelopeV1 authority yet. Runtime diagnostics remain local-only."
+      "coverage": "partial",
+      "reason": "The browser implements an encrypted SyncEnvelopeV1 dashboard-profile entity with an atomic local outbox, cursor, conflicts, and bidirectional exchange boundary for layout, tile sizing, pinned projects and preferences. No cloud authority transport, pairing flow, or remote verification is configured; runtime diagnostics remain local-only."
     }
   ],
   "runtimeDiagnostics": {
@@ -61,7 +61,7 @@
     }
   },
   "sync": {
-    "status": "missing",
+    "status": "partial",
     "dataPlane": "cloud_primary",
     "authority": "cloud",
     "routes": {
@@ -70,11 +70,14 @@
     },
     "contractId": "sync-envelope-v1",
     "envelopeVersion": 1,
+    "mode": "encrypted_dashboard_profile_local_staged_remote_unverified",
+    "localImplementationStatus": "browser_encrypted_outbox_exchange_boundary_implemented",
+    "remoteVerificationStatus": "missing",
     "supportsPcOff": false,
     "supportsBidirectionalDelta": false
   },
   "knownGaps": [
     "Windows shutdown stops the Gateway and no new heartbeat, runtime revision, module health, or fleet state may be generated while it is off.",
-    "The encrypted dashboard profile is not connected to an authority, so this project cannot claim PC-off dashboard-profile synchronization."
+    "The encrypted dashboard profile has a local exchange boundary but no configured cloud authority transport, pairing flow, or remote verification, so this project cannot claim PC-off dashboard-profile synchronization."
   ]
 }
