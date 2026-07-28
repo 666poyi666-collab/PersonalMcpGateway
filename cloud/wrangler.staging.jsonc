@@ -26,7 +26,7 @@
   "migrations": [
     {
       "tag": "authority-checkpoint-v1",
-      "new_classes": ["AuthorityCheckpoint"]
+      "new_sqlite_classes": ["AuthorityCheckpoint"]
     }
   ]
 }
