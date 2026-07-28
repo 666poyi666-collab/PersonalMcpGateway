@@ -226,6 +226,16 @@ class AuthorityTruth(BaseModel):
 
     _last_verified_at_is_aware = field_validator("last_verified_at")(_require_aware)
 
+    @model_validator(mode="after")
+    def require_consistent_truth(self) -> Self:
+        if self.freshness == "fresh" and (self.pending_count or self.blocker_reason is not None):
+            raise ValueError("fresh authority truth cannot have pending work or a blocker")
+        if self.pending_count > 0 and self.freshness != "blocked":
+            raise ValueError("pending authority work requires blocked freshness")
+        if (self.blocker_reason is None) != (self.freshness != "blocked"):
+            raise ValueError("blocked authority truth requires exactly one blocker reason")
+        return self
+
 
 class VerifiedAuthorityStatus(BaseModel):
     """A product-bound truth that already passed pinned-key verification."""
@@ -272,6 +282,8 @@ class AuthorityStatusDocument(BaseModel):
     def require_valid_window(self) -> Self:
         if self.expires_at <= self.issued_at:
             raise ValueError("authority status expiry must follow issuance")
+        if self.truth.last_verified_at > self.issued_at:
+            raise ValueError("authority verification cannot follow document issuance")
         return self
 
 

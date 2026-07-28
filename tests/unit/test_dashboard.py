@@ -83,16 +83,17 @@ def _signed_authority_status(
     blocker_reason: str | None = None,
     pc_off: dict[str, bool] | None = None,
 ) -> bytes:
+    effective_issued_at = issued_at or now
     document = AuthorityStatusDocument.model_validate(
         {
             "schemaVersion": 1,
             "productId": product_id,
-            "issuedAt": (issued_at or now).isoformat(),
+            "issuedAt": effective_issued_at.isoformat(),
             "expiresAt": (expires_at or now + timedelta(minutes=2)).isoformat(),
             "truth": {
                 "revision": revision,
                 "freshness": freshness,
-                "lastVerifiedAt": (last_verified_at or now).isoformat(),
+                "lastVerifiedAt": (last_verified_at or effective_issued_at).isoformat(),
                 "pendingCount": pending_count,
                 "blockerReason": blocker_reason,
                 "pcOff": pc_off
@@ -323,9 +324,7 @@ def test_local_status_cannot_self_declare_product_authority(tmp_path: Path) -> N
 def test_signed_authority_status_is_verified_and_product_bound() -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     payload = _signed_authority_status(private_key, now=now)
 
@@ -356,9 +355,7 @@ def test_signed_authority_status_is_verified_and_product_bound() -> None:
 def test_authority_consumer_matches_independent_producer_wire_contract() -> None:
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     unsigned = {
         "schemaVersion": 1,
         "productId": "journal",
@@ -400,9 +397,7 @@ def test_authority_consumer_matches_independent_producer_wire_contract() -> None
 def test_authority_max_age_boundary_is_expired() -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
 
     assert verify_authority_status(
         _signed_authority_status(
@@ -414,6 +409,51 @@ def test_authority_max_age_boundary_is_expired() -> None:
         _authority_target(public_key),
         now,
     ) == (None, "authority_status_expired")
+
+
+@pytest.mark.parametrize(
+    ("truth_updates"),
+    [
+        {"freshness": "fresh", "pendingCount": 1},
+        {"freshness": "fresh", "blockerReason": "snapshot_incomplete"},
+        {"freshness": "blocked", "blockerReason": None},
+        {"freshness": "stale", "pendingCount": 1},
+    ],
+)
+def test_signed_authority_status_rejects_contradictory_truth(
+    truth_updates: dict[str, object],
+) -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+    payload = json.loads(_signed_authority_status(private_key, now=now))
+    payload["truth"].update(truth_updates)
+    unsigned = {key: value for key, value in payload.items() if key != "signature"}
+    signing_bytes = json.dumps(
+        unsigned, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+    payload["signature"] = _base64url(private_key.sign(signing_bytes))
+
+    assert verify_authority_status(
+        json.dumps(payload).encode(), _authority_target(public_key), now
+    ) == (None, "authority_signature_invalid")
+
+
+def test_signed_authority_status_rejects_verification_after_issuance() -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+    payload = json.loads(_signed_authority_status(private_key, now=now))
+    payload["truth"]["lastVerifiedAt"] = (now + timedelta(seconds=1)).isoformat()
+    unsigned = {key: value for key, value in payload.items() if key != "signature"}
+    signing_bytes = json.dumps(
+        unsigned, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+    payload["signature"] = _base64url(private_key.sign(signing_bytes))
+
+    assert verify_authority_status(
+        json.dumps(payload).encode(), _authority_target(public_key), now
+    ) == (None, "authority_signature_invalid")
 
 
 @pytest.mark.parametrize(
@@ -432,9 +472,7 @@ def test_signed_authority_status_rejects_tampering_of_every_truth_field(
 ) -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     tampered = json.loads(_signed_authority_status(private_key, now=now))
     tampered["truth"][field] = tampered_value
@@ -449,9 +487,7 @@ def test_signed_authority_status_rejects_tampering_of_every_truth_field(
 def test_signed_authority_status_rejects_tampering_of_pc_off_fields(field: str) -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     tampered = json.loads(_signed_authority_status(private_key, now=now))
     tampered["truth"]["pcOff"][field] = False
@@ -465,9 +501,7 @@ def test_signed_authority_status_rejects_tampering_of_pc_off_fields(field: str) 
 def test_signed_authority_status_rejects_revision_rollback() -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
 
     assert verify_authority_status(
         _signed_authority_status(private_key, now=now, revision=11),
@@ -482,9 +516,7 @@ def test_signed_authority_status_rejects_revision_rollback() -> None:
 async def test_monitor_keeps_revision_checkpoint_and_rejects_rollback(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     endpoint = target.authority_status
     assert endpoint is not None
@@ -522,9 +554,7 @@ async def test_monitor_keeps_revision_checkpoint_and_rejects_rollback(tmp_path: 
 async def test_monitor_rejects_conflicting_truth_at_same_revision(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     endpoint = target.authority_status
     assert endpoint is not None
@@ -545,7 +575,9 @@ async def test_monitor_rejects_conflicting_truth_at_same_revision(tmp_path: Path
                 private_key,
                 now=now,
                 revision=12,
+                freshness="blocked",
                 pending_count=1,
+                blocker_reason="snapshot_incomplete",
             ),
         ),
     ]
@@ -608,9 +640,7 @@ async def test_monitor_does_not_reset_product_revision_on_key_rotation(tmp_path:
 
 def test_authority_endpoint_rejects_loopback_and_non_cloud_profiles() -> None:
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     with pytest.raises(ValueError, match="cannot target loopback"):
         DashboardTarget.model_validate(
             {
@@ -697,9 +727,7 @@ def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
 def test_cloud_mcp_summary_uses_verified_truth_not_larger_local_revision() -> None:
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     status, issue = verify_authority_status(
         _signed_authority_status(
@@ -762,9 +790,7 @@ def test_cloud_mcp_summary_rechecks_authority_expiry_at_projection_time() -> Non
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     expires_at = now + timedelta(seconds=1)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     status, issue = verify_authority_status(
         _signed_authority_status(private_key, now=now, expires_at=expires_at),
         _authority_target(public_key),
@@ -774,11 +800,14 @@ def test_cloud_mcp_summary_rechecks_authority_expiry_at_projection_time() -> Non
     assert status is not None
     snapshot: dict[str, Any] = {"targets": [{"id": "journal", "sync": {}}]}
 
-    assert cloud_mcp_summary(
-        snapshot,
-        {"journal": status},
-        now=now,
-    )["products"][0]["freshness"] == "fresh"
+    assert (
+        cloud_mcp_summary(
+            snapshot,
+            {"journal": status},
+            now=now,
+        )["products"][0]["freshness"]
+        == "fresh"
+    )
     expired = cloud_mcp_summary(
         snapshot,
         {"journal": status},
@@ -806,9 +835,7 @@ async def test_monitor_cloud_overview_does_not_call_local_snapshot_dependencies(
 ) -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     target = _authority_target(public_key)
     status, issue = verify_authority_status(
         _signed_authority_status(private_key, now=now),
@@ -967,9 +994,7 @@ def test_cloud_mcp_summary_rejects_forged_or_partial_authority_truth(
 def test_cloud_mcp_summary_allowlist_does_not_leak_private_surfaces() -> None:
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     private_key = Ed25519PrivateKey.generate()
-    public_key = _base64url(
-        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    )
+    public_key = _base64url(private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     status, issue = verify_authority_status(
         _signed_authority_status(private_key, now=now),
         _authority_target(public_key),
