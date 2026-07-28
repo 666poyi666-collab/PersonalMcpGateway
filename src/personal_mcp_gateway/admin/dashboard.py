@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import time
 from collections import deque
-from datetime import UTC, datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Self, cast
 from urllib.parse import urlparse
+from weakref import WeakKeyDictionary
 
 import httpx
 import yaml
@@ -23,9 +26,31 @@ from personal_mcp_gateway.core.runtime import GatewayRuntime
 
 
 class PcOffCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     read_available: bool
     write_available: bool
     continued_sync: bool
+
+    @model_validator(mode="after")
+    def prevent_false_continued_sync(self) -> Self:
+        if self.continued_sync and not (self.read_available and self.write_available):
+            raise ValueError("continued sync requires power-off read and write availability")
+        return self
+
+
+class AuthorityPcOffCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    read_available: bool = Field(alias="readAvailable")
+    write_available: bool = Field(alias="writeAvailable")
+    continued_sync: bool = Field(alias="continuedSync")
+
+    @model_validator(mode="after")
+    def prevent_false_continued_sync(self) -> Self:
+        if self.continued_sync and not (self.read_available and self.write_available):
+            raise ValueError("continued sync requires power-off read and write availability")
+        return self
 
 
 class DashboardSyncProfile(BaseModel):
@@ -68,6 +93,8 @@ SyncBlockerReason = Literal[
     "authority_signature_invalid",
     "authority_status_expired",
     "authority_product_mismatch",
+    "authority_revision_rollback",
+    "authority_checkpoint_unavailable",
     "implementation_incomplete",
     "pc_off_acceptance_pending",
     "pc_runtime_required",
@@ -84,6 +111,8 @@ AuthorityIssue = Literal[
     "authority_signature_invalid",
     "authority_status_expired",
     "authority_product_mismatch",
+    "authority_revision_rollback",
+    "authority_checkpoint_unavailable",
 ]
 
 
@@ -183,6 +212,41 @@ class AuthorityStatusEndpoint(BaseModel):
         return value
 
 
+class AuthorityTruth(BaseModel):
+    """The complete status projection covered by an authority signature."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    revision: int = Field(ge=0)
+    freshness: SyncTruthState
+    last_verified_at: datetime = Field(alias="lastVerifiedAt")
+    pending_count: int = Field(alias="pendingCount", ge=0)
+    blocker_reason: SyncBlockerReason | None = Field(alias="blockerReason")
+    pc_off: AuthorityPcOffCapability = Field(alias="pcOff")
+
+    _last_verified_at_is_aware = field_validator("last_verified_at")(_require_aware)
+
+
+class VerifiedAuthorityStatus(BaseModel):
+    """A product-bound truth that already passed pinned-key verification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    product_id: str
+    public_key_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    truth_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issued_at: datetime
+    valid_until: datetime
+    truth: AuthorityTruth
+
+    _timestamps_are_aware = field_validator("issued_at", "valid_until")(_require_aware)
+
+    def is_current_for(self, product_id: str, now: datetime) -> bool:
+        if now.tzinfo is None:
+            raise ValueError("authority projection clock must include a timezone")
+        return self.product_id == product_id and self.issued_at <= now < self.valid_until
+
+
 class AuthorityStatusDocument(BaseModel):
     """Signed public metadata only; this contract never contains business data."""
 
@@ -192,7 +256,7 @@ class AuthorityStatusDocument(BaseModel):
     product_id: str = Field(alias="productId", pattern=r"^[a-z][a-z0-9_]*$")
     issued_at: datetime = Field(alias="issuedAt")
     expires_at: datetime = Field(alias="expiresAt")
-    observation: CloudSyncObservation
+    truth: AuthorityTruth
     signature: str
 
     _timestamps_are_aware = field_validator("issued_at", "expires_at")(_require_aware)
@@ -205,11 +269,9 @@ class AuthorityStatusDocument(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_authority_observation(self) -> Self:
+    def require_valid_window(self) -> Self:
         if self.expires_at <= self.issued_at:
             raise ValueError("authority status expiry must follow issuance")
-        if self.observation.source != "product-authority":
-            raise ValueError("authority status source must be product-authority")
         return self
 
 
@@ -218,35 +280,60 @@ def _authority_signing_bytes(document: AuthorityStatusDocument) -> bytes:
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
 
 
+def _authority_truth_bytes(truth: AuthorityTruth) -> bytes:
+    payload = truth.model_dump(mode="json", by_alias=True)
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+
+
 def verify_authority_status(
     payload: bytes,
     target: DashboardTarget,
     now: datetime,
-) -> tuple[CloudSyncObservation | None, AuthorityIssue | None]:
+    *,
+    minimum_revision: int | None = None,
+) -> tuple[VerifiedAuthorityStatus | None, AuthorityIssue | None]:
     """Fail closed unless a fresh document validates against the target's pinned key."""
     endpoint = target.authority_status
     if endpoint is None:
         return None, "authority_fetch_failed"
     if now.tzinfo is None:
         raise ValueError("authority verification clock must include a timezone")
+    if minimum_revision is not None and minimum_revision < 0:
+        raise ValueError("minimum authority revision cannot be negative")
     if len(payload) > 64_000:
         return None, "authority_fetch_failed"
     try:
         document = AuthorityStatusDocument.model_validate_json(payload)
     except (ValueError, UnicodeDecodeError):
         return None, "authority_signature_invalid"
+    try:
+        public_key_bytes = _decode_base64url(endpoint.public_key)
+        key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+        key.verify(_decode_base64url(document.signature), _authority_signing_bytes(document))
+    except (InvalidSignature, ValueError):
+        return None, "authority_signature_invalid"
     if document.product_id != target.id:
         return None, "authority_product_mismatch"
     if document.issued_at > now or document.expires_at <= now:
         return None, "authority_status_expired"
-    if (now - document.issued_at).total_seconds() > endpoint.max_age_seconds:
+    if (now - document.issued_at).total_seconds() >= endpoint.max_age_seconds:
         return None, "authority_status_expired"
-    try:
-        key = Ed25519PublicKey.from_public_bytes(_decode_base64url(endpoint.public_key))
-        key.verify(_decode_base64url(document.signature), _authority_signing_bytes(document))
-    except (InvalidSignature, ValueError):
-        return None, "authority_signature_invalid"
-    return document.observation, None
+    if minimum_revision is not None and document.truth.revision < minimum_revision:
+        return None, "authority_revision_rollback"
+    return (
+        VerifiedAuthorityStatus(
+            product_id=document.product_id,
+            public_key_hash=hashlib.sha256(public_key_bytes).hexdigest(),
+            truth_hash=hashlib.sha256(_authority_truth_bytes(document.truth)).hexdigest(),
+            issued_at=document.issued_at,
+            valid_until=min(
+                document.expires_at,
+                document.issued_at + timedelta(seconds=endpoint.max_age_seconds),
+            ),
+            truth=document.truth,
+        ),
+        None,
+    )
 
 
 class DashboardTarget(BaseModel):
@@ -513,6 +600,7 @@ def _sync_truth(
 def _sync_payload(
     profile: DashboardSyncProfile,
     observation: CloudSyncObservation | None,
+    authority_status: VerifiedAuthorityStatus | None,
     now: datetime,
     target_state: str,
     authority_issue: AuthorityIssue | None = None,
@@ -522,23 +610,66 @@ def _sync_payload(
         runtime = {"result": "unknown"}
     else:
         runtime = observation.model_dump(mode="json", by_alias=True, exclude_none=True)
+    authority_truth = authority_status.truth if authority_status is not None else None
+    signed_truth: dict[str, Any] | None = (
+        authority_truth.model_dump(mode="json", by_alias=True) if authority_truth else None
+    )
+    truth: dict[str, Any]
+    if profile.data_plane == "cloud_primary":
+        if authority_truth is not None:
+            assert signed_truth is not None
+            truth = {
+                "state": authority_truth.freshness,
+                "lastVerifiedAt": signed_truth["lastVerifiedAt"],
+                "pendingCount": authority_truth.pending_count,
+                "blockerReason": authority_truth.blocker_reason,
+            }
+        else:
+            truth = {
+                "state": "unknown",
+                "lastVerifiedAt": None,
+                "pendingCount": None,
+                "blockerReason": None,
+            }
+    else:
+        truth = _sync_truth(profile, observation, target_state, now)
     return {
         "compliance": profile.compliance,
         "dataPlane": profile.data_plane,
         "pcOff": {
-            "readAvailable": profile.pc_off.read_available,
-            "writeAvailable": profile.pc_off.write_available,
-            "continuedSync": profile.pc_off.continued_sync,
+            "readAvailable": authority_truth.pc_off.read_available
+            if authority_truth is not None
+            else False,
+            "writeAvailable": authority_truth.pc_off.write_available
+            if authority_truth is not None
+            else False,
+            "continuedSync": authority_truth.pc_off.continued_sync
+            if authority_truth is not None
+            else False,
         },
         "localDependency": profile.local_dependency,
         "staleAfterSeconds": profile.stale_after_seconds,
         "snapshotState": _snapshot_state(profile, observation, now),
-        "truth": _sync_truth(profile, observation, target_state, now, authority_issue),
+        "truth": truth,
+        # Only this channel is allowed to feed the cloud MCP projection.  The
+        # local observation and verifier issue remain dashboard diagnostics.
+        "authorityTruth": signed_truth,
+        "authorityVerification": {
+            "state": "verified"
+            if authority_truth is not None
+            else ("rejected" if authority_issue is not None else "missing"),
+            "issue": authority_issue,
+        },
         "observation": runtime,
     }
 
 
-def cloud_mcp_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+def cloud_mcp_summary(
+    snapshot: dict[str, Any],
+    verified_authorities: Mapping[str, VerifiedAuthorityStatus] | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Return the deliberately small cloud-MCP status contract.
 
     The dashboard snapshot also contains local service probes, widgets,
@@ -549,6 +680,10 @@ def cloud_mcp_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     the MCP surface.
     """
 
+    projection_time = now or datetime.now(UTC)
+    if projection_time.tzinfo is None:
+        raise ValueError("cloud summary clock must include a timezone")
+    authorities = verified_authorities or {}
     products: list[dict[str, Any]] = []
     candidate_targets = snapshot.get("targets")
     targets: list[object] = (
@@ -562,40 +697,45 @@ def cloud_mcp_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         sync = target.get("sync")
         if not isinstance(product_id, str) or not isinstance(sync, dict):
             continue
-        sync_data = cast(dict[str, Any], sync)
-        truth_input = sync_data.get("truth")
-        observation_input = sync_data.get("observation")
-        truth: dict[str, Any] = (
-            cast(dict[str, Any], truth_input) if isinstance(truth_input, dict) else {}
+        candidate_authority = authorities.get(product_id)
+        authority_status = (
+            candidate_authority
+            if isinstance(candidate_authority, VerifiedAuthorityStatus)
+            and candidate_authority.is_current_for(product_id, projection_time)
+            else None
         )
-        observation: dict[str, Any] = (
-            cast(dict[str, Any], observation_input)
-            if isinstance(observation_input, dict)
-            else {}
+        authority_truth = authority_status.truth if authority_status is not None else None
+        authority_payload = (
+            authority_truth.model_dump(mode="json", by_alias=True)
+            if authority_truth is not None
+            else None
         )
-        revision = observation.get("revision")
-        state = truth.get("state")
-        verified_at = truth.get("lastVerifiedAt")
-        pending_count = truth.get("pendingCount")
-        blocker_reason = truth.get("blockerReason")
-        pc_off_input = sync_data.get("pcOff")
-        pc_off = cast(dict[str, Any], pc_off_input) if isinstance(pc_off_input, dict) else {}
         products.append(
             {
                 "productId": product_id,
-                "revision": revision if isinstance(revision, int) and revision >= 0 else None,
-                "freshness": state
-                if state in {"fresh", "stale", "offline", "blocked", "unknown"}
+                "revision": authority_truth.revision if authority_truth is not None else None,
+                "freshness": authority_truth.freshness
+                if authority_truth is not None
                 else "unknown",
-                "lastVerifiedAt": verified_at if isinstance(verified_at, str) else None,
-                "pendingCount": pending_count
-                if isinstance(pending_count, int) and pending_count >= 0
+                "lastVerifiedAt": authority_payload["lastVerifiedAt"]
+                if authority_payload is not None
                 else None,
-                "blockerReason": blocker_reason if isinstance(blocker_reason, str) else None,
+                "pendingCount": authority_truth.pending_count
+                if authority_truth is not None
+                else None,
+                "blockerReason": authority_truth.blocker_reason
+                if authority_truth is not None
+                else None,
                 "pcOff": {
-                    "readAvailable": pc_off.get("readAvailable") is True,
-                    "writeAvailable": pc_off.get("writeAvailable") is True,
-                    "continuedSync": pc_off.get("continuedSync") is True,
+                    "readAvailable": authority_truth.pc_off.read_available
+                    if authority_truth is not None
+                    else False,
+                    "writeAvailable": authority_truth.pc_off.write_available
+                    if authority_truth is not None
+                    else False,
+                    "continuedSync": authority_truth.pc_off.continued_sync
+                    if authority_truth is not None
+                    else False,
                 },
             }
         )
@@ -617,21 +757,51 @@ class DashboardMonitor:
         self._cache_lock = asyncio.Lock()
         self._last_states: dict[str, str] = {}
         self._status_events: deque[dict[str, Any]] = deque(maxlen=40)
+        self._verified_authorities: dict[str, VerifiedAuthorityStatus] = {}
+        self._authority_cache_valid_until: datetime | None = None
+
+    def _cache_is_current(self) -> bool:
+        if self._cache is None or time.monotonic() - self._cached_at >= 3:
+            return False
+        return (
+            self._authority_cache_valid_until is None
+            or datetime.now(UTC) < self._authority_cache_valid_until
+        )
 
     async def snapshot(self, *, force: bool = False) -> dict[str, Any]:
-        if not force and self._cache is not None and time.monotonic() - self._cached_at < 3:
+        if not force and self._cache_is_current():
+            assert self._cache is not None
             return self._cache
         async with self._cache_lock:
-            if not force and self._cache is not None and time.monotonic() - self._cached_at < 3:
+            if not force and self._cache_is_current():
+                assert self._cache is not None
                 return self._cache
             self._cache = await self._build_snapshot()
             self._cached_at = time.monotonic()
             return self._cache
 
     async def cloud_mcp_summary(self) -> dict[str, Any]:
-        """Build the status-only cloud-MCP projection from verified truth."""
+        """Build an authority-only projection without local diagnostic dependencies."""
 
-        return cloud_mcp_summary(await self.snapshot())
+        targets, _config_warning = self.targets()
+        statuses, _issues = await self._fetch_authority_truths(targets)
+        generated_at = datetime.now(UTC)
+        current_authorities = {
+            product_id: status
+            for product_id, status in statuses.items()
+            if status.is_current_for(product_id, generated_at)
+        }
+        authority_snapshot: dict[str, Any] = {
+            "generatedAt": generated_at.isoformat(),
+            "targets": [
+                {"id": target.id, "sync": {}} for target in targets if target.sync is not None
+            ],
+        }
+        return cloud_mcp_summary(
+            authority_snapshot,
+            current_authorities,
+            now=generated_at,
+        )
 
     async def _build_snapshot(self) -> dict[str, Any]:
         probe_started = time.perf_counter()
@@ -651,27 +821,40 @@ class DashboardMonitor:
             asyncio.to_thread(
                 load_cloud_sync_observations, self.runtime.settings.cloud_sync_status_path
             ),
-            self._fetch_authority_observations(targets),
+            self._fetch_authority_truths(targets),
         )
-        authority_observations, authority_issues = authority_sync
-        sync_observations = {**local_sync_observations, **authority_observations}
-        target_states = self._attach_services(
-            targets,
-            probed,
-            service_states,
-            sync_observations=sync_observations,
-            authority_issues=authority_issues,
-        )
+        authority_statuses, authority_issues = authority_sync
         activity, recent, widgets = await asyncio.gather(
             self._activity(), self._recent_invocations(), self.widgets.snapshot()
         )
         errors = await self.runtime.recent_errors(8)
+        generated_at = datetime.now(UTC)
+        current_authorities: dict[str, VerifiedAuthorityStatus] = {}
+        for product_id, status in authority_statuses.items():
+            if status.is_current_for(product_id, generated_at):
+                current_authorities[product_id] = status
+            else:
+                authority_issues[product_id] = "authority_status_expired"
+        self._verified_authorities = current_authorities
+        self._authority_cache_valid_until = min(
+            (status.valid_until for status in current_authorities.values()),
+            default=None,
+        )
+        target_states = self._attach_services(
+            targets,
+            probed,
+            service_states,
+            sync_observations=local_sync_observations,
+            authority_statuses=current_authorities,
+            authority_issues=authority_issues,
+            now=generated_at,
+        )
         calls_24h = sum(int(bucket["calls"]) for bucket in activity)
         failures_24h = sum(int(bucket["failures"]) for bucket in activity)
         states = [str(target["state"]) for target in target_states]
         self._record_state_changes(target_states)
         return {
-            "generatedAt": datetime.now(UTC).isoformat(),
+            "generatedAt": generated_at.isoformat(),
             "refreshIntervalSeconds": 4,
             "probeDurationMs": round((time.perf_counter() - probe_started) * 1000),
             "gateway": {
@@ -714,10 +897,10 @@ class DashboardMonitor:
                 await asyncio.gather(*(self._probe_target(client, target) for target in targets))
             )
 
-    async def _fetch_authority_observations(
+    async def _fetch_authority_truths(
         self,
         targets: list[DashboardTarget],
-    ) -> tuple[dict[str, CloudSyncObservation], dict[str, AuthorityIssue]]:
+    ) -> tuple[dict[str, VerifiedAuthorityStatus], dict[str, AuthorityIssue]]:
         configured = [target for target in targets if target.authority_status is not None]
         if not configured:
             return {}, {}
@@ -727,22 +910,68 @@ class DashboardMonitor:
             trust_env=False,
         ) as client:
             results = await asyncio.gather(
-                *(self._fetch_authority_observation(client, target) for target in configured)
+                *(self._fetch_authority_truth(client, target) for target in configured)
             )
-        observations: dict[str, CloudSyncObservation] = {}
+        statuses: dict[str, VerifiedAuthorityStatus] = {}
         issues: dict[str, AuthorityIssue] = {}
-        for target, observation, issue in results:
-            if observation is not None:
-                observations[target.id] = observation
+        for target, status, issue in results:
+            if status is not None:
+                checkpoint = await self._accept_authority_revision(status)
+                if checkpoint == "accepted":
+                    statuses[target.id] = status
+                elif checkpoint == "rollback":
+                    issues[target.id] = "authority_revision_rollback"
+                else:
+                    issues[target.id] = "authority_checkpoint_unavailable"
             if issue is not None:
                 issues[target.id] = issue
-        return observations, issues
+        return statuses, issues
+
+    async def _accept_authority_revision(
+        self,
+        status: VerifiedAuthorityStatus,
+    ) -> Literal["accepted", "rollback", "unavailable"]:
+        try:
+            checkpoint = await self.runtime.database.fetchone(
+                """
+                INSERT INTO authority_revision_checkpoints(
+                  product_id, public_key_hash, revision, truth_hash
+                ) VALUES (?,?,?,?)
+                ON CONFLICT(product_id) DO UPDATE SET
+                  public_key_hash=excluded.public_key_hash,
+                  revision=excluded.revision,
+                  truth_hash=excluded.truth_hash,
+                  updated_at=CURRENT_TIMESTAMP
+                WHERE excluded.revision > authority_revision_checkpoints.revision
+                   OR (
+                     excluded.revision = authority_revision_checkpoints.revision
+                     AND excluded.truth_hash = authority_revision_checkpoints.truth_hash
+                   )
+                RETURNING revision, truth_hash
+                """,
+                (
+                    status.product_id,
+                    status.public_key_hash,
+                    status.truth.revision,
+                    status.truth_hash,
+                ),
+            )
+        except Exception:
+            return "unavailable"
+        if checkpoint is None:
+            return "rollback"
+        if (
+            checkpoint.get("revision") != status.truth.revision
+            or checkpoint.get("truth_hash") != status.truth_hash
+        ):
+            return "rollback"
+        return "accepted"
 
     @staticmethod
-    async def _fetch_authority_observation(
+    async def _fetch_authority_truth(
         client: httpx.AsyncClient,
         target: DashboardTarget,
-    ) -> tuple[DashboardTarget, CloudSyncObservation | None, AuthorityIssue | None]:
+    ) -> tuple[DashboardTarget, VerifiedAuthorityStatus | None, AuthorityIssue | None]:
         endpoint = target.authority_status
         if endpoint is None:
             return target, None, "authority_fetch_failed"
@@ -766,10 +995,8 @@ class DashboardMonitor:
                     chunks.append(chunk)
         except (httpx.HTTPError, ValueError):
             return target, None, "authority_fetch_failed"
-        observation, issue = verify_authority_status(
-            b"".join(chunks), target, datetime.now(UTC)
-        )
-        return target, observation, issue
+        status, issue = verify_authority_status(b"".join(chunks), target, datetime.now(UTC))
+        return target, status, issue
 
     @staticmethod
     def _attach_services(
@@ -777,12 +1004,22 @@ class DashboardMonitor:
         probed: list[dict[str, Any]],
         service_states: dict[str, str],
         sync_observations: dict[str, CloudSyncObservation] | None = None,
+        authority_statuses: dict[str, VerifiedAuthorityStatus] | None = None,
         authority_issues: dict[str, AuthorityIssue] | None = None,
+        now: datetime | None = None,
     ) -> list[dict[str, Any]]:
         observed = sync_observations or {}
+        signed_statuses = authority_statuses or {}
         issues = authority_issues or {}
-        now = datetime.now(UTC)
+        attached_at = now or datetime.now(UTC)
         for target, payload in zip(targets, probed, strict=True):
+            candidate_status = signed_statuses.get(target.id)
+            authority_status = (
+                candidate_status
+                if candidate_status is not None
+                and candidate_status.is_current_for(target.id, attached_at)
+                else None
+            )
             if target.mcp_service and isinstance(payload.get("mcp"), dict):
                 payload["mcp"]["service"] = {
                     "name": target.mcp_service,
@@ -797,7 +1034,8 @@ class DashboardMonitor:
                 _sync_payload(
                     target.sync,
                     observed.get(target.id),
-                    now,
+                    authority_status,
+                    attached_at,
                     str(payload.get("state", "unknown")),
                     issues.get(target.id),
                 )
@@ -956,3 +1194,16 @@ class DashboardMonitor:
             FROM tool_invocations ORDER BY id DESC LIMIT 8
             """
         )
+
+
+_DASHBOARD_MONITORS: WeakKeyDictionary[GatewayRuntime, DashboardMonitor] = WeakKeyDictionary()
+
+
+def get_dashboard_monitor(runtime: GatewayRuntime) -> DashboardMonitor:
+    """Share one truth/cache/checkpoint coordinator across Gateway surfaces."""
+
+    monitor = _DASHBOARD_MONITORS.get(runtime)
+    if monitor is None:
+        monitor = DashboardMonitor(runtime)
+        _DASHBOARD_MONITORS[runtime] = monitor
+    return monitor

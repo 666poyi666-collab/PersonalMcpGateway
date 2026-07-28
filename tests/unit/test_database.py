@@ -11,13 +11,13 @@ async def test_migrations_are_repeatable(tmp_path: Path) -> None:
     await database.migrate()
     await database.migrate()
     rows = await database.fetchall("SELECT version FROM schema_migrations")
-    assert rows == [{"version": 1}]
+    assert rows == [{"version": 1}, {"version": 2}]
     mode = await database.fetchone("PRAGMA journal_mode")
     assert mode == {"journal_mode": "wal"}
     assert await database.readiness() == {
         "state": "ready",
-        "schemaVersion": 1,
-        "expectedSchemaVersion": 1,
+        "schemaVersion": 2,
+        "expectedSchemaVersion": 2,
     }
 
 

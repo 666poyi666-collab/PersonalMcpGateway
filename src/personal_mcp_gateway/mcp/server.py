@@ -4,7 +4,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from personal_mcp_gateway.admin.dashboard import DashboardMonitor
+from personal_mcp_gateway.admin.dashboard import get_dashboard_monitor
 from personal_mcp_gateway.core.errors import GatewayError
 from personal_mcp_gateway.core.result import failure, success
 from personal_mcp_gateway.core.runtime import GatewayRuntime
@@ -13,6 +13,7 @@ from personal_mcp_gateway.mcp.sdk_compat import create_fastmcp
 
 def build_mcp_server(runtime: GatewayRuntime) -> FastMCP:
     mcp = create_fastmcp(runtime)
+    dashboard = get_dashboard_monitor(runtime)
 
     @mcp.tool(description="Get gateway and module health", structured_output=True)
     async def personal_system_status() -> dict[str, Any]:
@@ -29,7 +30,7 @@ def build_mcp_server(runtime: GatewayRuntime) -> FastMCP:
         return success(
             "personal",
             "cloud_sync_overview",
-            await DashboardMonitor(runtime).cloud_mcp_summary(),
+            await dashboard.cloud_mcp_summary(),
         )
 
     @mcp.tool(description="List installed adapter modules", structured_output=True)

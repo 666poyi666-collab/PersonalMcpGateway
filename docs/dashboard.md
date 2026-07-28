@@ -25,31 +25,36 @@ down.
 | `snapshot_mirror` | The cloud can serve the last successful snapshots. It must not be labelled continued synchronization. | Watch, FocusLink |
 | `local_only` | The data/runtime disappears when this PC is off. | Personal Gateway diagnostics |
 
-`pcOff.readAvailable`, `writeAvailable`, and `continuedSync` are independent booleans.
-`localDependency` is `uplink` when Windows is still needed to send local changes, `runtime` when
-the whole capability needs Windows, and `none` only after a non-PC data path is verified.
+`pcOff.readAvailable`, `writeAvailable`, and `continuedSync` are independent booleans, but the
+dashboard and cloud MCP expose them as `true` only when the same signed authority truth supplies
+them. A local target profile cannot promote any of these claims. `localDependency` is `uplink` when
+Windows is still needed to send local changes, `runtime` when the whole capability needs Windows,
+and `none` only after a non-PC data path is verified.
 
 The watchdog writes `cloud-sync-status.json` into the Gateway data directory. It is explicitly a
-PC-side mirror: the API exposes its sanitized values under `sync.observation`: `lastAttemptAt`, `lastSuccessfulPushAt`,
-`lastCompletePushAt`, pushed/skipped counts, and per-tool timestamps. `snapshotState` is derived
-conservatively as `fresh`, `stale`, `incomplete`, `never_synced`, or `unknown`. These fields report
-the local sync agent's last observed push; they are not a live Cloudflare health probe.
+PC-side mirror: the API exposes its sanitized values under `sync.observation`: `lastAttemptAt`,
+`lastSuccessfulPushAt`, `lastCompletePushAt`, pushed/skipped counts, and per-tool timestamps.
+`snapshotState` is derived conservatively as `fresh`, `stale`, `incomplete`, `never_synced`, or
+`unknown`. These fields report the local sync agent's last observed push; they are not a live
+Cloudflare health probe and can never feed the cloud MCP authority projection.
 
 The visible sync badge has a stricter five-state contract: `fresh`, `stale`, `offline`, `blocked`,
 or `unknown`. It always shows the last authority verification time, pending count, and a blocker
 when one exists. A `cloud_primary` product becomes `fresh` only when the Gateway fetches a status
 document from its configured HTTPS authority and validates an Ed25519 signature against the target's
 pinned public key. A PC-side mirror, a healthy local MCP process, or an unsigned local JSON file
-never upgrades that state. Expired, malformed, mismatched, or invalidly signed records are visibly
-stale, blocked, or unknown rather than treated as a live fact. Local MCP/tunnel availability remains
-a separate card signal, so a Windows process failure cannot erase a verified remote fact or pretend
-to be one.
+never upgrades that state. Expired, malformed, mismatched, invalidly signed, or revision-rollback
+records fail closed to `unknown`; none of their status fields are copied. Local MCP/tunnel
+availability remains a separate card signal, so a Windows process failure cannot erase a verified
+remote fact or pretend to be one.
 
 The signed authority document contains only status metadata: `schemaVersion`, `productId`,
-`issuedAt`, `expiresAt`, a `product-authority` observation, and an unpadded base64url Ed25519
-signature. Its signature covers the canonical JSON representation of every field except `signature`.
-It must never include sync credentials, encrypted content, device identifiers, journal text, health
-data, cookies, or diagnostics payloads.
+`issuedAt`, `expiresAt`, one atomic `truth` object, and an unpadded base64url Ed25519 signature. The
+`truth` object contains exactly `revision`, `freshness`, `lastVerifiedAt`, `pendingCount`,
+`blockerReason`, and the three booleans nested under `pcOff`; the complete truth is accepted or
+rejected together. The signature covers the canonical JSON representation of every field except
+`signature`. It must never include sync credentials, encrypted content, device identifiers, journal
+text, health data, cookies, or diagnostics payloads.
 
 The page opens in the light theme by default; the topbar toggle switches to dark and the choice
 persists in the browser. Below the built-in panels sits the extensible widget area (扩展面板) —

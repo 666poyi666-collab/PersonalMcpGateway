@@ -34,9 +34,9 @@ network except the outbound Secure MCP Tunnel.
 The optional Cloudflare layer keeps approved cloud data or the last successful snapshot readable
 while this PC is off. FocusLink now has a versioned cloud MCP contract for a minimal
 server-readable task/session projection, but the canonical Worker contract copy, staging OAuth,
-deployment, and real-device PC-off evidence are still pending. It must return `stale` or `unknown`
-with `lastVerifiedAt` when the authority cannot be verified, never a false live state. Device sync
-credentials and MCP OAuth credentials remain separate.
+deployment, and real-device PC-off evidence are still pending. When authority verification fails,
+the cloud overview returns `unknown` with no copied revision or status fields, never a false live
+state. Device sync credentials and MCP OAuth credentials remain separate.
 
 ## Development
 

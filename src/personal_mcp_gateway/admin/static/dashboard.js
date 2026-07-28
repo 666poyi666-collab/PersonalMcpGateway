@@ -58,6 +58,8 @@
       authority_signature_invalid: "权威状态签名无效",
       authority_status_expired: "权威状态已过期",
       authority_product_mismatch: "权威状态项目不匹配",
+      authority_revision_rollback: "权威状态版本回退",
+      authority_checkpoint_unavailable: "权威版本检查点不可用",
       implementation_incomplete: "实现尚未完成",
       pc_off_acceptance_pending: "PC-off 验收未通过",
       pc_runtime_required: "需要本机运行",

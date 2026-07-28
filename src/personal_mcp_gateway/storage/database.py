@@ -48,7 +48,17 @@ MIGRATIONS = [
       verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(module_id, device_id)
     );
+    """,
     """
+    CREATE TABLE IF NOT EXISTS authority_revision_checkpoints (
+      product_id TEXT NOT NULL,
+      public_key_hash TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision >= 0),
+      truth_hash TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(product_id)
+    );
+    """,
 ]
 
 

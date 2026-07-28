@@ -2,12 +2,16 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
+import respx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from personal_mcp_gateway.admin.dashboard import (
+    AuthorityIssue,
     AuthorityStatusDocument,
     AuthorityStatusEndpoint,
     CloudSyncObservation,
@@ -72,6 +76,12 @@ def _signed_authority_status(
     product_id: str = "journal",
     issued_at: datetime | None = None,
     expires_at: datetime | None = None,
+    revision: int = 12,
+    freshness: str = "fresh",
+    last_verified_at: datetime | None = None,
+    pending_count: int = 0,
+    blocker_reason: str | None = None,
+    pc_off: dict[str, bool] | None = None,
 ) -> bytes:
     document = AuthorityStatusDocument.model_validate(
         {
@@ -79,12 +89,18 @@ def _signed_authority_status(
             "productId": product_id,
             "issuedAt": (issued_at or now).isoformat(),
             "expiresAt": (expires_at or now + timedelta(minutes=2)).isoformat(),
-            "observation": {
-                "result": "success",
-                "source": "product-authority",
-                "lastAttemptAt": now.isoformat(),
-                "lastVerifiedAt": now.isoformat(),
-                "pendingCount": 0,
+            "truth": {
+                "revision": revision,
+                "freshness": freshness,
+                "lastVerifiedAt": (last_verified_at or now).isoformat(),
+                "pendingCount": pending_count,
+                "blockerReason": blocker_reason,
+                "pcOff": pc_off
+                or {
+                    "readAvailable": True,
+                    "writeAvailable": True,
+                    "continuedSync": True,
+                },
             },
             "signature": _base64url(bytes(64)),
         }
@@ -268,7 +284,7 @@ def test_sync_status_is_sanitized_and_attached_with_conservative_freshness(
 
     assert payload["sync"]["dataPlane"] == "snapshot_mirror"
     assert payload["sync"]["pcOff"] == {
-        "readAvailable": True,
+        "readAvailable": False,
         "writeAvailable": False,
         "continuedSync": False,
     }
@@ -304,7 +320,7 @@ def test_local_status_cannot_self_declare_product_authority(tmp_path: Path) -> N
     assert load_cloud_sync_observations(path) == {}
 
 
-def test_signed_authority_status_rejects_tampering_expiry_and_product_mismatch() -> None:
+def test_signed_authority_status_is_verified_and_product_bound() -> None:
     now = datetime.now(UTC)
     private_key = Ed25519PrivateKey.generate()
     public_key = _base64url(
@@ -313,18 +329,14 @@ def test_signed_authority_status_rejects_tampering_expiry_and_product_mismatch()
     target = _authority_target(public_key)
     payload = _signed_authority_status(private_key, now=now)
 
-    observation, issue = verify_authority_status(payload, target, now)
+    status, issue = verify_authority_status(payload, target, now)
     assert issue is None
-    assert observation is not None
-    assert observation.source == "product-authority"
-    assert observation.pending_count == 0
-
-    tampered = json.loads(payload)
-    tampered["observation"]["pendingCount"] = 1
-    assert verify_authority_status(json.dumps(tampered).encode(), target, now) == (
-        None,
-        "authority_signature_invalid",
-    )
+    assert status is not None
+    assert status.product_id == "journal"
+    assert status.truth.revision == 12
+    assert status.truth.freshness == "fresh"
+    assert status.truth.pending_count == 0
+    assert status.truth.pc_off.continued_sync is True
 
     expired = _signed_authority_status(
         private_key,
@@ -339,6 +351,259 @@ def test_signed_authority_status_rejects_tampering_expiry_and_product_mismatch()
         None,
         "authority_product_mismatch",
     )
+
+
+def test_authority_consumer_matches_independent_producer_wire_contract() -> None:
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    unsigned = {
+        "schemaVersion": 1,
+        "productId": "journal",
+        "issuedAt": "2026-07-28T12:00:00Z",
+        "expiresAt": "2026-07-28T12:02:00Z",
+        "truth": {
+            "revision": 12,
+            "freshness": "fresh",
+            "lastVerifiedAt": "2026-07-28T11:59:00Z",
+            "pendingCount": 0,
+            "blockerReason": None,
+            "pcOff": {
+                "readAvailable": True,
+                "writeAvailable": True,
+                "continuedSync": True,
+            },
+        },
+    }
+    producer_bytes = json.dumps(
+        unsigned,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    payload = {
+        **unsigned,
+        "signature": _base64url(private_key.sign(producer_bytes)),
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode()
+    parsed = AuthorityStatusDocument.model_validate_json(encoded)
+
+    assert _authority_signing_bytes(parsed) == producer_bytes
+    status, issue = verify_authority_status(encoded, _authority_target(public_key), now)
+    assert issue is None
+    assert status is not None
+    assert status.truth.model_dump(mode="json", by_alias=True) == unsigned["truth"]
+
+
+def test_authority_max_age_boundary_is_expired() -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+
+    assert verify_authority_status(
+        _signed_authority_status(
+            private_key,
+            now=now,
+            issued_at=now - timedelta(seconds=300),
+            expires_at=now + timedelta(seconds=1),
+        ),
+        _authority_target(public_key),
+        now,
+    ) == (None, "authority_status_expired")
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value"),
+    [
+        ("revision", 13),
+        ("lastVerifiedAt", "2026-07-28T00:00:00+00:00"),
+        ("freshness", "stale"),
+        ("pendingCount", 1),
+        ("blockerReason", "snapshot_incomplete"),
+    ],
+)
+def test_signed_authority_status_rejects_tampering_of_every_truth_field(
+    field: str,
+    tampered_value: object,
+) -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    tampered = json.loads(_signed_authority_status(private_key, now=now))
+    tampered["truth"][field] = tampered_value
+
+    assert verify_authority_status(json.dumps(tampered).encode(), target, now) == (
+        None,
+        "authority_signature_invalid",
+    )
+
+
+@pytest.mark.parametrize("field", ["readAvailable", "writeAvailable", "continuedSync"])
+def test_signed_authority_status_rejects_tampering_of_pc_off_fields(field: str) -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    tampered = json.loads(_signed_authority_status(private_key, now=now))
+    tampered["truth"]["pcOff"][field] = False
+
+    assert verify_authority_status(json.dumps(tampered).encode(), target, now) == (
+        None,
+        "authority_signature_invalid",
+    )
+
+
+def test_signed_authority_status_rejects_revision_rollback() -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+
+    assert verify_authority_status(
+        _signed_authority_status(private_key, now=now, revision=11),
+        _authority_target(public_key),
+        now,
+        minimum_revision=12,
+    ) == (None, "authority_revision_rollback")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_monitor_keeps_revision_checkpoint_and_rejects_rollback(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    endpoint = target.authority_status
+    assert endpoint is not None
+    route = respx.get(endpoint.url)
+    route.side_effect = [
+        httpx.Response(
+            200,
+            content=_signed_authority_status(private_key, now=now, revision=12),
+        ),
+        httpx.Response(
+            200,
+            content=_signed_authority_status(private_key, now=now, revision=11),
+        ),
+    ]
+    monitor = build_monitor(tmp_path)
+    await monitor.runtime.database.migrate()
+
+    statuses, issues = await monitor._fetch_authority_truths(  # pyright: ignore[reportPrivateUsage]
+        [target]
+    )
+    assert statuses["journal"].truth.revision == 12
+    assert issues == {}
+
+    restarted_monitor = build_monitor(tmp_path)
+    await restarted_monitor.runtime.database.migrate()
+    statuses, issues = await restarted_monitor._fetch_authority_truths(  # pyright: ignore[reportPrivateUsage]
+        [target]
+    )
+    assert statuses == {}
+    assert issues == {"journal": "authority_revision_rollback"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_monitor_rejects_conflicting_truth_at_same_revision(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    endpoint = target.authority_status
+    assert endpoint is not None
+    route = respx.get(endpoint.url)
+    route.side_effect = [
+        httpx.Response(
+            200,
+            content=_signed_authority_status(
+                private_key,
+                now=now,
+                revision=12,
+                pending_count=0,
+            ),
+        ),
+        httpx.Response(
+            200,
+            content=_signed_authority_status(
+                private_key,
+                now=now,
+                revision=12,
+                pending_count=1,
+            ),
+        ),
+    ]
+    monitor = build_monitor(tmp_path)
+    await monitor.runtime.database.migrate()
+
+    statuses, issues = await monitor._fetch_authority_truths(  # pyright: ignore[reportPrivateUsage]
+        [target]
+    )
+    assert statuses["journal"].truth.pending_count == 0
+    assert issues == {}
+
+    statuses, issues = await monitor._fetch_authority_truths(  # pyright: ignore[reportPrivateUsage]
+        [target]
+    )
+    assert statuses == {}
+    assert issues == {"journal": "authority_revision_rollback"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_monitor_does_not_reset_product_revision_on_key_rotation(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    first_key = Ed25519PrivateKey.generate()
+    rotated_key = Ed25519PrivateKey.generate()
+    first_target = _authority_target(
+        _base64url(first_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+    )
+    rotated_target = _authority_target(
+        _base64url(rotated_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+    )
+    endpoint = first_target.authority_status
+    assert endpoint is not None
+    route = respx.get(endpoint.url)
+    route.side_effect = [
+        httpx.Response(
+            200,
+            content=_signed_authority_status(first_key, now=now, revision=12),
+        ),
+        httpx.Response(
+            200,
+            content=_signed_authority_status(rotated_key, now=now, revision=11),
+        ),
+    ]
+    monitor = build_monitor(tmp_path)
+    await monitor.runtime.database.migrate()
+
+    statuses, issues = await monitor._fetch_authority_truths(  # pyright: ignore[reportPrivateUsage]
+        [first_target]
+    )
+    assert statuses["journal"].truth.revision == 12
+    assert issues == {}
+
+    statuses, issues = await monitor._fetch_authority_truths(  # pyright: ignore[reportPrivateUsage]
+        [rotated_target]
+    )
+    assert statuses == {}
+    assert issues == {"journal": "authority_revision_rollback"}
 
 
 def test_authority_endpoint_rejects_loopback_and_non_cloud_profiles() -> None:
@@ -429,7 +694,289 @@ def test_sync_truth_uses_only_authority_observations_for_freshness() -> None:
     }
 
 
-def test_cloud_mcp_summary_is_an_allowlist_not_a_dashboard_passthrough() -> None:
+def test_cloud_mcp_summary_uses_verified_truth_not_larger_local_revision() -> None:
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    status, issue = verify_authority_status(
+        _signed_authority_status(
+            private_key,
+            now=now,
+            revision=12,
+            freshness="blocked",
+            pending_count=2,
+            blocker_reason="snapshot_incomplete",
+        ),
+        target,
+        now,
+    )
+    assert issue is None
+    assert status is not None
+    local_observation = CloudSyncObservation(
+        result="success",
+        source="pc-sync",
+        lastAttemptAt=now,
+        lastVerifiedAt=now + timedelta(days=1),
+        pendingCount=0,
+        revision=999_999,
+    )
+    targets = DashboardMonitor._attach_services(  # pyright: ignore[reportPrivateUsage]
+        [target],
+        [{"id": "journal", "state": "offline"}],
+        {},
+        sync_observations={"journal": local_observation},
+        authority_statuses={"journal": status},
+        now=now,
+    )
+
+    payload = cloud_mcp_summary(
+        {"generatedAt": "2026-07-28T12:00:00+00:00", "targets": targets},
+        {"journal": status},
+        now=now,
+    )
+    assert payload == {
+        "schemaVersion": 1,
+        "generatedAt": "2026-07-28T12:00:00+00:00",
+        "products": [
+            {
+                "productId": "journal",
+                "revision": 12,
+                "freshness": "blocked",
+                "lastVerifiedAt": "2026-07-28T12:00:00Z",
+                "pendingCount": 2,
+                "blockerReason": "snapshot_incomplete",
+                "pcOff": {
+                    "readAvailable": True,
+                    "writeAvailable": True,
+                    "continuedSync": True,
+                },
+            }
+        ],
+    }
+
+
+def test_cloud_mcp_summary_rechecks_authority_expiry_at_projection_time() -> None:
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    expires_at = now + timedelta(seconds=1)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    status, issue = verify_authority_status(
+        _signed_authority_status(private_key, now=now, expires_at=expires_at),
+        _authority_target(public_key),
+        now,
+    )
+    assert issue is None
+    assert status is not None
+    snapshot: dict[str, Any] = {"targets": [{"id": "journal", "sync": {}}]}
+
+    assert cloud_mcp_summary(
+        snapshot,
+        {"journal": status},
+        now=now,
+    )["products"][0]["freshness"] == "fresh"
+    expired = cloud_mcp_summary(
+        snapshot,
+        {"journal": status},
+        now=expires_at,
+    )["products"][0]
+    assert expired == {
+        "productId": "journal",
+        "revision": None,
+        "freshness": "unknown",
+        "lastVerifiedAt": None,
+        "pendingCount": None,
+        "blockerReason": None,
+        "pcOff": {
+            "readAvailable": False,
+            "writeAvailable": False,
+            "continuedSync": False,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_monitor_cloud_overview_does_not_call_local_snapshot_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    target = _authority_target(public_key)
+    status, issue = verify_authority_status(
+        _signed_authority_status(private_key, now=now),
+        target,
+        now,
+    )
+    assert issue is None
+    assert status is not None
+    monitor = build_monitor(tmp_path)
+
+    async def local_snapshot_must_not_run(*, force: bool = False) -> dict[str, Any]:
+        del force
+        raise AssertionError("local diagnostic snapshot was called")
+
+    async def verified_authority_only(
+        targets: list[DashboardTarget],
+    ) -> tuple[dict[str, object], dict[str, AuthorityIssue]]:
+        assert targets == [target]
+        return {"journal": status}, {}
+
+    monkeypatch.setattr(monitor, "snapshot", local_snapshot_must_not_run)
+    monkeypatch.setattr(monitor, "targets", lambda: ([target], None))
+    monkeypatch.setattr(monitor, "_fetch_authority_truths", verified_authority_only)
+
+    product = (await monitor.cloud_mcp_summary())["products"][0]
+    assert product["revision"] == 12
+    assert product["freshness"] == "fresh"
+
+
+def test_cloud_mcp_summary_without_authority_is_entirely_unknown() -> None:
+    payload = cloud_mcp_summary(
+        {
+            "generatedAt": "2026-07-28T12:00:00+00:00",
+            "targets": [
+                {
+                    "id": "journal",
+                    "sync": {
+                        "pcOff": {},
+                        "truth": {
+                            "state": "fresh",
+                            "lastVerifiedAt": "2099-01-01T00:00:00+00:00",
+                            "pendingCount": 0,
+                            "blockerReason": None,
+                        },
+                        "observation": {"revision": 999_999},
+                    },
+                }
+            ],
+        }
+    )
+
+    assert payload["products"][0] == {
+        "productId": "journal",
+        "revision": None,
+        "freshness": "unknown",
+        "lastVerifiedAt": None,
+        "pendingCount": None,
+        "blockerReason": None,
+        "pcOff": {
+            "readAvailable": False,
+            "writeAvailable": False,
+            "continuedSync": False,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "issue",
+    [
+        "authority_fetch_failed",
+        "authority_signature_invalid",
+        "authority_status_expired",
+        "authority_product_mismatch",
+        "authority_revision_rollback",
+        "authority_checkpoint_unavailable",
+    ],
+)
+def test_cloud_mcp_summary_fails_closed_for_every_authority_issue(
+    issue: AuthorityIssue,
+) -> None:
+    now = datetime.now(UTC)
+    target = _authority_target(_base64url(bytes(32)))
+    local_observation = CloudSyncObservation(
+        result="success",
+        source="pc-sync",
+        lastAttemptAt=now,
+        lastVerifiedAt=now,
+        pendingCount=0,
+        revision=999_999,
+    )
+    targets = DashboardMonitor._attach_services(  # pyright: ignore[reportPrivateUsage]
+        [target],
+        [{"id": "journal", "state": "online"}],
+        {},
+        sync_observations={"journal": local_observation},
+        authority_issues={"journal": issue},
+        now=now,
+    )
+
+    product = cloud_mcp_summary({"targets": targets})["products"][0]
+    assert product["revision"] is None
+    assert product["freshness"] == "unknown"
+    assert product["lastVerifiedAt"] is None
+    assert product["pendingCount"] is None
+    assert product["blockerReason"] is None
+    assert product["pcOff"] == {
+        "readAvailable": False,
+        "writeAvailable": False,
+        "continuedSync": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["revision", "freshness", "lastVerifiedAt", "pendingCount", "blockerReason", "pcOff"],
+)
+def test_cloud_mcp_summary_rejects_forged_or_partial_authority_truth(
+    missing_field: str,
+) -> None:
+    authority_truth: dict[str, object] = {
+        "revision": 12,
+        "freshness": "fresh",
+        "lastVerifiedAt": "2026-07-28T11:59:00+00:00",
+        "pendingCount": 0,
+        "blockerReason": None,
+        "pcOff": {
+            "readAvailable": True,
+            "writeAvailable": True,
+            "continuedSync": True,
+        },
+    }
+    authority_truth.pop(missing_field)
+
+    product = cloud_mcp_summary(
+        {
+            "targets": [
+                {
+                    "id": "journal",
+                    "sync": {"pcOff": {}, "authorityTruth": authority_truth},
+                }
+            ]
+        }
+    )["products"][0]
+    assert product["revision"] is None
+    assert product["freshness"] == "unknown"
+    assert product["lastVerifiedAt"] is None
+    assert product["pendingCount"] is None
+    assert product["blockerReason"] is None
+    assert product["pcOff"] == {
+        "readAvailable": False,
+        "writeAvailable": False,
+        "continuedSync": False,
+    }
+
+
+def test_cloud_mcp_summary_allowlist_does_not_leak_private_surfaces() -> None:
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    private_key = Ed25519PrivateKey.generate()
+    public_key = _base64url(
+        private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    )
+    status, issue = verify_authority_status(
+        _signed_authority_status(private_key, now=now),
+        _authority_target(public_key),
+        now,
+    )
+    assert issue is None
+    assert status is not None
     payload = cloud_mcp_summary(
         {
             "generatedAt": "2026-07-28T12:00:00+00:00",
@@ -438,47 +985,50 @@ def test_cloud_mcp_summary_is_an_allowlist_not_a_dashboard_passthrough() -> None
                     "id": "journal",
                     "name": "private name must not escape",
                     "sync": {
-                        "pcOff": {
-                            "readAvailable": True,
-                            "writeAvailable": True,
-                            "continuedSync": False,
-                        },
-                        "truth": {
-                            "state": "fresh",
+                        "pcOff": {},
+                        "authorityTruth": {
+                            "revision": 12,
+                            "freshness": "fresh",
                             "lastVerifiedAt": "2026-07-28T11:59:00+00:00",
-                            "pendingCount": 2,
+                            "pendingCount": 0,
                             "blockerReason": None,
+                            "pcOff": {
+                                "readAvailable": True,
+                                "writeAvailable": True,
+                                "continuedSync": True,
+                            },
                         },
                         "observation": {
-                            "revision": 12,
-                            "ciphertext": "must-not-escape",
-                            "token": "must-not-escape",
-                            "body": "must-not-escape",
+                            "token": "token-secret-value",
+                            "body": "body-secret-value",
+                            "ciphertext": "ciphertext-secret-value",
                         },
                     },
                 }
             ],
-            "widgets": [{"content": "must-not-escape"}],
-            "errors": [{"token": "must-not-escape"}],
-        }
+            "widgets": [{"content": "widget-secret-value"}],
+            "errors": [{"message": "error-secret-value"}],
+        },
+        {"journal": status},
+        now=now,
     )
 
-    assert payload == {
-        "schemaVersion": 1,
-        "generatedAt": "2026-07-28T12:00:00+00:00",
-        "products": [
-            {
-                "productId": "journal",
-                "revision": 12,
-                "freshness": "fresh",
-                "lastVerifiedAt": "2026-07-28T11:59:00+00:00",
-                "pendingCount": 2,
-                "blockerReason": None,
-                "pcOff": {
-                    "readAvailable": True,
-                    "writeAvailable": True,
-                    "continuedSync": False,
-                },
-            }
-        ],
+    encoded = json.dumps(payload, sort_keys=True)
+    assert payload["products"][0]["freshness"] == "fresh"
+    assert payload["products"][0]["pcOff"] == {
+        "readAvailable": True,
+        "writeAvailable": True,
+        "continuedSync": True,
     }
+    for forbidden in (
+        "token-secret-value",
+        "body-secret-value",
+        "ciphertext-secret-value",
+        "widget-secret-value",
+        "error-secret-value",
+        "widgets",
+        "errors",
+    ):
+        assert forbidden not in encoded
+    for forbidden_key in ("token", "body", "ciphertext", "widgets", "errors"):
+        assert f'"{forbidden_key}"' not in encoded

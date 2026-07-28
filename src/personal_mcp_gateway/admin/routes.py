@@ -17,7 +17,7 @@ from starlette.responses import (
 )
 from starlette.routing import Route
 
-from personal_mcp_gateway.admin.dashboard import DashboardMonitor
+from personal_mcp_gateway.admin.dashboard import get_dashboard_monitor
 from personal_mcp_gateway.admin.support_bundle import create_support_bundle
 from personal_mcp_gateway.core.errors import GatewayError
 from personal_mcp_gateway.core.runtime import GatewayRuntime
@@ -40,7 +40,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 def build_admin_app(runtime: GatewayRuntime) -> Starlette:
-    dashboard = DashboardMonitor(runtime)
+    dashboard = get_dashboard_monitor(runtime)
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"gateway": "alive", "version": runtime.settings.version})

@@ -27,8 +27,8 @@ async def test_ready_does_not_require_modules(tmp_path: Path) -> None:
             "dependencies": {
                 "database": {
                     "state": "ready",
-                    "schemaVersion": 1,
-                    "expectedSchemaVersion": 1,
+                    "schemaVersion": 2,
+                    "expectedSchemaVersion": 2,
                 }
             },
             "modules": {},
