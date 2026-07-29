@@ -69,7 +69,8 @@ interface SignerCheckpointV1 {
 }
 
 type ObservationSourceIssue =
-  | "not_configured"
+  | "binding_missing"
+  | "capability_invalid"
   | "redirect_rejected"
   | "http_rejected"
   | "invalid_response"
@@ -308,8 +309,9 @@ async function fetchObservation(
   now = Date.now(),
 ): Promise<ObservationFetchResult> {
   const source = sourceFor(env, productId);
-  if (!source.fetcher || !validCapability(source.capability)) {
-    return { observation: null, issue: "not_configured", status: null };
+  if (!source.fetcher) return { observation: null, issue: "binding_missing", status: null };
+  if (!validCapability(source.capability)) {
+    return { observation: null, issue: "capability_invalid", status: null };
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
