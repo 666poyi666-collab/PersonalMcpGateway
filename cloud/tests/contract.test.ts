@@ -311,6 +311,23 @@ describe("signed staging authority verification", () => {
         issue: "authority_fetch_failed",
       });
 
+      const unavailableAuthorityService = {
+        async fetch() {
+          return new Response(JSON.stringify({
+            error: "authority_source_unavailable",
+            sourceIssue: "http_rejected",
+            sourceStatus: 503,
+          }), {
+            status: 503,
+            headers: { "content-type": "application/json; charset=utf-8" },
+          });
+        },
+      };
+      expect(await verifyAuthority({ ...env, AUTHORITY_SERVICE: unavailableAuthorityService } as never, config, now)).toMatchObject({
+        verified: null,
+        issue: "authority_source_unavailable",
+      });
+
       body = structuredClone(body);
       body.truth.revision = 8;
       expect(await verifyAuthority({ ...env, AUTHORITY_SERVICE: authorityService } as never, config, now)).toMatchObject({ verified: null, issue: "authority_signature_invalid" });
@@ -436,6 +453,11 @@ describe("signed staging authority verification", () => {
         JOURNAL_AUTHORITY_OBSERVATION_CAPABILITY: undefined,
       } as never);
       expect(missingCapability.status).toBe(503);
+      expect(await missingCapability.json()).toEqual({
+        error: "authority_source_unavailable",
+        sourceIssue: "not_configured",
+        sourceStatus: null,
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

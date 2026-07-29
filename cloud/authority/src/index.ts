@@ -68,6 +68,17 @@ interface SignerCheckpointV1 {
   sourceExpiresAt: string;
 }
 
+type ObservationSourceIssue =
+  | "not_configured"
+  | "redirect_rejected"
+  | "http_rejected"
+  | "invalid_response"
+  | "transport_failed";
+
+type ObservationFetchResult =
+  | { observation: ProductAuthorityObservationV1; issue: null; status: null }
+  | { observation: null; issue: ObservationSourceIssue; status: number | null };
+
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -295,9 +306,11 @@ async function fetchObservation(
   productId: ProductId,
   expectedAudience: string,
   now = Date.now(),
-): Promise<ProductAuthorityObservationV1 | null> {
+): Promise<ObservationFetchResult> {
   const source = sourceFor(env, productId);
-  if (!source.fetcher || !validCapability(source.capability)) return null;
+  if (!source.fetcher || !validCapability(source.capability)) {
+    return { observation: null, issue: "not_configured", status: null };
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
   try {
@@ -314,12 +327,18 @@ async function fetchObservation(
     const response = await source.fetcher.fetch(request);
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
-      return null;
+      return { observation: null, issue: "redirect_rejected", status: response.status };
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { observation: null, issue: "http_rejected", status: response.status };
     }
     const value = await readBoundedResponse(response);
-    return validateObservation(value, productId, expectedAudience, now) ? value : null;
+    return validateObservation(value, productId, expectedAudience, now)
+      ? { observation: value, issue: null, status: null }
+      : { observation: null, issue: "invalid_response", status: response.status };
   } catch {
-    return null;
+    return { observation: null, issue: "transport_failed", status: null };
   } finally {
     clearTimeout(timeout);
   }
@@ -441,8 +460,15 @@ export default {
     if (!match || !isProductId(match[1])) return json({ error: "not_found" }, 404);
     const productId = match[1];
     const expectedAudience = `${url.origin}/authority/${productId}`;
-    const observation = await fetchObservation(env, productId, expectedAudience);
-    if (!observation) return json({ error: "authority_source_unavailable" }, 503);
+    const source = await fetchObservation(env, productId, expectedAudience);
+    if (!source.observation) {
+      return json({
+        error: "authority_source_unavailable",
+        sourceIssue: source.issue,
+        sourceStatus: source.status,
+      }, 503);
+    }
+    const observation = source.observation;
     try {
       const id = env.AUTHORITY_ISSUER.idFromName(`source-v1:${env.ENVIRONMENT}:${productId}`);
       return await env.AUTHORITY_ISSUER.get(id).fetch("https://authority-issuer.internal/sign", {

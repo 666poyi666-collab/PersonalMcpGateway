@@ -11,6 +11,13 @@ type ProductId = (typeof PRODUCTS)[number];
 type AuthorityIssue =
   | "authority_not_configured"
   | "authority_fetch_failed"
+  | "authority_source_not_configured"
+  | "authority_source_unauthorized"
+  | "authority_source_forbidden"
+  | "authority_source_route_missing"
+  | "authority_source_unavailable"
+  | "authority_source_rejected"
+  | "authority_source_contract_invalid"
   | "authority_signature_invalid"
   | "authority_status_expired"
   | "authority_product_mismatch"
@@ -267,6 +274,31 @@ interface BoundedHttpResponse {
   bytes: Uint8Array;
 }
 
+function authoritySourceIssue(response: BoundedHttpResponse): AuthorityIssue {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes));
+  } catch {
+    return "authority_fetch_failed";
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "authority_fetch_failed";
+  const record = value as Record<string, unknown>;
+  if (!hasExactKeys(record, ["error", "sourceIssue", "sourceStatus"]) || record.error !== "authority_source_unavailable") {
+    return "authority_fetch_failed";
+  }
+  if (record.sourceIssue === "not_configured" && record.sourceStatus === null) return "authority_source_not_configured";
+  if (record.sourceIssue === "invalid_response" && record.sourceStatus === 200) return "authority_source_contract_invalid";
+  if (record.sourceIssue === "transport_failed" && record.sourceStatus === null) return "authority_fetch_failed";
+  if ((record.sourceIssue === "http_rejected" || record.sourceIssue === "redirect_rejected") && Number.isInteger(record.sourceStatus)) {
+    if (record.sourceStatus === 401) return "authority_source_unauthorized";
+    if (record.sourceStatus === 403) return "authority_source_forbidden";
+    if (record.sourceStatus === 404) return "authority_source_route_missing";
+    if (record.sourceStatus === 503) return "authority_source_unavailable";
+    return "authority_source_rejected";
+  }
+  return "authority_fetch_failed";
+}
+
 type BoundedJsonResult =
   | { ok: true; value: unknown }
   | { ok: false; tooLarge: boolean };
@@ -399,7 +431,8 @@ export async function verifyAuthority(
     5_000,
     env.AUTHORITY_SERVICE,
   );
-  if (!response?.ok) return { verified: null, issue: "authority_fetch_failed" };
+  if (!response) return { verified: null, issue: "authority_fetch_failed" };
+  if (!response.ok) return { verified: null, issue: authoritySourceIssue(response) };
   if (response.contentType.split(";", 1)[0]?.trim().toLowerCase() !== AUTHORITY_DOCUMENT_MEDIA_TYPE) {
     return { verified: null, issue: "authority_signature_invalid" };
   }
