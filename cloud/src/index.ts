@@ -15,6 +15,8 @@ type AuthorityIssue =
   | "authority_source_capability_missing"
   | "authority_source_capability_not_string"
   | "authority_source_capability_length_invalid"
+  | "authority_source_capability_control_invalid"
+  | "authority_source_capability_unicode_invalid"
   | "authority_source_capability_characters_invalid"
   | "authority_source_unauthorized"
   | "authority_source_forbidden"
@@ -294,6 +296,8 @@ function authoritySourceIssue(response: BoundedHttpResponse): AuthorityIssue {
   if (record.sourceIssue === "capability_missing" && record.sourceStatus === null) return "authority_source_capability_missing";
   if (record.sourceIssue === "capability_not_string" && record.sourceStatus === null) return "authority_source_capability_not_string";
   if (record.sourceIssue === "capability_length_invalid" && record.sourceStatus === null) return "authority_source_capability_length_invalid";
+  if (record.sourceIssue === "capability_control_invalid" && record.sourceStatus === null) return "authority_source_capability_control_invalid";
+  if (record.sourceIssue === "capability_unicode_invalid" && record.sourceStatus === null) return "authority_source_capability_unicode_invalid";
   if (record.sourceIssue === "capability_characters_invalid" && record.sourceStatus === null) return "authority_source_capability_characters_invalid";
   if (record.sourceIssue === "invalid_response" && record.sourceStatus === 200) return "authority_source_contract_invalid";
   if (record.sourceIssue === "transport_failed" && record.sourceStatus === null) return "authority_fetch_failed";

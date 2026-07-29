@@ -73,6 +73,8 @@ type ObservationSourceIssue =
   | "capability_missing"
   | "capability_not_string"
   | "capability_length_invalid"
+  | "capability_control_invalid"
+  | "capability_unicode_invalid"
   | "capability_characters_invalid"
   | "redirect_rejected"
   | "http_rejected"
@@ -266,6 +268,8 @@ function capabilityIssue(value: unknown): ObservationSourceIssue | null {
   if (value === undefined || value === null) return "capability_missing";
   if (typeof value !== "string") return "capability_not_string";
   if (value.length < 32 || value.length > 512) return "capability_length_invalid";
+  if (/[\u0000-\u001f\u007f]/.test(value)) return "capability_control_invalid";
+  if (/[^\u0020-\u007e]/.test(value)) return "capability_unicode_invalid";
   if (!/^[A-Za-z0-9._~-]+$/.test(value)) return "capability_characters_invalid";
   return null;
 }
