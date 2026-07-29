@@ -86,6 +86,49 @@ function Set-GatewayRuntime([string]$ConfigurationPath, [string]$PythonExecutabl
     }
 }
 
+function Assert-ServiceRuntimeReadAccess([string]$Root, [string]$Principal) {
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $principalSid = ([Security.Principal.NTAccount]$Principal).Translate(
+        [Security.Principal.SecurityIdentifier]).Value
+    $requiredRights = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+    $patterns = @(
+        'python\cpython-3.12.*\python.exe',
+        'python\cpython-3.12.*\Lib\site-packages\personal_mcp_gateway\service_bootstrap.py',
+        'python\cpython-3.12.*\Lib\site-packages\uvicorn\main.py',
+        'python\cpython-3.12.*\Lib\site-packages\uvicorn\supervisors\statreload.py',
+        'python\cpython-3.12.*\Lib\site-packages\watchfiles\_rust_notify*.pyd'
+    )
+    foreach ($pattern in $patterns) {
+        $matches = @(Get-ChildItem -Path (Join-Path $Root $pattern) -File `
+                -ErrorAction SilentlyContinue)
+        if ($matches.Count -lt 1) { throw "Runtime ACL verification file missing: $pattern" }
+        foreach ($file in $matches) {
+            $resolved = [IO.Path]::GetFullPath($file.FullName)
+            if (-not $resolved.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Runtime ACL verification escaped install root: $resolved"
+            }
+            $allowed = $false
+            $denied = $false
+            foreach ($rule in (Get-Acl -LiteralPath $resolved).Access) {
+                try {
+                    $ruleSid = $rule.IdentityReference.Translate(
+                        [Security.Principal.SecurityIdentifier]).Value
+                } catch { continue }
+                if ($ruleSid -ne $principalSid) { continue }
+                $rights = $rule.FileSystemRights -band $requiredRights
+                if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny) {
+                    if ($rights -ne 0) { $denied = $true }
+                } elseif ($rights -eq $requiredRights) {
+                    $allowed = $true
+                }
+            }
+            if ($denied -or -not $allowed) {
+                throw "Service runtime read verification failed: $resolved"
+            }
+        }
+    }
+}
+
 function Stop-InstalledListenerProcesses([string]$ResolvedInstallDir) {
     $installPrefix = [IO.Path]::GetFullPath($ResolvedInstallDir).TrimEnd('\') + '\'
     $processIds = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
@@ -261,6 +304,7 @@ $tunnelSid = 'NT SERVICE\OpenAISecureMcpTunnel'
 & icacls $InstallDir /grant:r "$gatewaySid`:(OI)(CI)RX" "$tunnelSid`:(OI)(CI)RX" `
     /T /C | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Failed to grant service read access to the install directory.' }
+Assert-ServiceRuntimeReadAccess $InstallDir $gatewaySid
 $gatewayLogDir = Join-Path $DataDir 'logs'
 $serviceLogDir = Join-Path $DataDir 'service-logs'
 $gatewayServiceLogDir = Join-Path $serviceLogDir 'gateway'

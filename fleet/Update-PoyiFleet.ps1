@@ -45,6 +45,49 @@ function Wait-Endpoint([string]$Uri, [int]$TimeoutSeconds) {
     return $false
 }
 
+function Assert-ServiceRuntimeReadAccess([string]$Root, [string]$Principal) {
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $principalSid = ([Security.Principal.NTAccount]$Principal).Translate(
+        [Security.Principal.SecurityIdentifier]).Value
+    $requiredRights = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+    $patterns = @(
+        'python\cpython-3.12.*\python.exe',
+        'python\cpython-3.12.*\Lib\site-packages\personal_mcp_gateway\service_bootstrap.py',
+        'python\cpython-3.12.*\Lib\site-packages\uvicorn\main.py',
+        'python\cpython-3.12.*\Lib\site-packages\uvicorn\supervisors\statreload.py',
+        'python\cpython-3.12.*\Lib\site-packages\watchfiles\_rust_notify*.pyd'
+    )
+    foreach ($pattern in $patterns) {
+        $matches = @(Get-ChildItem -Path (Join-Path $Root $pattern) -File `
+                -ErrorAction SilentlyContinue)
+        if ($matches.Count -lt 1) { throw "Runtime ACL verification file missing: $pattern" }
+        foreach ($file in $matches) {
+            $resolved = [IO.Path]::GetFullPath($file.FullName)
+            if (-not $resolved.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Runtime ACL verification escaped install root: $resolved"
+            }
+            $allowed = $false
+            $denied = $false
+            foreach ($rule in (Get-Acl -LiteralPath $resolved).Access) {
+                try {
+                    $ruleSid = $rule.IdentityReference.Translate(
+                        [Security.Principal.SecurityIdentifier]).Value
+                } catch { continue }
+                if ($ruleSid -ne $principalSid) { continue }
+                $rights = $rule.FileSystemRights -band $requiredRights
+                if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny) {
+                    if ($rights -ne 0) { $denied = $true }
+                } elseif ($rights -eq $requiredRights) {
+                    $allowed = $true
+                }
+            }
+            if ($denied -or -not $allowed) {
+                throw "Service runtime read verification failed: $resolved"
+            }
+        }
+    }
+}
+
 Assert-Administrator
 New-Item -ItemType Directory -Path $diagDir -Force | Out-Null
 Start-Transcript -Path (Join-Path $diagDir 'fleet-update.log') -Force | Out-Null
@@ -90,8 +133,10 @@ try {
         # pip moves files in from %TEMP%, which strips the service accounts'
         # inherited read ACEs (that exact drift crash-looped the gateway on
         # 2026-07-26). Re-stamp the install tree after every wheel install.
-        & icacls $gatewayInstall /grant 'NT SERVICE\PoyiPersonalMcpGateway:(OI)(CI)RX' `
+        & icacls $gatewayInstall /grant:r 'NT SERVICE\PoyiPersonalMcpGateway:(OI)(CI)RX' `
             'NT SERVICE\OpenAISecureMcpTunnel:(OI)(CI)RX' 'BUILTIN\Users:(OI)(CI)RX' /T /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to re-stamp service runtime ACLs.' }
+        Assert-ServiceRuntimeReadAccess $gatewayInstall 'NT SERVICE\PoyiPersonalMcpGateway'
         Write-Host '  service read ACLs re-stamped on the install tree.'
     } finally {
         Remove-Item -LiteralPath $buildDir -Recurse -Force -ErrorAction SilentlyContinue

@@ -17,6 +17,8 @@ $script:MaintenanceFlag = Join-Path $script:DataDir 'maintenance.flag'
 $script:TriggerDir = Join-Path $script:DataDir 'triggers'
 $script:EventSource = 'PoyiFleetWatchdog'
 $script:LastForcedPass = [DateTime]::MinValue
+$script:RestartStatePath = Join-Path $script:DataDir 'restart-state.json'
+$script:PersistedRestartAttempts = @{}
 
 New-Item -ItemType Directory -Path $script:DataDir, $script:TriggerDir -Force | Out-Null
 
@@ -29,7 +31,7 @@ function Write-Log([string]$Level, [string]$Message) {
         }
         Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8
     } catch { }
-    Write-Output $line
+    Write-Host $line
 }
 
 function Write-FleetEvent([int]$EventId, [string]$Type, [string]$Message) {
@@ -41,7 +43,51 @@ function Write-FleetEvent([int]$EventId, [string]$Type, [string]$Message) {
 
 function Get-Config {
     $configPath = Join-Path $script:BaseDir 'fleet-config.json'
-    Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    if ($config.schemaVersion -ne 1 -or @($config.projects).Count -lt 1) {
+        throw 'Unsupported or empty fleet configuration.'
+    }
+    $ids = @{}
+    $programDataRoot = [IO.Path]::GetFullPath("$env:ProgramData\Poyi").TrimEnd('\') + '\'
+    $programFilesRoot = [IO.Path]::GetFullPath("$env:ProgramFiles\Poyi").TrimEnd('\') + '\'
+    foreach ($project in @($config.projects)) {
+        $id = [string]$project.id
+        if ($id -notmatch '^[a-z][a-z0-9_-]{0,31}$' -or $ids.ContainsKey($id)) {
+            throw 'Invalid or duplicate fleet project id.'
+        }
+        $ids[$id] = $true
+        $dataDir = [IO.Path]::GetFullPath([string]$project.dataDir)
+        if (-not $dataDir.StartsWith(
+                $programDataRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            -not ($project.PSObject.Properties.Name -contains 'grantModify')) {
+            throw "Invalid data ACL configuration for $id."
+        }
+        foreach ($endpoint in @($project.mcp, $project.tunnel)) {
+            if ([string]$endpoint.service -notmatch '^[A-Za-z0-9_-]{1,128}$') {
+                throw "Invalid service name for $id."
+            }
+            $uri = $null
+            if ($endpoint.PSObject.Properties.Name -contains 'health') {
+                $uri = [Uri]([string]$endpoint.health)
+            } elseif ($endpoint.PSObject.Properties.Name -contains 'ready') {
+                $uri = [Uri]([string]$endpoint.ready)
+            }
+            if ($null -eq $uri -or $uri.Scheme -ne 'http' -or
+                $uri.Host -notin @('127.0.0.1', 'localhost', '::1')) {
+                throw "Non-loopback fleet endpoint for $id."
+            }
+        }
+        if ($project.PSObject.Properties.Name -contains 'installDir') {
+            $installDir = [IO.Path]::GetFullPath([string]$project.installDir)
+            if (-not $installDir.StartsWith(
+                    $programFilesRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                @($project.grantRead).Count -lt 1 -or
+                @($project.verifyReadGlobs).Count -lt 1) {
+                throw "Invalid runtime ACL configuration for $id."
+            }
+        }
+    }
+    return $config
 }
 
 function Get-UptimeSeconds {
@@ -61,6 +107,100 @@ function Repair-DataDirAcls($Config) {
         }
     }
     Write-Log 'INFO' 'ACL baseline re-applied on all project data directories.'
+}
+
+function Test-PrincipalReadAndExecute([string]$Path, [string]$Principal) {
+    try {
+        $principalSid = ([Security.Principal.NTAccount]$Principal).Translate(
+            [Security.Principal.SecurityIdentifier]).Value
+        $required = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+        $allowed = $false
+        $denied = $false
+        foreach ($rule in (Get-Acl -LiteralPath $Path).Access) {
+            try {
+                $ruleSid = $rule.IdentityReference.Translate(
+                    [Security.Principal.SecurityIdentifier]).Value
+            } catch { continue }
+            if ($ruleSid -ne $principalSid) { continue }
+            $rights = $rule.FileSystemRights -band $required
+            if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny) {
+                if ($rights -ne 0) { $denied = $true }
+            } elseif ($rights -eq $required) {
+                $allowed = $true
+            }
+        }
+        return ($allowed -and -not $denied)
+    } catch {
+        return $false
+    }
+}
+
+function Repair-InstallDirAcls($Config, [string]$ServiceName = '') {
+    $healthy = $true
+    foreach ($project in $Config.projects) {
+        if (-not [string]::IsNullOrWhiteSpace($ServiceName) -and
+            $ServiceName -notin @([string]$project.mcp.service, [string]$project.tunnel.service)) {
+            continue
+        }
+        if (-not ($project.PSObject.Properties.Name -contains 'installDir')) { continue }
+        if (-not ($project.PSObject.Properties.Name -contains 'grantRead')) {
+            Write-Log 'ERROR' "Missing grantRead for $($project.id)." | Out-Null
+            $healthy = $false
+            continue
+        }
+        $dir = [IO.Path]::GetFullPath([string]$project.installDir)
+        $expectedRoot = [IO.Path]::GetFullPath("$env:ProgramFiles\Poyi").TrimEnd('\') + '\'
+        if (-not $dir.StartsWith($expectedRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-Path -LiteralPath $dir -PathType Container)) {
+            Write-Log 'ERROR' "Invalid or missing install dir for $($project.id)." | Out-Null
+            $healthy = $false
+            continue
+        }
+        foreach ($principal in @($project.grantRead)) {
+            & icacls $dir /grant:r "$principal`:(OI)(CI)RX" /T /C /Q 2>$null | Out-Null
+            $aclExitCode = $LASTEXITCODE
+            if ($aclExitCode -ne 0) {
+                Write-Log 'ERROR' "Runtime ACL grant failed for $($project.id)." | Out-Null
+                $healthy = $false
+            }
+        }
+        if (-not ($project.PSObject.Properties.Name -contains 'verifyReadGlobs')) {
+            Write-Log 'ERROR' "Missing verifyReadGlobs for $($project.id)." | Out-Null
+            $healthy = $false
+            continue
+        }
+        $rootPrefix = $dir.TrimEnd('\') + '\'
+        foreach ($pattern in @($project.verifyReadGlobs)) {
+            $matches = @(Get-ChildItem -Path (Join-Path $dir ([string]$pattern)) -File `
+                    -ErrorAction SilentlyContinue)
+            if ($matches.Count -lt 1) {
+                Write-Log 'ERROR' "Runtime ACL verification file missing for $($project.id)." |
+                    Out-Null
+                $healthy = $false
+                continue
+            }
+            foreach ($file in $matches) {
+                $resolved = [IO.Path]::GetFullPath($file.FullName)
+                if (-not $resolved.StartsWith(
+                        $rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    Write-Log 'ERROR' "Runtime ACL verification escaped install root." | Out-Null
+                    $healthy = $false
+                    continue
+                }
+                foreach ($principal in @($project.grantRead)) {
+                    if (-not (Test-PrincipalReadAndExecute $resolved ([string]$principal))) {
+                        Write-Log 'ERROR' "Runtime ACL verification failed for $($project.id)." |
+                            Out-Null
+                        $healthy = $false
+                    }
+                }
+            }
+        }
+    }
+    if ($healthy) {
+        Write-Log 'INFO' 'Runtime read ACL baseline applied and verified.' | Out-Null
+    }
+    return $healthy
 }
 
 function Get-ServiceState([string]$Name) {
@@ -87,27 +227,70 @@ function Wait-ServiceStatus([string]$Name, [string]$Status, [int]$TimeoutSeconds
     return ((Get-ServiceState $Name) -eq $Status)
 }
 
-function Stop-PortListeners([string]$Url) {
-    try {
-        $port = ([Uri]$Url).Port
-        $owners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique)
-        foreach ($ownerPid in $owners) {
-            if ($ownerPid -gt 4) {
-                Write-Log 'WARN' "Killing leftover listener PID $ownerPid on port $port."
-                Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-            }
-        }
-    } catch { }
-}
-
 # Per-service action bookkeeping: consecutive probe failures, restart budget, backoff.
 $script:State = @{}
+
+function Load-RestartState {
+    try {
+        if (-not (Test-Path -LiteralPath $script:RestartStatePath -PathType Leaf)) { return }
+        if ((Get-Item -LiteralPath $script:RestartStatePath).Length -gt 65536) { return }
+        $document = Get-Content -Raw -LiteralPath $script:RestartStatePath | ConvertFrom-Json
+        if ($document.schemaVersion -ne 1 -or $null -eq $document.services) { return }
+        $cutoff = (Get-Date).AddHours(-1)
+        foreach ($property in $document.services.PSObject.Properties) {
+            if ($property.Name -notmatch '^[A-Za-z0-9_-]{1,128}$') { continue }
+            $attempts = @()
+            foreach ($raw in @($property.Value)) {
+                try {
+                    $parsed = [DateTime]::Parse(
+                        [string]$raw,
+                        [Globalization.CultureInfo]::InvariantCulture,
+                        [Globalization.DateTimeStyles]::RoundtripKind)
+                    if ($parsed -ge $cutoff -and $parsed -le (Get-Date).AddMinutes(1)) {
+                        $attempts += $parsed
+                    }
+                } catch { }
+            }
+            $script:PersistedRestartAttempts[$property.Name] = @($attempts)
+        }
+    } catch {
+        $script:PersistedRestartAttempts = @{}
+    }
+}
+
+function Save-RestartState {
+    $services = [ordered]@{}
+    foreach ($name in $script:State.Keys) {
+        $services[$name] = @($script:State[$name].Attempts | ForEach-Object {
+                $_.ToUniversalTime().ToString('o')
+            })
+    }
+    $document = [ordered]@{ schemaVersion = 1; services = $services }
+    $json = $document | ConvertTo-Json -Depth 5
+    $temporary = "$script:RestartStatePath.$PID.tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, $json, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $script:RestartStatePath -Force
+    } catch {
+        Write-Log 'WARN' 'Could not persist restart budget state.' | Out-Null
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-TargetState([string]$Name) {
     if (-not $script:State.ContainsKey($Name)) {
+        $attempts = @()
+        if ($script:PersistedRestartAttempts.ContainsKey($Name)) {
+            $attempts = @($script:PersistedRestartAttempts[$Name])
+        }
+        $lastRestart = [DateTime]::MinValue
+        if ($attempts.Count -gt 0) {
+            $lastRestart = @($attempts | Sort-Object -Descending)[0]
+        }
         $script:State[$Name] = @{
-            Fails = 0; LastRestart = [DateTime]::MinValue
-            HourWindow = Get-Date; RestartsInHour = 0; BackoffUntil = [DateTime]::MinValue
+            Fails = 0; LastRestart = $lastRestart
+            Attempts = @($attempts); BackoffUntil = [DateTime]::MinValue
         }
     }
     $script:State[$Name]
@@ -117,11 +300,9 @@ function Test-RestartAllowed($TargetState, $Config) {
     $now = Get-Date
     if ($now -lt $TargetState.BackoffUntil) { return $false }
     if (($now - $TargetState.LastRestart).TotalSeconds -lt $Config.restartCooldownSeconds) { return $false }
-    if (($now - $TargetState.HourWindow).TotalMinutes -ge 60) {
-        $TargetState.HourWindow = $now
-        $TargetState.RestartsInHour = 0
-    }
-    if ($TargetState.RestartsInHour -ge $Config.maxRestartsPerHour) {
+    $cutoff = $now.AddHours(-1)
+    $TargetState.Attempts = @($TargetState.Attempts | Where-Object { $_ -ge $cutoff })
+    if ($TargetState.Attempts.Count -ge $Config.maxRestartsPerHour) {
         $TargetState.BackoffUntil = $now.AddSeconds($Config.backoffSeconds)
         Write-Log 'WARN' 'Hourly restart budget exhausted; backing off.'
         Write-FleetEvent 9004 'Warning' 'Hourly restart budget exhausted; backing off.'
@@ -131,24 +312,25 @@ function Test-RestartAllowed($TargetState, $Config) {
 }
 
 function Register-Restart($TargetState) {
-    $TargetState.LastRestart = Get-Date
-    $TargetState.RestartsInHour = $TargetState.RestartsInHour + 1
+    $now = Get-Date
+    $TargetState.LastRestart = $now
+    $TargetState.Attempts = @($TargetState.Attempts) + @($now)
     $TargetState.Fails = 0
+    Save-RestartState
 }
 
 function Start-FleetService([string]$Name, $Config) {
+    Repair-DataDirAcls $Config | Out-Null
+    if (-not (Repair-InstallDirAcls $Config $Name)) {
+        Write-Log 'ERROR' "Service $Name not started because runtime ACL verification failed."
+        return $false
+    }
     Write-Log 'INFO' "Starting service $Name."
     & sc.exe start $Name | Out-Null
     if (-not (Wait-ServiceStatus $Name 'Running' 30)) {
-        Write-Log 'WARN' "Service $Name did not reach Running; re-applying ACL baseline and retrying once."
-        Repair-DataDirAcls $Config
-        Start-Sleep -Seconds 5
-        & sc.exe start $Name | Out-Null
-        if (-not (Wait-ServiceStatus $Name 'Running' 30)) {
-            Write-Log 'ERROR' "Service $Name failed to start twice."
-            Write-FleetEvent 9005 'Error' "Service $Name failed to start twice."
-            return $false
-        }
+        Write-Log 'ERROR' "Service $Name failed to start."
+        Write-FleetEvent 9005 'Error' "Service $Name failed to start."
+        return $false
     }
     Write-FleetEvent 9002 'Information' "Service $Name started by watchdog."
     return $true
@@ -165,9 +347,9 @@ function Restart-McpService($Project, $Config) {
     }
     & sc.exe stop $mcpName | Out-Null
     if (-not (Wait-ServiceStatus $mcpName 'Stopped' 30)) {
-        Write-Log 'WARN' "$mcpName did not stop cleanly; killing its port listener."
+        Write-Log 'ERROR' "$mcpName did not stop cleanly; refusing to kill an unverified PID."
+        return
     }
-    Stop-PortListeners $Project.mcp.health
     Start-FleetService $mcpName $Config | Out-Null
     Start-Sleep -Seconds 3
     Start-FleetService $tunnelName $Config | Out-Null
@@ -178,8 +360,10 @@ function Restart-TunnelService($Project, $Config) {
     Write-Log 'WARN' "Force-restarting $tunnelName (readiness probe kept failing)."
     Write-FleetEvent 9003 'Warning' "Force-restarting $tunnelName after repeated failed readiness probes."
     & sc.exe stop $tunnelName | Out-Null
-    Wait-ServiceStatus $tunnelName 'Stopped' 30 | Out-Null
-    Stop-PortListeners $Project.tunnel.ready
+    if (-not (Wait-ServiceStatus $tunnelName 'Stopped' 30)) {
+        Write-Log 'ERROR' "$tunnelName did not stop cleanly; refusing to kill an unverified PID."
+        return
+    }
     Start-FleetService $tunnelName $Config | Out-Null
 }
 
@@ -194,7 +378,7 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
         if ($mcpState -eq 'Missing') {
             Write-Log 'ERROR' "Service $mcpName is not installed."
         } elseif ($mcpState -eq 'Stopped') {
-            if ($Forced -or (Test-RestartAllowed $mcpTarget $Config)) {
+            if (Test-RestartAllowed $mcpTarget $Config) {
                 Register-Restart $mcpTarget
                 Start-FleetService $mcpName $Config | Out-Null
             }
@@ -206,9 +390,9 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
                 $mcpTarget.Fails = $mcpTarget.Fails + 1
                 Write-Log 'WARN' ("{0} health probe failed ({1}/{2})." -f
                     $mcpName, $mcpTarget.Fails, $Config.mcpFailThreshold)
-                $due = $Forced -or ($mcpTarget.Fails -ge $Config.mcpFailThreshold -and
-                    (Test-RestartAllowed $mcpTarget $Config))
-                if (-not $InBootGrace -and $due) {
+                $due = $Forced -or ($mcpTarget.Fails -ge $Config.mcpFailThreshold)
+                if (-not $InBootGrace -and $due -and
+                    (Test-RestartAllowed $mcpTarget $Config)) {
                     Register-Restart $mcpTarget
                     Restart-McpService $project $Config
                     $mcpHealthy = Test-Probe $project.mcp.health $Config.probeTimeoutSeconds
@@ -223,11 +407,8 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
             continue
         }
         if ($tunnelState -eq 'Stopped') {
-            # A stopped tunnel whose ready port is still bound means an orphaned
-            # tunnel-client survived a service kill; remove it before restarting.
-            if ($Forced -or (Test-RestartAllowed $tunnelTarget $Config)) {
+            if (Test-RestartAllowed $tunnelTarget $Config) {
                 Register-Restart $tunnelTarget
-                Stop-PortListeners $project.tunnel.ready
                 Start-FleetService $tunnelName $Config | Out-Null
             }
             continue
@@ -244,9 +425,9 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
             $tunnelTarget.Fails = $tunnelTarget.Fails + 1
             Write-Log 'WARN' ("{0} readiness probe failed ({1}/{2})." -f
                 $tunnelName, $tunnelTarget.Fails, $Config.tunnelFailThreshold)
-            $due = $Forced -or ($tunnelTarget.Fails -ge $Config.tunnelFailThreshold -and
-                (Test-RestartAllowed $tunnelTarget $Config))
-            if (-not $InBootGrace -and $due) {
+            $due = $Forced -or ($tunnelTarget.Fails -ge $Config.tunnelFailThreshold)
+            if (-not $InBootGrace -and $due -and
+                (Test-RestartAllowed $tunnelTarget $Config)) {
                 Register-Restart $tunnelTarget
                 Restart-TunnelService $project $Config
             }
@@ -255,11 +436,35 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
 }
 
 function Test-RepairTrigger($Config) {
-    $requests = @(Get-ChildItem -LiteralPath $script:TriggerDir -File -ErrorAction SilentlyContinue)
-    if ($requests.Count -eq 0) { return $false }
-    foreach ($request in $requests) {
-        Remove-Item -LiteralPath $request.FullName -Force -ErrorAction SilentlyContinue
+    $candidates = @(Get-ChildItem -LiteralPath $script:TriggerDir -Filter 'repair-*.json' `
+            -File -ErrorAction SilentlyContinue)
+    $requests = @()
+    foreach ($request in $candidates) {
+        if ($request.Name -notmatch '^repair-([A-Za-z0-9_-]{1,32})\.json$' -or
+            $request.Length -gt 4096 -or
+            ($request.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            continue
+        }
+        try {
+            $payload = Get-Content -Raw -LiteralPath $request.FullName | ConvertFrom-Json
+            $names = @($payload.PSObject.Properties.Name | Sort-Object)
+            $requestId = [Guid]::Empty
+            if (($names -join ',') -ne 'requestId,requestedAt,schemaVersion,source' -or
+                $payload.schemaVersion -ne 1 -or
+                [string]$payload.source -ne $Matches[1] -or
+                -not [Guid]::TryParse([string]$payload.requestId, [ref]$requestId)) {
+                continue
+            }
+            $requestedAt = [DateTime]::Parse(
+                [string]$payload.requestedAt,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind)
+            $age = ((Get-Date) - $requestedAt).TotalSeconds
+            if ($age -lt -60 -or $age -gt 600) { continue }
+            $requests += $request
+        } catch { }
     }
+    if ($requests.Count -eq 0) { return $false }
     if (Test-Path -LiteralPath $script:MaintenanceFlag) {
         Write-Log 'WARN' 'Repair request ignored: maintenance.flag is present.'
         Write-FleetEvent 9006 'Warning' 'Repair request ignored during maintenance.'
@@ -269,11 +474,31 @@ function Test-RepairTrigger($Config) {
         Write-Log 'WARN' 'Repair request rate-limited (one forced pass per minute).'
         return $false
     }
+    $claimed = @()
+    foreach ($request in $requests) {
+        $claim = "$($request.FullName).processing"
+        try {
+            Move-Item -LiteralPath $request.FullName -Destination $claim -ErrorAction Stop
+            $claimed += $claim
+        } catch { }
+    }
+    if ($claimed.Count -eq 0) { return $false }
     $script:LastForcedPass = Get-Date
-    Write-Log 'INFO' ("Repair requested ({0} trigger file(s)); running forced pass." -f $requests.Count)
+    Write-Log 'INFO' ("Repair requested ({0} trigger file(s)); running forced pass." -f $claimed.Count)
     Write-FleetEvent 9006 'Information' 'Repair requested via trigger; running forced remediation pass.'
     Repair-DataDirAcls $Config
+    if (-not (Repair-InstallDirAcls $Config)) {
+        foreach ($claim in $claimed) {
+            Move-Item -LiteralPath $claim -Destination ($claim -replace '\.processing$', '') `
+                -Force -ErrorAction SilentlyContinue
+        }
+        Write-FleetEvent 9007 'Error' 'Repair stopped because runtime ACL verification failed.'
+        return $false
+    }
     Invoke-FleetPass $Config $false $true
+    foreach ($claim in $claimed) {
+        Remove-Item -LiteralPath $claim -Force -ErrorAction SilentlyContinue
+    }
     Write-Log 'INFO' 'Forced remediation pass finished.'
     return $true
 }
@@ -309,7 +534,9 @@ function Invoke-CloudSync($Config) {
 $config = Get-Config
 Write-Log 'INFO' ("Fleet watchdog starting; monitoring {0} projects." -f @($config.projects).Count)
 Write-FleetEvent 9001 'Information' 'Fleet watchdog started.'
+Load-RestartState
 Repair-DataDirAcls $config
+Repair-InstallDirAcls $config | Out-Null
 $script:PassCount = 0
 
 while ($true) {

@@ -1,7 +1,7 @@
 # Installs / repairs the Poyi MCP fleet reliability layer. Idempotent; run elevated.
 #   1. Re-applies the ACL baseline on every project's ProgramData directory.
 #   2. Writes the corrected dashboard-targets.yaml (true tunnel port map).
-#   3. Hardens all fleet services: delayed auto start + infinite failure restarts.
+#   3. Hardens all fleet services: delayed auto start + bounded SCM recovery.
 #   4. Installs and starts the PoyiFleetWatchdog service.
 #   5. Starts anything currently stopped and prints a final probe report.
 [CmdletBinding()]
@@ -57,6 +57,15 @@ try {
             & icacls $dir /grant "$principal`:(OI)(CI)M" /T /C /Q | Out-Null
         }
         Write-Host "  baseline applied: $dir"
+        if ($project.PSObject.Properties.Name -contains 'installDir') {
+            foreach ($principal in @($project.grantRead)) {
+                & icacls ([string]$project.installDir) /grant:r `
+                    "$principal`:(OI)(CI)RX" /T /C /Q | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Runtime ACL grant failed: $($project.id)"
+                }
+            }
+        }
     }
     & icacls $dataDir /grant '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C /Q | Out-Null
 
@@ -112,7 +121,8 @@ targets:
             continue
         }
         & sc.exe config $name start= delayed-auto | Out-Null
-        & sc.exe failure $name reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+        & sc.exe failure $name reset= 86400 `
+            actions= restart/5000/restart/15000/restart/60000/none/0 | Out-Null
         & sc.exe failureflag $name 1 | Out-Null
         Write-Host "  hardened: $name"
     }
@@ -150,7 +160,8 @@ targets:
     }
     & $watchdogExe install
     if ($LASTEXITCODE -ne 0) { throw 'Watchdog service installation failed.' }
-    & sc.exe failure PoyiFleetWatchdog reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+    & sc.exe failure PoyiFleetWatchdog reset= 86400 `
+        actions= restart/5000/restart/15000/restart/60000/none/0 | Out-Null
     & sc.exe failureflag PoyiFleetWatchdog 1 | Out-Null
     & $watchdogExe start | Out-Null
     if (Wait-ServiceStatus 'PoyiFleetWatchdog' 'Running' 30) {

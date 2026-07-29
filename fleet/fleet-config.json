@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "loopSeconds": 30,
   "bootGraceSeconds": 180,
   "mcpFailThreshold": 4,
@@ -11,6 +12,18 @@
     {
       "id": "personal",
       "name": "Personal Gateway",
+      "installDir": "C:\\Program Files\\Poyi\\PersonalMcpGateway",
+      "grantRead": [
+        "NT SERVICE\\PoyiPersonalMcpGateway",
+        "NT SERVICE\\OpenAISecureMcpTunnel"
+      ],
+      "verifyReadGlobs": [
+        "python\\cpython-3.12.*\\python.exe",
+        "python\\cpython-3.12.*\\Lib\\site-packages\\personal_mcp_gateway\\service_bootstrap.py",
+        "python\\cpython-3.12.*\\Lib\\site-packages\\uvicorn\\main.py",
+        "python\\cpython-3.12.*\\Lib\\site-packages\\uvicorn\\supervisors\\statreload.py",
+        "python\\cpython-3.12.*\\Lib\\site-packages\\watchfiles\\_rust_notify*.pyd"
+      ],
       "dataDir": "C:\\ProgramData\\Poyi\\PersonalMcpGateway",
       "grantModify": [
         "NT SERVICE\\PoyiPersonalMcpGateway",
