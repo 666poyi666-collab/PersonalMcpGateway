@@ -21,17 +21,33 @@
     ]
   },
   "services": [
-    { "binding": "IDENTITY_FOCUS_AUTHORITY_SOURCE", "service": "focuslink-sync-staging" },
-    { "binding": "JOURNAL_AUTHORITY_SOURCE", "service": "journal-mcp-staging" },
-    { "binding": "WATCH_AUTHORITY_SOURCE", "service": "watch-mcp-staging" },
-    { "binding": "SUIXIN_AUTHORITY_SOURCE", "service": "suixin-cloud-sync-staging-watch-suixin" }
+    {
+      "binding": "FOCUSLINK_AUTHORITY_SOURCE",
+      "service": "focuslink-sync-staging",
+      "entrypoint": "FocusLinkAuthorityObservation"
+    },
+    {
+      "binding": "JOURNAL_OBSERVATION",
+      "service": "journal-mcp-staging",
+      "entrypoint": "JournalObservationEntrypoint"
+    },
+    {
+      "binding": "WATCH_OBSERVATION",
+      "service": "watch-mcp-staging",
+      "entrypoint": "WatchAuthorityObservation"
+    },
+    {
+      "binding": "SUIXIN_OBSERVATION",
+      "service": "suixin-cloud-sync-staging-watch-suixin",
+      "entrypoint": "SuixinAuthorityObservation"
+    }
   ],
   // Per-product secrets are provisioned with `wrangler secret put` and are never
   // placed in vars, source, test fixtures, logs, or responses:
-  // IDENTITY_FOCUS_OBSERVATION_CAPABILITY
-  // JOURNAL_OBSERVATION_CAPABILITY
-  // WATCH_OBSERVATION_CAPABILITY
-  // SUIXIN_OBSERVATION_CAPABILITY
+  // FOCUSLINK_OBSERVATION_CAPABILITY
+  // JOURNAL_AUTHORITY_OBSERVATION_CAPABILITY
+  // WATCH_AUTHORITY_CAPABILITY
+  // SUIXIN_AUTHORITY_CAPABILITY
   "migrations": [
     {
       "tag": "authority-issuer-v1",

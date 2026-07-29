@@ -34,7 +34,11 @@ def redact_service_error(value: str) -> str:
     )
     # Remove the complete URL, not only its host: paths and query strings often
     # carry one-time codes, signed database DSNs, or bearer-like capabilities.
-    value = re.sub(r"(?i)\b(?:https?|postgres(?:ql)?|mysql|redis)://[^\s'\"<>]+", "[REDACTED_URL]", value)
+    value = re.sub(
+        r"(?i)\b(?:https?|postgres(?:ql)?|mysql|redis)://[^\s'\"<>]+",
+        "[REDACTED_URL]",
+        value,
+    )
     return re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[REDACTED_IP]", value)
 
 

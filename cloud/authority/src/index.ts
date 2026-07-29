@@ -22,14 +22,14 @@ interface SignerEnv {
   ENVIRONMENT: string;
   AUTHORITY_SIGNING_KEY: string;
   AUTHORITY_ISSUER: DurableObjectNamespace;
-  IDENTITY_FOCUS_AUTHORITY_SOURCE?: Fetcher;
-  JOURNAL_AUTHORITY_SOURCE?: Fetcher;
-  WATCH_AUTHORITY_SOURCE?: Fetcher;
-  SUIXIN_AUTHORITY_SOURCE?: Fetcher;
-  IDENTITY_FOCUS_OBSERVATION_CAPABILITY?: string;
-  JOURNAL_OBSERVATION_CAPABILITY?: string;
-  WATCH_OBSERVATION_CAPABILITY?: string;
-  SUIXIN_OBSERVATION_CAPABILITY?: string;
+  FOCUSLINK_AUTHORITY_SOURCE?: Fetcher;
+  JOURNAL_OBSERVATION?: Fetcher;
+  WATCH_OBSERVATION?: Fetcher;
+  SUIXIN_OBSERVATION?: Fetcher;
+  FOCUSLINK_OBSERVATION_CAPABILITY?: string;
+  JOURNAL_AUTHORITY_OBSERVATION_CAPABILITY?: string;
+  WATCH_AUTHORITY_CAPABILITY?: string;
+  SUIXIN_AUTHORITY_CAPABILITY?: string;
 }
 
 interface AuthorityTruth {
@@ -221,23 +221,23 @@ async function sha256(value: Uint8Array | string): Promise<string> {
 function sourceFor(env: SignerEnv, productId: ProductId): { fetcher: Fetcher | undefined; capability: string | undefined; path: string } {
   switch (productId) {
     case "identity-focus": return {
-      fetcher: env.IDENTITY_FOCUS_AUTHORITY_SOURCE,
-      capability: env.IDENTITY_FOCUS_OBSERVATION_CAPABILITY,
-      path: "/internal/authority/v1/observation",
+      fetcher: env.FOCUSLINK_AUTHORITY_SOURCE,
+      capability: env.FOCUSLINK_OBSERVATION_CAPABILITY,
+      path: "/internal/authority-observation/v1",
     };
     case "journal": return {
-      fetcher: env.JOURNAL_AUTHORITY_SOURCE,
-      capability: env.JOURNAL_OBSERVATION_CAPABILITY,
+      fetcher: env.JOURNAL_OBSERVATION,
+      capability: env.JOURNAL_AUTHORITY_OBSERVATION_CAPABILITY,
       path: "/internal/authority-observation/v1",
     };
     case "watch": return {
-      fetcher: env.WATCH_AUTHORITY_SOURCE,
-      capability: env.WATCH_OBSERVATION_CAPABILITY,
+      fetcher: env.WATCH_OBSERVATION,
+      capability: env.WATCH_AUTHORITY_CAPABILITY,
       path: "/_internal/v1/authority-observation",
     };
     case "suixin": return {
-      fetcher: env.SUIXIN_AUTHORITY_SOURCE,
-      capability: env.SUIXIN_OBSERVATION_CAPABILITY,
+      fetcher: env.SUIXIN_OBSERVATION,
+      capability: env.SUIXIN_AUTHORITY_CAPABILITY,
       path: "/internal/sync-overview/v1",
     };
   }

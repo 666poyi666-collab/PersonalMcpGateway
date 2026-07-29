@@ -392,8 +392,8 @@ describe("signed staging authority verification", () => {
     let calls = 0;
     const env = {
       ...signerEnv,
-      JOURNAL_OBSERVATION_CAPABILITY: "c".repeat(48),
-      JOURNAL_AUTHORITY_SOURCE: {
+      JOURNAL_AUTHORITY_OBSERVATION_CAPABILITY: "c".repeat(48),
+      JOURNAL_OBSERVATION: {
         async fetch(request: Request) {
           calls += 1;
           expect(new URL(request.url).pathname).toBe("/internal/authority-observation/v1");
@@ -425,7 +425,7 @@ describe("signed staging authority verification", () => {
 
       const missingCapability = await authorityWorker.fetch(new Request(observation.audience), {
         ...env,
-        JOURNAL_OBSERVATION_CAPABILITY: undefined,
+        JOURNAL_AUTHORITY_OBSERVATION_CAPABILITY: undefined,
       } as never);
       expect(missingCapability.status).toBe(503);
     } finally {
