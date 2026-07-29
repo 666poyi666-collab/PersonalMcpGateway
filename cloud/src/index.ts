@@ -3,6 +3,8 @@ import { createLocalJWKSet, jwtVerify, type JWTPayload, type JSONWebKeySet } fro
 const PRODUCTS = ["identity-focus", "journal", "watch", "suixin"] as const;
 const REQUIRED_SCOPE = "gateway:read";
 const MAX_AUTHORITY_BYTES = 64_000;
+const AUTHORITY_DOCUMENT_MEDIA_TYPE = "application/vnd.poyi.authority-document.v2+json";
+const AUTHORITY_CLOCK_SKEW_MS = 60_000;
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 type ProductId = (typeof PRODUCTS)[number];
@@ -51,10 +53,14 @@ interface AuthorityTruth {
 }
 
 interface AuthorityDocument {
-  schemaVersion: 1;
+  schemaVersion: 2;
   productId: string;
+  audience: string;
   issuedAt: string;
   expiresAt: string;
+  sourceObservedAt: string;
+  sourceExpiresAt: string;
+  observationHash: string;
   truth: AuthorityTruth;
   signature: string;
 }
@@ -66,12 +72,17 @@ interface VerifiedAuthority {
 }
 
 interface AuthorityCheckpointRecord {
-  schemaVersion: 1;
+  schemaVersion: 3;
   environment: string;
   productId: ProductId;
+  audience: string;
   publicKeyHash: string;
   revision: number;
+  observationHash: string;
   truthHash: string;
+  lastVerifiedAt: string;
+  sourceObservedAt: string;
+  sourceExpiresAt: string;
 }
 
 interface ProductSummary {
@@ -105,7 +116,7 @@ function json(body: unknown, status = 200, headers: HeadersInit = {}): Response 
 function exactHttpsUrl(value: string, pathRequired?: string): URL | null {
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) return null;
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash || parsed.search) return null;
     if (pathRequired !== undefined && parsed.pathname !== pathRequired) return null;
     return parsed;
   } catch {
@@ -157,16 +168,26 @@ function hasExactKeys(value: Record<string, unknown>, expected: string[]): boole
 function isCheckpointRecord(value: unknown): value is AuthorityCheckpointRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return hasExactKeys(record, ["schemaVersion", "environment", "productId", "publicKeyHash", "revision", "truthHash"])
-    && record.schemaVersion === 1
+  return hasExactKeys(record, [
+    "schemaVersion", "environment", "productId", "audience", "publicKeyHash", "revision",
+    "observationHash", "truthHash", "lastVerifiedAt", "sourceObservedAt", "sourceExpiresAt",
+  ])
+    && record.schemaVersion === 3
     && typeof record.environment === "string"
     && isProductId(record.productId)
+    && typeof record.audience === "string"
+    && exactHttpsUrl(record.audience, `/authority/${record.productId}`) !== null
     && typeof record.publicKeyHash === "string"
     && /^[0-9a-f]{64}$/.test(record.publicKeyHash)
     && Number.isSafeInteger(record.revision)
     && (record.revision as number) >= 0
+    && typeof record.observationHash === "string"
+    && /^[0-9a-f]{64}$/.test(record.observationHash)
     && typeof record.truthHash === "string"
-    && /^[0-9a-f]{64}$/.test(record.truthHash);
+    && /^[0-9a-f]{64}$/.test(record.truthHash)
+    && parseTimestamp(record.lastVerifiedAt) !== null
+    && parseTimestamp(record.sourceObservedAt) !== null
+    && parseTimestamp(record.sourceExpiresAt) !== null;
 }
 
 function parseTimestamp(value: unknown): number | null {
@@ -182,9 +203,20 @@ function isProductId(value: unknown): value is ProductId {
 export function validateAuthorityShape(value: unknown): value is AuthorityDocument {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const document = value as Record<string, unknown>;
-  if (!hasExactKeys(document, ["schemaVersion", "productId", "issuedAt", "expiresAt", "truth", "signature"])) return false;
-  if (document.schemaVersion !== 1 || typeof document.productId !== "string" || typeof document.signature !== "string") return false;
-  if (parseTimestamp(document.issuedAt) === null || parseTimestamp(document.expiresAt) === null) return false;
+  if (!hasExactKeys(document, [
+    "schemaVersion", "productId", "audience", "issuedAt", "expiresAt", "sourceObservedAt",
+    "sourceExpiresAt", "observationHash", "truth", "signature",
+  ])) return false;
+  if (document.schemaVersion !== 2
+    || typeof document.productId !== "string"
+    || typeof document.audience !== "string"
+    || typeof document.signature !== "string"
+    || typeof document.observationHash !== "string"
+    || !/^[0-9a-f]{64}$/.test(document.observationHash)) return false;
+  if (parseTimestamp(document.issuedAt) === null
+    || parseTimestamp(document.expiresAt) === null
+    || parseTimestamp(document.sourceObservedAt) === null
+    || parseTimestamp(document.sourceExpiresAt) === null) return false;
   if (!document.truth || typeof document.truth !== "object" || Array.isArray(document.truth)) return false;
   const truth = document.truth as Record<string, unknown>;
   if (!hasExactKeys(truth, ["revision", "freshness", "lastVerifiedAt", "pendingCount", "blockerReason", "pcOff"])) return false;
@@ -216,7 +248,10 @@ export function parseAuthorityConfig(raw: string): Map<ProductId, AuthorityConfi
     const record = item as Record<string, unknown>;
     if (!hasExactKeys(record, ["productId", "url", "publicKey", "maxAgeSeconds"])) return new Map();
     if (!isProductId(record.productId) || result.has(record.productId)) return new Map();
-    if (typeof record.url !== "string" || !exactHttpsUrl(record.url)) return new Map();
+    if (
+      typeof record.url !== "string" ||
+      !exactHttpsUrl(record.url, `/authority/${record.productId}`)
+    ) return new Map();
     const publicKey = typeof record.publicKey === "string" ? base64UrlBytes(record.publicKey) : null;
     if (!publicKey || publicKey.length !== 32) return new Map();
     if (!Number.isSafeInteger(record.maxAgeSeconds) || (record.maxAgeSeconds as number) < 60 || (record.maxAgeSeconds as number) > 86_400) return new Map();
@@ -279,8 +314,8 @@ async function readBoundedJson(request: Request, maxBytes: number): Promise<Boun
 
 // Cloudflare Workers blocks worker-to-worker subrequests over the public
 // *.workers.dev hostnames (error 1042). Sibling workers are therefore reached
-// through service bindings; resolveBindingFetch maps a target URL to the binding
-// that serves it and falls back to the public network for everything else.
+// through service bindings. Product authority reads never fall back to the
+// public network; resolveBindingFetch remains for OAuth's public protocol URLs.
 function resolveBindingFetch(env: Env, url: string): Fetcher | undefined {
   let hostname: string;
   try {
@@ -289,7 +324,6 @@ function resolveBindingFetch(env: Env, url: string): Fetcher | undefined {
     return undefined;
   }
   const bindings: Array<[string, Fetcher | undefined]> = [
-    ["personal-mcp-authority-staging.focuslink-poyi-6465e9.workers.dev", env.AUTHORITY_SERVICE],
     ["poyi-oauth-as-staging.focuslink-poyi-6465e9.workers.dev", env.OAUTH_AS_SERVICE],
   ];
   for (const [boundHostname, binding] of bindings) {
@@ -352,32 +386,73 @@ async function fetchBoundedHttp(
   }
 }
 
-async function fetchBounded(url: string, fetcher?: Fetcher): Promise<Uint8Array | null> {
-  const response = await fetchBoundedHttp(url, { method: "GET", headers: { accept: "application/json" } }, MAX_AUTHORITY_BYTES, 5_000, fetcher);
-  return response?.ok ? response.bytes : null;
-}
-
 export async function verifyAuthority(
   env: Env,
   config: AuthorityConfig,
   now = Date.now(),
 ): Promise<{ verified: VerifiedAuthority | null; issue: AuthorityIssue | null }> {
-  const bytes = await fetchBounded(config.url, resolveBindingFetch(env, config.url));
-  if (!bytes) return { verified: null, issue: "authority_fetch_failed" };
+  if (!env.AUTHORITY_SERVICE) return { verified: null, issue: "authority_fetch_failed" };
+  const response = await fetchBoundedHttp(
+    config.url,
+    { method: "GET", headers: { accept: AUTHORITY_DOCUMENT_MEDIA_TYPE } },
+    MAX_AUTHORITY_BYTES,
+    5_000,
+    env.AUTHORITY_SERVICE,
+  );
+  if (!response?.ok) return { verified: null, issue: "authority_fetch_failed" };
+  if (response.contentType.split(";", 1)[0]?.trim().toLowerCase() !== AUTHORITY_DOCUMENT_MEDIA_TYPE) {
+    return { verified: null, issue: "authority_signature_invalid" };
+  }
+  const bytes = response.bytes;
   let document: unknown;
   try { document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { return { verified: null, issue: "authority_signature_invalid" }; }
   if (!validateAuthorityShape(document)) return { verified: null, issue: "authority_signature_invalid" };
-  if (document.productId !== config.productId) return { verified: null, issue: "authority_product_mismatch" };
+  if (document.productId !== config.productId || document.audience !== config.url) return { verified: null, issue: "authority_product_mismatch" };
   const issuedAt = Date.parse(document.issuedAt);
   const expiresAt = Date.parse(document.expiresAt);
+  const sourceObservedAt = Date.parse(document.sourceObservedAt);
+  const sourceExpiresAt = Date.parse(document.sourceExpiresAt);
   const verifiedAt = Date.parse(document.truth.lastVerifiedAt);
-  if (expiresAt <= issuedAt || verifiedAt > issuedAt || issuedAt > now || expiresAt <= now || now - issuedAt >= config.maxAgeSeconds * 1_000) {
+  if (
+    expiresAt <= issuedAt ||
+    sourceExpiresAt <= sourceObservedAt ||
+    expiresAt > sourceExpiresAt ||
+    verifiedAt > sourceObservedAt ||
+    sourceObservedAt > issuedAt + AUTHORITY_CLOCK_SKEW_MS ||
+    issuedAt > now + AUTHORITY_CLOCK_SKEW_MS ||
+    expiresAt <= now ||
+    sourceExpiresAt <= now ||
+    now - issuedAt >= config.maxAgeSeconds * 1_000 ||
+    now - sourceObservedAt >= config.maxAgeSeconds * 1_000 ||
+    (document.truth.freshness === "fresh" && now - verifiedAt >= config.maxAgeSeconds * 1_000)
+  ) {
     return { verified: null, issue: "authority_status_expired" };
+  }
+  const reconstructedObservation = {
+    schemaVersion: 1,
+    productId: document.productId,
+    audience: document.audience,
+    observedAt: document.sourceObservedAt,
+    expiresAt: document.sourceExpiresAt,
+    truth: document.truth,
+  };
+  if (await sha256(canonicalJson(reconstructedObservation)) !== document.observationHash) {
+    return { verified: null, issue: "authority_signature_invalid" };
   }
   const signature = base64UrlBytes(document.signature);
   const publicKey = base64UrlBytes(config.publicKey);
   if (!signature || signature.length !== 64 || !publicKey) return { verified: null, issue: "authority_signature_invalid" };
-  const unsigned = { schemaVersion: document.schemaVersion, productId: document.productId, issuedAt: document.issuedAt, expiresAt: document.expiresAt, truth: document.truth };
+  const unsigned = {
+    schemaVersion: document.schemaVersion,
+    productId: document.productId,
+    audience: document.audience,
+    issuedAt: document.issuedAt,
+    expiresAt: document.expiresAt,
+    sourceObservedAt: document.sourceObservedAt,
+    sourceExpiresAt: document.sourceExpiresAt,
+    observationHash: document.observationHash,
+    truth: document.truth,
+  };
   try {
     const key = await crypto.subtle.importKey("raw", Uint8Array.from(publicKey).buffer, { name: "Ed25519" }, false, ["verify"]);
     const valid = await crypto.subtle.verify(
@@ -393,18 +468,23 @@ export async function verifyAuthority(
   const truthHash = await sha256(canonicalJson(document.truth));
   const publicKeyHash = await sha256(publicKey);
   try {
-    const id = env.AUTHORITY_CHECKPOINTS.idFromName(config.productId);
+    const id = env.AUTHORITY_CHECKPOINTS.idFromName(`v3:${env.ENVIRONMENT}:${config.productId}`);
     const checkpoint = env.AUTHORITY_CHECKPOINTS.get(id);
     const response = await checkpoint.fetch("https://authority-checkpoint.internal/accept", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 3,
         environment: env.ENVIRONMENT,
         productId: config.productId,
+        audience: document.audience,
         publicKeyHash,
         revision: document.truth.revision,
+        observationHash: document.observationHash,
         truthHash,
+        lastVerifiedAt: document.truth.lastVerifiedAt,
+        sourceObservedAt: document.sourceObservedAt,
+        sourceExpiresAt: document.sourceExpiresAt,
       } satisfies AuthorityCheckpointRecord),
     });
     if (response.status === 409) {
@@ -695,20 +775,32 @@ export class AuthorityCheckpoint {
     }
     try {
       const result = await this.state.storage.transaction(async (transaction) => {
-        const prior = await transaction.get<unknown>("checkpoint");
-        if (prior !== undefined && !isCheckpointRecord(prior)) return "unavailable" as const;
-        if (prior !== undefined && (prior.environment !== candidate.environment || prior.productId !== candidate.productId)) {
+        const prior = await transaction.get<unknown>("checkpoint-v3");
+        if (prior !== undefined && !isCheckpointRecord(prior)) {
+          return "unavailable" as const;
+        }
+        if (prior !== undefined && (
+          prior.environment !== candidate.environment
+          || prior.productId !== candidate.productId
+          || prior.audience !== candidate.audience
+        )) {
           return "unavailable" as const;
         }
         if (prior !== undefined) {
           if (candidate.revision < prior.revision) return "rollback" as const;
-          if (candidate.revision === prior.revision
-            && (candidate.truthHash !== prior.truthHash || candidate.publicKeyHash !== prior.publicKeyHash)) {
-            return "rollback" as const;
+          if (candidate.publicKeyHash !== prior.publicKeyHash) return "rollback" as const;
+          if (candidate.revision === prior.revision) {
+            const identical = candidate.observationHash === prior.observationHash
+              && candidate.truthHash === prior.truthHash
+              && candidate.lastVerifiedAt === prior.lastVerifiedAt
+              && candidate.sourceObservedAt === prior.sourceObservedAt
+              && candidate.sourceExpiresAt === prior.sourceExpiresAt;
+            return identical ? "accepted" as const : "rollback" as const;
           }
-          if (candidate.revision === prior.revision) return "accepted" as const;
+          if (Date.parse(candidate.lastVerifiedAt) < Date.parse(prior.lastVerifiedAt)) return "rollback" as const;
+          if (Date.parse(candidate.sourceObservedAt) < Date.parse(prior.sourceObservedAt)) return "rollback" as const;
         }
-        await transaction.put("checkpoint", candidate);
+        await transaction.put("checkpoint-v3", candidate);
         return "accepted" as const;
       });
       if (result === "rollback") return json({ accepted: false, reason: "rollback" }, 409);

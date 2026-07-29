@@ -12,7 +12,29 @@ from pathlib import Path
 def redact_service_error(value: str) -> str:
     value = re.sub(r"sk-[A-Za-z0-9_-]+", "sk-[REDACTED]", value)
     value = re.sub(r"tunnel_[A-Za-z0-9_-]+", "tunnel_[REDACTED]", value)
-    value = re.sub(r"(?i)(https?://)([^/:\s]+)", r"\1[REDACTED]", value)
+    value = re.sub(
+        r"\b(?:fl2|dj1|ds1|msr1|jor1|wor1|for1)\.[A-Za-z0-9._~-]+",
+        "[REDACTED_CAPABILITY]",
+        value,
+    )
+    value = re.sub(
+        r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+        "[REDACTED_JWT]",
+        value,
+    )
+    value = re.sub(
+        r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*[^\r\n]+",
+        r"\1: [REDACTED]",
+        value,
+    )
+    value = re.sub(
+        r"(?i)\b(token|api[_-]?key|client[_-]?secret|password|passwd|secret)\s*=\s*[^&\s]+",
+        r"\1=[REDACTED]",
+        value,
+    )
+    # Remove the complete URL, not only its host: paths and query strings often
+    # carry one-time codes, signed database DSNs, or bearer-like capabilities.
+    value = re.sub(r"(?i)\b(?:https?|postgres(?:ql)?|mysql|redis)://[^\s'\"<>]+", "[REDACTED_URL]", value)
     return re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[REDACTED_IP]", value)
 
 

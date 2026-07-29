@@ -64,3 +64,48 @@ def test_watchdog_repair_is_scoped_and_cannot_bypass_restart_budget() -> None:
     assert "Stop-PortListeners" not in watchdog
     assert "refusing to kill an unverified PID" in watchdog
     assert "restart/5000/restart/15000/restart/60000/none/0" in fleet_installer
+
+
+def test_all_install_paths_cap_restart_loops_and_verify_live_readiness() -> None:
+    root = Path(__file__).parents[2]
+    service_installer = (root / "service" / "install.ps1").read_text(encoding="utf-8")
+    fleet_updater = (root / "fleet" / "Update-PoyiFleet.ps1").read_text(encoding="utf-8")
+    service_xmls = [
+        ElementTree.parse(root / "service" / "gateway-service.xml").getroot(),
+        ElementTree.parse(root / "service" / "tunnel-service.xml").getroot(),
+        ElementTree.parse(root / "fleet" / "PoyiFleetWatchdog.xml").getroot(),
+    ]
+
+    for script in (service_installer, fleet_updater):
+        assert "restart/5000/restart/15000/restart/60000/none/0" in script
+        assert "Set-BoundedFailureActions" in script
+    for service in service_xmls:
+        actions = [(item.attrib["action"], item.attrib["delay"]) for item in service.findall("onfailure")]
+        assert actions == [
+            ("restart", "5 sec"),
+            ("restart", "15 sec"),
+            ("restart", "60 sec"),
+            ("none", "0 sec"),
+        ]
+    assert "http://127.0.0.1:8761/readyz" in fleet_updater
+    assert "http://127.0.0.1:8877/readyz" in fleet_updater
+    assert "Copy-VerifiedFile" in fleet_updater
+    assert "Installed file hash mismatch" in fleet_updater
+
+
+def test_sensitive_install_acls_fail_closed_per_operation() -> None:
+    root = Path(__file__).parents[2]
+    installer = (root / "service" / "install.ps1").read_text(encoding="utf-8")
+
+    assert "function Invoke-IcaclsStrict" in installer
+    assert "if ($LASTEXITCODE -ne 0) { throw $FailureMessage }" in installer
+    for protected_path in (
+        "$DataDir, '/inheritance:r'",
+        "$serviceLogDir, '/inheritance:r'",
+        "$gatewayServiceLogDir, '/inheritance:r'",
+        "$tunnelServiceLogDir, '/inheritance:r'",
+        "$tunnelLogDir, '/inheritance:r'",
+        "'runtime-key.dpapi'",
+        "'tunnel-id'",
+    ):
+        assert protected_path in installer

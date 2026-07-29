@@ -45,6 +45,23 @@ function Wait-Endpoint([string]$Uri, [int]$TimeoutSeconds) {
     return $false
 }
 
+function Set-BoundedFailureActions([string]$Name) {
+    & sc.exe failure $Name reset= 3600 `
+        actions= restart/5000/restart/15000/restart/60000/none/0 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to cap SCM recovery actions for $Name." }
+    & sc.exe failureflag $Name 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to enable SCM recovery actions for $Name." }
+}
+
+function Copy-VerifiedFile([string]$Source, [string]$Destination) {
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source).Hash
+    $destinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash
+    if ($sourceHash -ne $destinationHash) {
+        throw "Installed file hash mismatch: $Destination"
+    }
+}
+
 function Assert-ServiceRuntimeReadAccess([string]$Root, [string]$Principal) {
     $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
     $principalSid = ([Security.Principal.NTAccount]$Principal).Translate(
@@ -147,21 +164,42 @@ try {
     if (-not (Wait-ServiceStatus 'PoyiPersonalMcpGateway' 'Running' 40)) {
         throw 'Gateway did not reach Running after update.'
     }
-    if (-not (Wait-Endpoint 'http://127.0.0.1:8761/healthz' 60)) {
-        throw 'Gateway health endpoint did not come back after update.'
+    if (-not (Wait-Endpoint 'http://127.0.0.1:8761/readyz' 60)) {
+        throw 'Gateway readiness endpoint did not come back after update.'
     }
     & sc.exe start OpenAISecureMcpTunnel | Out-Null
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1056) {
+        throw 'OpenAISecureMcpTunnel failed to start after update.'
+    }
+    if (-not (Wait-ServiceStatus 'OpenAISecureMcpTunnel' 'Running' 40)) {
+        throw 'OpenAISecureMcpTunnel did not remain running after update.'
+    }
+    if (-not (Wait-Endpoint 'http://127.0.0.1:8877/readyz' 60)) {
+        throw 'Tunnel readiness endpoint did not come back after update.'
+    }
+    Set-BoundedFailureActions 'PoyiPersonalMcpGateway'
+    Set-BoundedFailureActions 'OpenAISecureMcpTunnel'
     Write-Host '  gateway back online.'
 
     Write-Host '== 3/3 Refresh watchdog ==' -ForegroundColor Cyan
-    Copy-Item (Join-Path $fleetSource 'watchdog.ps1') $watchdogInstall -Force
-    Copy-Item (Join-Path $fleetSource 'fleet-config.json') $watchdogInstall -Force
-    Copy-Item (Join-Path $fleetSource 'PoyiFleetWatchdog.xml') $watchdogInstall -Force
-    Copy-Item (Join-Path $fleetSource 'cloud_sync.py') $watchdogInstall -Force
+    Copy-VerifiedFile (Join-Path $fleetSource 'watchdog.ps1') `
+        (Join-Path $watchdogInstall 'watchdog.ps1')
+    Copy-VerifiedFile (Join-Path $fleetSource 'fleet-config.json') `
+        (Join-Path $watchdogInstall 'fleet-config.json')
+    Copy-VerifiedFile (Join-Path $fleetSource 'PoyiFleetWatchdog.xml') `
+        (Join-Path $watchdogInstall 'PoyiFleetWatchdog.xml')
+    Copy-VerifiedFile (Join-Path $fleetSource 'cloud_sync.py') `
+        (Join-Path $watchdogInstall 'cloud_sync.py')
     & sc.exe stop PoyiFleetWatchdog | Out-Null
     Wait-ServiceStatus 'PoyiFleetWatchdog' 'Stopped' 30 | Out-Null
     & sc.exe start PoyiFleetWatchdog | Out-Null
-    Wait-ServiceStatus 'PoyiFleetWatchdog' 'Running' 30 | Out-Null
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1056) {
+        throw 'PoyiFleetWatchdog failed to start after update.'
+    }
+    if (-not (Wait-ServiceStatus 'PoyiFleetWatchdog' 'Running' 30)) {
+        throw 'PoyiFleetWatchdog did not remain running after update.'
+    }
+    Set-BoundedFailureActions 'PoyiFleetWatchdog'
     Write-Host 'Fleet update finished.' -ForegroundColor Green
 } finally {
     Remove-Item -LiteralPath $maintenanceFlag -Force -ErrorAction SilentlyContinue

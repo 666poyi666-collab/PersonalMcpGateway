@@ -16,6 +16,7 @@
   <onfailure action="restart" delay="5 sec" />
   <onfailure action="restart" delay="15 sec" />
   <onfailure action="restart" delay="60 sec" />
+  <onfailure action="none" delay="0 sec" />
   <resetfailure>1 hour</resetfailure>
   <logpath>%PERSONAL_MCP_DATA_DIR%\service-logs</logpath>
   <log mode="none" />

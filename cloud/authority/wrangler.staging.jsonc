@@ -4,7 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-28",
   "account_id": "6465e9d49bcdb88adde245a7f7a74acc",
-  "workers_dev": true,
+  // Authority is reached only through Gateway's AUTHORITY_SERVICE binding.
+  // Product observations are reached only through the four bindings below.
+  "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": true },
   "vars": {
@@ -18,6 +20,18 @@
       }
     ]
   },
+  "services": [
+    { "binding": "IDENTITY_FOCUS_AUTHORITY_SOURCE", "service": "focuslink-sync-staging" },
+    { "binding": "JOURNAL_AUTHORITY_SOURCE", "service": "journal-mcp-staging" },
+    { "binding": "WATCH_AUTHORITY_SOURCE", "service": "watch-mcp-staging" },
+    { "binding": "SUIXIN_AUTHORITY_SOURCE", "service": "suixin-cloud-sync-staging-watch-suixin" }
+  ],
+  // Per-product secrets are provisioned with `wrangler secret put` and are never
+  // placed in vars, source, test fixtures, logs, or responses:
+  // IDENTITY_FOCUS_OBSERVATION_CAPABILITY
+  // JOURNAL_OBSERVATION_CAPABILITY
+  // WATCH_OBSERVATION_CAPABILITY
+  // SUIXIN_OBSERVATION_CAPABILITY
   "migrations": [
     {
       "tag": "authority-issuer-v1",

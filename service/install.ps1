@@ -168,6 +168,19 @@ function Wait-ReadyEndpoint([string]$Uri, [string]$Name, [int]$TimeoutSeconds = 
     throw "$Name did not become ready within $TimeoutSeconds seconds."
 }
 
+function Set-BoundedFailureActions([string]$Name) {
+    & sc.exe failure $Name reset= 3600 `
+        actions= restart/5000/restart/15000/restart/60000/none/0 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to cap SCM recovery actions for $Name." }
+    & sc.exe failureflag $Name 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to enable SCM recovery actions for $Name." }
+}
+
+function Invoke-IcaclsStrict([string]$FailureMessage, [string[]]$IcaArgs) {
+    & icacls @IcaArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw $FailureMessage }
+}
+
 Assert-Administrator
 Add-Type -AssemblyName System.Security
 $sourceRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -298,6 +311,8 @@ if (-not [string]::IsNullOrWhiteSpace($TunnelId)) {
 if ($LASTEXITCODE -ne 0) { throw 'Gateway service installation failed.' }
 & $tunnelExe install
 if ($LASTEXITCODE -ne 0) { throw 'Tunnel service installation failed.' }
+Set-BoundedFailureActions 'PoyiPersonalMcpGateway'
+Set-BoundedFailureActions 'OpenAISecureMcpTunnel'
 
 $gatewaySid = 'NT SERVICE\PoyiPersonalMcpGateway'
 $tunnelSid = 'NT SERVICE\OpenAISecureMcpTunnel'
@@ -312,11 +327,14 @@ $tunnelServiceLogDir = Join-Path $serviceLogDir 'tunnel'
 $tunnelLogDir = Join-Path $DataDir 'tunnel-logs'
 New-Item -ItemType Directory -Path $gatewayLogDir, $gatewayServiceLogDir, `
     $tunnelServiceLogDir, $tunnelLogDir -Force | Out-Null
-& icacls $DataDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
-    "$gatewaySid`:(OI)(CI)M" "$tunnelSid`:(RX)" | Out-Null
-& icacls $gatewayLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
-    "$gatewaySid`:(OI)(CI)M" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Failed to configure Gateway log directory ACLs.' }
+Invoke-IcaclsStrict 'Failed to configure the gateway data directory ACLs.' @(
+    $DataDir, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:(OI)(CI)F',
+    "$gatewaySid`:(OI)(CI)M", "$tunnelSid`:(RX)"
+)
+Invoke-IcaclsStrict 'Failed to configure Gateway log directory ACLs.' @(
+    $gatewayLogDir, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:(OI)(CI)F',
+    "$gatewaySid`:(OI)(CI)M"
+)
 & icacls $gatewayLogDir /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
     "$gatewaySid`:(OI)(CI)M" /T /C | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -330,28 +348,38 @@ if (Test-Path -LiteralPath $gatewayLogPath) {
         Write-Warning 'The historical Gateway log remains stderr-only.'
     }
 }
-& icacls $serviceLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' |
-    Out-Null
-& icacls $gatewayServiceLogDir /inheritance:r `
-    /grant:r 'BUILTIN\Administrators:(OI)(CI)F' "$gatewaySid`:(OI)(CI)M" /T |
-    Out-Null
-& icacls $tunnelServiceLogDir /inheritance:r `
-    /grant:r 'BUILTIN\Administrators:(OI)(CI)F' "$tunnelSid`:(OI)(CI)M" /T |
-    Out-Null
-& icacls $tunnelLogDir /inheritance:r /grant:r 'BUILTIN\Administrators:(OI)(CI)F' `
-    "$tunnelSid`:(OI)(CI)M" /T | Out-Null
+Invoke-IcaclsStrict 'Failed to configure service log root ACLs.' @(
+    $serviceLogDir, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:(OI)(CI)F'
+)
+Invoke-IcaclsStrict 'Failed to configure Gateway service log ACLs.' @(
+    $gatewayServiceLogDir, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:(OI)(CI)F',
+    "$gatewaySid`:(OI)(CI)M", '/T'
+)
+Invoke-IcaclsStrict 'Failed to configure tunnel service log ACLs.' @(
+    $tunnelServiceLogDir, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:(OI)(CI)F',
+    "$tunnelSid`:(OI)(CI)M", '/T'
+)
+Invoke-IcaclsStrict 'Failed to configure tunnel log ACLs.' @(
+    $tunnelLogDir, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:(OI)(CI)F',
+    "$tunnelSid`:(OI)(CI)M", '/T'
+)
 foreach ($name in @('gateway.db', 'gateway.db-wal', 'gateway.db-shm',
         'admin-token', 'admin-csrf-token')) {
     $path = Join-Path $DataDir $name
     if (Test-Path -LiteralPath $path) {
-        & icacls $path /inheritance:r /grant:r 'BUILTIN\Administrators:F' `
-            "$gatewaySid`:M" | Out-Null
+        Invoke-IcaclsStrict "Failed to configure ACLs for $name." @(
+            $path, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:F', "$gatewaySid`:M"
+        )
     }
 }
-& icacls (Join-Path $DataDir 'runtime-key.dpapi') /inheritance:r `
-    /grant:r 'BUILTIN\Administrators:F' "$tunnelSid`:R" 2>$null | Out-Null
-& icacls (Join-Path $DataDir 'tunnel-id') /inheritance:r `
-    /grant:r 'BUILTIN\Administrators:F' "$tunnelSid`:R" 2>$null | Out-Null
+foreach ($name in @('runtime-key.dpapi', 'tunnel-id')) {
+    $path = Join-Path $DataDir $name
+    if (Test-Path -LiteralPath $path) {
+        Invoke-IcaclsStrict "Failed to configure ACLs for $name." @(
+            $path, '/inheritance:r', '/grant:r', 'BUILTIN\Administrators:F', "$tunnelSid`:R"
+        )
+    }
+}
 
 & $gatewayExe start
 Wait-ServiceRunning 'PoyiPersonalMcpGateway'
