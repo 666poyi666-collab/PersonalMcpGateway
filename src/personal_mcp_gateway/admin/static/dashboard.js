@@ -95,8 +95,9 @@
     watch: { flavor: "sport", accent: "#B6FF39", display: "步序 · 间歇跑", tagline: "训练 · 睡眠 · 手表", groups: ["步序 · 间歇跑"] },
     journal: { flavor: "paper", accent: "#A85F27", display: "拾光 · 日记复盘", tagline: "记录 · 回看 · 复盘", groups: ["拾光日记"] },
     personal: { flavor: "neutral", accent: "#7c6cff", display: "Personal Gateway", tagline: "总机房 · 隧道与看护", groups: [] },
+    bzsjk: { flavor: "discipline", accent: "#FF5C4D", display: "不做手机控", tagline: "监督锁机 · 本地维护", groups: [] },
   };
-  const SECTION_ORDER = ["foxlink", "watch", "journal", "personal"];
+  const SECTION_ORDER = ["foxlink", "watch", "journal", "personal", "bzsjk"];
   const CLAIMED_GROUPS = new Set(Object.values(PROJECT_STYLE).flatMap((s) => s.groups));
   let lastSectionsKey = "";
 
@@ -231,6 +232,14 @@
     card.append(strong, span);
     return card;
   }
+  function withBzsjk(targets, widgets) {
+    if (targets.some((t) => t.id === "bzsjk")) return targets;
+    const projects = (widgets || []).find((w) => w.id === "projects");
+    const items = projects && projects.ok && projects.data && Array.isArray(projects.data.items) ? projects.data.items : [];
+    const item = items.find((i) => String(i.title || "").trim() === "不做手机控");
+    if (!item) return targets;
+    return [...targets, { id: "bzsjk", name: "不做手机控", description: "本地监督与锁机维护项目", state: "online", version: null, mcp: null, tunnel: null, sync: null, projectItem: item }];
+  }
   function renderProjects(targets, widgets, data) {
     const grid = $("projectGrid");
     const key = JSON.stringify([targets, widgets, data.events, data.gateway, data.fleet, profileState]);
@@ -309,6 +318,13 @@
           const span = document.createElement("span"); span.textContent = label;
           card.append(strong, span); dataZone.append(card);
         });
+      } else if (target.id === "bzsjk") {
+        const item = target.projectItem || {};
+        const card = document.createElement("article"); card.className = "pd-stat";
+        card.dataset.priority = "primary";
+        const strong = document.createElement("strong"); strong.textContent = item.value || "LOCAL";
+        const span = document.createElement("span"); span.textContent = item.subtitle || "本地项目";
+        card.append(strong, span); dataZone.append(card);
       } else {
         const mine = (widgets || []).filter((w) => style.groups.includes(w.group || ""));
         mine.forEach((widget, index) => {
@@ -534,7 +550,7 @@
     text($("versionLabel"), `v${data.gateway.version}`);
     text($("lastUpdated"), `探测 ${data.probeDurationMs}ms · ${new Date(data.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
     text($("chartTotal"), compact(summary.calls24h));
-    renderProjects(data.targets, data.widgets || [], data); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []); renderWidgets(data.widgets || []);
+    renderProjects(withBzsjk(data.targets, data.widgets || []), data.widgets || [], data); renderChart(data.activity.hourly); renderActivity(data.activity.recent); renderEvents(data.errors, data.events || []); renderWidgets(data.widgets || []);
     $("syncState").classList.remove("offline"); $("syncState").querySelector("b").textContent = "实时连接";
     text($("footerState"), "CONNECTED");
     const guard = data.fleet && data.fleet.watchdog ? data.fleet.watchdog.state : null;

@@ -49,11 +49,12 @@ def test_project_board_adapts_to_its_container_and_quarter_screen() -> None:
 def test_project_art_directions_and_motion_fallback_are_preserved() -> None:
     style = (STATIC_ROOT / "dashboard.css").read_text(encoding="utf-8")
 
-    for flavor in ("instrument", "sport", "paper", "neutral"):
+    for flavor in ("instrument", "sport", "paper", "neutral", "discipline"):
         assert f".proj-{flavor}" in style
     assert "@keyframes instrument-scan" in style
-    assert "@keyframes sport-drift" in style
-    assert "@keyframes gateway-route" in style
+    assert "@keyframes sport-lume" in style
+    assert "@keyframes gateway-pulse" in style
+    assert "@keyframes discipline-breathe" in style
     assert "@media (prefers-reduced-motion: reduce)" in style
     assert "body:not(.light) .proj-paper" in style
     assert "body:not(.light) .proj-instrument" in style

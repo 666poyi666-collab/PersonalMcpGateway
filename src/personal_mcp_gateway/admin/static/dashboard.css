@@ -34,14 +34,14 @@
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body {
-  margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+  margin: 0; min-height: 100vh; background: transparent; color: var(--text);
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
   letter-spacing: 0; overflow-x: hidden;
 }
 body::before {
   content: ""; position: fixed; inset: 0; z-index: -3; pointer-events: none;
-  background-image: linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
-  background-size: 54px 54px; mask-image: linear-gradient(to bottom, black, transparent 82%);
+  background-image: linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
+  background-size: 54px 54px; mask-image: linear-gradient(to bottom, black, transparent 72%);
 }
 
 .sidebar {
@@ -59,7 +59,7 @@ body::before {
 .brand strong { font-size: 15px; letter-spacing: .23em; }
 .brand small { color: var(--faint); font-size: 8px; letter-spacing: .16em; }
 nav { display: grid; gap: 7px; }
-.nav-item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 13px; border-radius: 11px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600; transition: .2s ease; }
+.nav-item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 13px; border-radius: 11px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600; transition: color .28s cubic-bezier(.4,0,.2,1), background .28s cubic-bezier(.4,0,.2,1); }
 .nav-item:hover { color: var(--text); background: rgba(255,255,255,.045); }
 .nav-item.active { color: #fff; background: linear-gradient(100deg, rgba(124,108,255,.2), rgba(124,108,255,.06)); box-shadow: inset 0 0 0 1px rgba(150,138,255,.13); }
 .nav-icon { display: grid; place-items: center; width: 22px; height: 22px; font: 18px ui-monospace; color: var(--violet-2); }
@@ -90,7 +90,7 @@ main { margin-left: var(--sidebar-w); min-height: 100vh; }
 .clock strong { font: 600 15px ui-monospace; }
 .clock small { color: var(--faint); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
 .mobile-brand { display: none; }
-.content { width: min(1540px, 100%); margin: 0 auto; padding: 18px 24px 20px; background: var(--workspace); }
+.content { width: min(1540px, 100%); margin: 0 auto; padding: 18px 24px 20px; background: transparent; }
 
 .hero { min-height: 92px; display: flex; align-items: center; justify-content: space-between; position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
 .eyebrow, .section-kicker { margin: 0 0 10px; color: var(--violet-2); font: 700 9px ui-monospace; letter-spacing: .18em; }
@@ -134,7 +134,7 @@ main { margin-left: var(--sidebar-w); min-height: 100vh; }
 .legend .calls { background: var(--series-calls); border-radius: 2px; }
 .legend .fails { background: var(--series-fail); border-radius: 2px; }
 .project-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
-.project-card { min-width: 0; min-height: 198px; position: relative; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.022); overflow: hidden; transition: transform .2s,border-color .2s; }
+.project-card { min-width: 0; min-height: 198px; position: relative; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.022); overflow: hidden; transition: transform .3s cubic-bezier(.4,0,.2,1), border-color .3s cubic-bezier(.4,0,.2,1); }
 .project-card:hover { transform: translateY(-2px); border-color: var(--line-bright); }
 .project-card::after { content: ""; position: absolute; width: 100px; height: 100px; border-radius: 50%; background: var(--accent); opacity: .07; right: -50px; top: -45px; filter: blur(22px); }
 .project-top { display: flex; justify-content: space-between; align-items: flex-start; }
@@ -203,7 +203,8 @@ footer { display: flex; justify-content: space-between; padding: 16px 3px 0; bor
 /* ---------- board widgets (扩展面板) ---------- */
 .widgets-panel { margin-top: 0; border-top: 1px solid var(--line); }
 .widget-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(252px, 1fr)); gap: 12px; }
-.widget-card { min-width: 0; min-height: 118px; display: flex; flex-direction: column; gap: 11px; padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.022); }
+.widget-card { min-width: 0; min-height: 118px; display: flex; flex-direction: column; gap: 11px; padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.022); transition: border-color .3s cubic-bezier(.4,0,.2,1), transform .3s cubic-bezier(.4,0,.2,1), box-shadow .3s cubic-bezier(.4,0,.2,1); }
+.widget-card:hover { border-color: var(--line-bright); transform: translateY(-1px); }
 .widget-card.error { border-color: rgba(208,59,59,.4); }
 .widget-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .widget-head strong { display: block; font-size: 12px; }
@@ -274,6 +275,20 @@ body:not(.light) .flavor-paper .widget-row { border-bottom-color: rgba(226,216,1
 .flavor-sport .widget-empty { border-color: rgba(182,255,57,.2); color: rgba(232,245,208,.5); }
 .flavor-sport .widget-error { color: #ff9d7a; }
 .flavor-sport .widget-error::before { background: #ff9d7a; }
+.widget-card.flavor-discipline { --w-accent: #ff5c4d; background: #1a1012; border: 1px solid rgba(255,92,77,.24); border-radius: 4px; color: #f5ddd9; }
+.flavor-discipline .widget-head strong { color: #ffcfc9; }
+.flavor-discipline .widget-head small, .flavor-discipline .widget-stat span, .flavor-discipline .widget-kv span { color: rgba(245,221,217,.55); }
+.flavor-discipline .widget-chip { border-color: rgba(255,92,77,.3); border-radius: 3px; color: var(--w-accent); }
+.flavor-discipline .widget-stat strong, .flavor-discipline .widget-kv b { color: #ff8a7a; font-weight: 700; font-variant-numeric: tabular-nums; }
+.flavor-discipline .widget-stat small { color: rgba(245,221,217,.4); }
+.flavor-discipline .widget-row { border-bottom-color: rgba(255,92,77,.12); }
+.flavor-discipline .widget-row-info strong { color: #ffcfc9; }
+.flavor-discipline .widget-row-info small { color: rgba(245,221,217,.5); }
+.flavor-discipline .widget-row em { color: var(--w-accent); }
+.flavor-discipline .widget-text p { color: rgba(245,221,217,.7); }
+.flavor-discipline .widget-empty { border-color: rgba(255,92,77,.2); color: rgba(245,221,217,.45); }
+.flavor-discipline .widget-error { color: #ff5c4d; }
+.flavor-discipline .widget-error::before { background: #ff5c4d; }
 
 /* Light is the default surface (set by dashboard.js) and dark stays one click away.
    It is a selected set of steps, not an inverted flip: the series hue is re-picked
@@ -315,13 +330,12 @@ footer b.guard-bad { color: #d03b3b; }
   padding: 18px 20px 16px; border: 1px solid var(--line-bright); border-radius: 7px;
   background: color-mix(in srgb, var(--panel-solid) 94%, var(--p-accent) 6%);
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--p-accent) 72%, transparent);
-  transition: border-color .18s ease, box-shadow .18s ease;
+  transition: border-color .32s cubic-bezier(.4,0,.2,1), box-shadow .32s cubic-bezier(.4,0,.2,1), transform .32s cubic-bezier(.4,0,.2,1), opacity .25s ease;
 }
-.proj:hover { border-color: color-mix(in srgb, var(--p-accent) 38%, var(--line-bright)); }
+.proj:hover { border-color: color-mix(in srgb, var(--p-accent) 38%, var(--line-bright)); transform: translateY(-2px); }
 /* Drag-to-reorder: a grip handle starts a native drag; the dragged tile fades and
    the hovered tile shows an accent insertion edge. Motion is transform/opacity only
    so it stays smooth and is fully disabled under prefers-reduced-motion below. */
-.proj { transition: border-color .18s ease, box-shadow .18s ease, transform .2s var(--ease, ease), opacity .18s ease; }
 .proj.dragging { opacity: .45; transform: scale(.99); cursor: grabbing; }
 .proj.drag-over-before { box-shadow: inset 0 3px 0 0 var(--p-accent), inset 3px 0 0 color-mix(in srgb, var(--p-accent) 72%, transparent); }
 .proj.drag-over-after { box-shadow: inset 0 -3px 0 0 var(--p-accent), inset 3px 0 0 color-mix(in srgb, var(--p-accent) 72%, transparent); }
@@ -383,19 +397,86 @@ body:not(.light) .proj-paper { --p-accent: #e0a458 !important; }
 body:not(.light) .proj-paper .pv-chip, body:not(.light) .proj-paper .pd-stat, body:not(.light) .proj-paper .pd-widget { background: rgba(42,38,32,.9); border-color: rgba(226,216,196,.14); color: #f2ede2; }
 body:not(.light) .proj-paper .proj-tagline, body:not(.light) .proj-paper .pv-chip em, body:not(.light) .proj-paper .pd-stat span, body:not(.light) .proj-paper .pd-widget-head small { color: rgba(242,237,226,.62); }
 
-/* Watch: a moving track texture; lime remains identity, never health state. */
-.proj-sport { background: #0b0f0a; border-color: rgba(182,255,57,.24); color: #e8f5dc; box-shadow: inset 3px 0 0 #b6ff39; }
-.proj-sport::after { opacity: .22; background: repeating-linear-gradient(112deg, transparent 0, transparent 22px, rgba(182,255,57,.13) 23px, transparent 24px); background-size: 46px 46px; animation: sport-drift 8s linear infinite; }
-.proj-sport h2 { color: #b6ff39; }
-.proj-sport .pv-chip, .proj-sport .pd-stat, .proj-sport .pd-widget { background: rgba(19,26,17,.92); border-color: rgba(182,255,57,.17); color: #e8f5dc; }
-.proj-sport .pd-stat strong { color: #b6ff39; }
+/* Watch: a watch-dial surface — rounded case, radial dial texture, luminous lime
+   markers. Lime is identity (like lume on a bezel), never health state. */
+.proj-sport {
+  background: radial-gradient(ellipse 120% 90% at 50% 0%, #1a2216 0%, #0d120b 58%, #080c07 100%);
+  border-color: rgba(182,255,57,.28); color: #e8f5dc;
+  border-radius: 16px;
+  box-shadow: inset 3px 0 0 #b6ff39, inset 0 1px 0 rgba(182,255,57,.06), 0 8px 32px rgba(0,0,0,.35);
+}
+.proj-sport::after {
+  opacity: .3;
+  background:
+    repeating-conic-gradient(from 0deg at 50% 50%, transparent 0deg, transparent 5.5deg, rgba(182,255,57,.04) 6deg, transparent 6.5deg),
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(182,255,57,.07), transparent 60%);
+  animation: sport-lume 4s ease-in-out infinite alternate;
+}
+.proj-sport h2 { color: #b6ff39; text-shadow: 0 0 18px rgba(182,255,57,.35); letter-spacing: .02em; }
+.proj-sport .pv-chip, .proj-sport .pd-stat, .proj-sport .pd-widget {
+  background: rgba(16,23,14,.88); border-color: rgba(182,255,57,.2); color: #e8f5dc;
+  border-radius: 10px; box-shadow: inset 0 1px 0 rgba(182,255,57,.05);
+}
+.proj-sport .pd-stat strong { color: #b6ff39; text-shadow: 0 0 12px rgba(182,255,57,.3); }
 .proj-sport .proj-tagline, .proj-sport .pv-chip em, .proj-sport .pd-stat span, .proj-sport .pd-widget-head small { color: rgba(232,245,220,.6); }
 .proj-sport .proj-head { border-right-color: rgba(182,255,57,.18); }
+.proj-sport .proj-state b { color: #b6ff39; }
 .proj-sport .widget-body, .proj-sport .widget-kv span, .proj-sport .widget-stat span { color: rgba(232,245,220,.65); }
 .proj-sport .widget-kv b, .proj-sport .widget-stat strong, .proj-sport .widget-row-info strong { color: #e8f5dc; }
 
-/* Gateway: a restrained routing-grid motion that reads as infrastructure. */
-.proj-neutral::after { opacity: .3; background-image: linear-gradient(90deg, transparent 49%, color-mix(in srgb, var(--p-accent) 14%, transparent) 50%, transparent 51%); background-size: 68px 100%; animation: gateway-route 9s linear infinite; }
+/* Gateway: a control-room surface — cool blue-slate with circuit traces, node dots
+   at intersections, and violet as the "master bus" accent. */
+.proj-neutral {
+  background: linear-gradient(168deg, #141a2e 0%, #0f1322 52%, #0b0e1a 100%);
+  border-color: rgba(124,108,255,.22);
+  box-shadow: inset 3px 0 0 var(--p-accent), 0 6px 28px rgba(0,0,0,.3);
+}
+.proj-neutral::after {
+  opacity: .35;
+  background:
+    radial-gradient(circle 2px at 34px 34px, rgba(124,108,255,.28) 0%, transparent 100%),
+    radial-gradient(circle 2px at 102px 34px, rgba(124,108,255,.18) 0%, transparent 100%),
+    radial-gradient(circle 2px at 34px 102px, rgba(124,108,255,.18) 0%, transparent 100%),
+    radial-gradient(circle 2px at 102px 102px, rgba(124,108,255,.28) 0%, transparent 100%),
+    linear-gradient(90deg, transparent 33px, rgba(124,108,255,.07) 34px, transparent 35px),
+    linear-gradient(0deg, transparent 33px, rgba(124,108,255,.07) 34px, transparent 35px);
+  background-size: 136px 136px;
+  animation: gateway-pulse 6s ease-in-out infinite alternate;
+}
+.proj-neutral h2 { color: var(--violet-2); letter-spacing: .04em; }
+.proj-neutral .pv-chip, .proj-neutral .pd-stat, .proj-neutral .pd-widget {
+  background: rgba(18,22,40,.85); border-color: rgba(124,108,255,.16);
+  box-shadow: inset 0 1px 0 rgba(124,108,255,.04);
+}
+.proj-neutral .pd-stat strong { color: var(--violet-2); }
+.proj-neutral .proj-tagline, .proj-neutral .pv-chip em, .proj-neutral .pd-stat span, .proj-neutral .pd-widget-head small { color: rgba(169,157,255,.55); }
+.proj-neutral .proj-head { border-right-color: rgba(124,108,255,.16); }
+.proj-neutral .proj-state b { color: var(--violet-2); }
+
+/* 不做手机控 (discipline): a locked-focus surface — warm coral-red identity, sharp
+   geometric cuts, and a restrained crosshatch that reads as "boundary / fence". */
+.proj-discipline {
+  background: linear-gradient(155deg, #1f1214 0%, #170d0f 55%, #110a0b 100%);
+  border-color: rgba(255,92,77,.26); color: #f5ddd9;
+  border-radius: 4px;
+  box-shadow: inset 3px 0 0 #ff5c4d, 0 6px 24px rgba(0,0,0,.3);
+}
+.proj-discipline::after {
+  opacity: .25;
+  background:
+    repeating-linear-gradient(45deg, transparent 0, transparent 18px, rgba(255,92,77,.06) 19px, transparent 20px),
+    repeating-linear-gradient(-45deg, transparent 0, transparent 18px, rgba(255,92,77,.04) 19px, transparent 20px);
+  animation: discipline-breathe 5s ease-in-out infinite alternate;
+}
+.proj-discipline h2 { color: #ff5c4d; font-weight: 900; letter-spacing: .03em; }
+.proj-discipline .pv-chip, .proj-discipline .pd-stat, .proj-discipline .pd-widget {
+  background: rgba(28,16,18,.88); border-color: rgba(255,92,77,.18);
+  border-radius: 4px;
+}
+.proj-discipline .pd-stat strong { color: #ff8a7a; }
+.proj-discipline .proj-tagline, .proj-discipline .pv-chip em, .proj-discipline .pd-stat span, .proj-discipline .pd-widget-head small { color: rgba(245,221,217,.55); }
+.proj-discipline .proj-head { border-right-color: rgba(255,92,77,.18); }
+.proj-discipline .proj-state b { color: #ff5c4d; }
 .proj[data-tile-size="compact"] { min-height: 118px; padding-block: 12px; }
 .proj[data-tile-size="compact"] .proj-data { gap: 6px; }
 .proj[data-tile-size="compact"] .pd-stat, .proj[data-tile-size="compact"] .pd-widget { padding: 8px 10px; }
@@ -404,8 +485,9 @@ body:not(.light) .proj-paper .proj-tagline, body:not(.light) .proj-paper .pv-chi
 
 @keyframes state-breathe { 50% { opacity: .48; transform: scale(.78); } }
 @keyframes instrument-scan { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
-@keyframes sport-drift { to { background-position: 46px 0; } }
-@keyframes gateway-route { to { background-position: 68px 0; } }
+@keyframes sport-lume { from { opacity: .22; } to { opacity: .38; } }
+@keyframes gateway-pulse { from { opacity: .28; } to { opacity: .42; } }
+@keyframes discipline-breathe { from { opacity: .18; } to { opacity: .3; } }
 
 @container project-board (max-width: 760px) {
   .proj { grid-template-columns: 1fr; grid-template-areas: "head" "vitals" "data"; padding: 16px; }
