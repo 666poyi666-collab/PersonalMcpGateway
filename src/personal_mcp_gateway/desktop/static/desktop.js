@@ -47,6 +47,7 @@ const dom = {
   compactCalls: el("compactCalls"),
   compactRate: el("compactRate"),
   offlineScreen: el("offlineScreen"),
+  offlineTitle: el("offlineTitle"),
   offlineHint: el("offlineHint"),
   repairHint: el("repairHint"),
   sbDot: el("sbDot"),
@@ -125,6 +126,7 @@ const CANVAS_PADDING = 18;
 const AUTO_SCROLL_MARGIN = 58;
 const AUTO_SCROLL_MAX = 20;
 const RECOVERY_BANNER_FAILURES = 3;
+const FAILURE_DISPLAY_CAP = 999;
 const SNAP_DISTANCE = 10;
 const DEFAULT_TILE_LAYOUT = {
   foxlink: { x: 0, y: 0, w: 280, h: 440, order: 0 },
@@ -133,6 +135,24 @@ const DEFAULT_TILE_LAYOUT = {
   personal: { x: 0, y: 450, w: 720, h: 550, order: 3 },
   bzsjk: { x: 730, y: 450, w: 270, h: 550, order: 4 },
 };
+const OFFLINE_MATRIX_TARGETS = SECTION_ORDER.map((id) => {
+  const style = PROJECT_STYLE[id];
+  return {
+    id,
+    name: style.display,
+    description: style.tagline,
+    state: "unknown",
+    mcp: null,
+    tunnel: null,
+    sync: {
+      compliance: "unknown",
+      dataPlane: "unknown",
+      pcOff: { readAvailable: false, writeAvailable: false, continuedSync: false },
+      snapshotState: "unknown",
+      observation: { result: "unknown" },
+    },
+  };
+});
 let projectLayout = {};
 let projectLayoutVersion = PROJECT_LAYOUT_VERSION;
 let layoutMode = false;
@@ -244,13 +264,32 @@ function render(payload) {
     dom.body.classList.add("disconnected");
     dom.body.classList.remove("recovering");
     dom.offlineScreen.hidden = num(payload.consecutiveFailures) < RECOVERY_BANNER_FAILURES;
-    dom.offlineHint.textContent = payload.consecutiveFailures
-      ? `连续 ${payload.consecutiveFailures} 次重试未成功 · ${clockOf(payload.fetchedAt)}`
+    dom.offlineTitle.textContent = "本机网关暂不可用";
+    const failures = Math.min(FAILURE_DISPLAY_CAP, Math.max(0, num(payload.consecutiveFailures)));
+    const failureText = failures >= FAILURE_DISPLAY_CAP ? `${FAILURE_DISPLAY_CAP}+` : failures;
+    dom.offlineHint.textContent = failures
+      ? `已连续重试 ${failureText} 次 · ${clockOf(payload.fetchedAt)}`
       : "";
     setStatusChrome("disconnected", "—", "网关未连接");
     dom.sbSync.textContent = clockOf(payload.fetchedAt);
     dom.sbProbe.textContent = "—";
     renderGuard(null);
+    if (!sectionsRendered) {
+      renderSections({
+        refreshIntervalSeconds: POLL_MS / 1000,
+        summary: {
+          total: OFFLINE_MATRIX_TARGETS.length,
+          online: 0,
+          degraded: 0,
+          offline: OFFLINE_MATRIX_TARGETS.length,
+        },
+        targets: OFFLINE_MATRIX_TARGETS,
+        widgets: [],
+        activity: { hourly: [], recent: [] },
+        events: [],
+        fleet: {},
+      });
+    }
     lastDataKey = "";
     return;
   }
@@ -261,7 +300,10 @@ function render(payload) {
   dom.body.classList.toggle("recovering", recoveryVisible);
   dom.offlineScreen.hidden = !recoveryVisible;
   if (recoveryVisible) {
-    dom.offlineHint.textContent = `保留上次有效数据 · 第 ${num(payload.consecutiveFailures)} 次后台重试`;
+    dom.offlineTitle.textContent = "实时连接中断，矩阵仍可查看";
+    const failures = Math.min(FAILURE_DISPLAY_CAP, Math.max(0, num(payload.consecutiveFailures)));
+    const failureText = failures >= FAILURE_DISPLAY_CAP ? `${FAILURE_DISPLAY_CAP}+` : failures;
+    dom.offlineHint.textContent = `显示上次有效数据 · 后台重试 ${failureText} 次`;
   }
 
   const data = payload.data;
@@ -1917,40 +1959,45 @@ dom.plot.addEventListener("mouseleave", () => {
 
 /* ---------- one-click repair ---------- */
 
-let repairArmTimer = null;
+let repairInFlight = false;
 
 function disarmRepair() {
-  if (repairArmTimer) window.clearTimeout(repairArmTimer);
-  repairArmTimer = null;
-  dom.btnRepair.classList.remove("arming");
+  repairInFlight = false;
+  dom.btnRepair.disabled = false;
   dom.btnRepair.title = "一键修复全部服务";
-  dom.btnRepairOffline.classList.remove("arming");
+  dom.btnRepairOffline.disabled = false;
   dom.btnRepairOffline.textContent = "一键修复全部服务";
 }
 
 async function requestRepair(button) {
   const bridge = api();
-  if (!bridge || !bridge.repair_fleet) return;
-  // First click arms, second click within 5s fires: no dialogs in a tray app.
-  if (!button.classList.contains("arming")) {
-    disarmRepair();
-    button.classList.add("arming");
-    if (button === dom.btnRepairOffline) button.textContent = "再点一次确认修复";
-    button.title = "再点一次确认修复";
-    repairArmTimer = window.setTimeout(disarmRepair, 5000);
-    return;
-  }
-  disarmRepair();
+  if (!bridge || !bridge.repair_fleet || repairInFlight) return;
+  repairInFlight = true;
+  dom.btnRepair.disabled = true;
+  dom.btnRepairOffline.disabled = true;
+  dom.btnRepair.title = "修复请求处理中";
+  if (button === dom.btnRepairOffline) button.textContent = "正在提交修复";
   let result = null;
   try {
-    result = await bridge.repair_fleet();
+    result = await Promise.race([
+      bridge.repair_fleet(),
+      new Promise((resolve) => {
+        window.setTimeout(
+          () => resolve({ ok: false, message: "修复请求超时，请稍后查看服务状态" }),
+          8000,
+        );
+      }),
+    ]);
   } catch (error) {
     result = { ok: false, message: "修复请求失败" };
   }
   const message = result && result.message ? result.message : "修复请求已发送";
   dom.repairHint.textContent = message;
   dom.sbState.textContent = message;
-  window.setTimeout(() => pull(true), 3000);
+  window.setTimeout(() => {
+    disarmRepair();
+    pull(true);
+  }, 3000);
 }
 
 /* ---------- controls ---------- */

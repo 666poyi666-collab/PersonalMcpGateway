@@ -13,10 +13,10 @@ import webbrowser
 from typing import Any
 
 from personal_mcp_gateway.desktop.client import (
-    STATUS_DISCONNECTED,
     DesktopSnapshot,
     GatewayClient,
     admin_base_url,
+    snapshot_cache_path,
     tray_tooltip,
 )
 from personal_mcp_gateway.desktop.icons import build_tray_image
@@ -78,15 +78,11 @@ class DesktopController:
     """Owns the polling loop, the window handle and the tray icon."""
 
     def __init__(self, client: GatewayClient | None = None) -> None:
-        self.client = client or GatewayClient()
+        self.client = client or GatewayClient(cache_path=snapshot_cache_path())
         self.state: WindowState = load_state()
         self.window: Any | None = None
         self.icon: Any | None = None
-        self._snapshot = DesktopSnapshot(
-            connected=False,
-            status=STATUS_DISCONNECTED,
-            fetched_at="",
-        )
+        self._snapshot = self.client.initial_snapshot()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()

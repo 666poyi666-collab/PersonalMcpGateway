@@ -16,14 +16,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import tempfile
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 WATCHDOG_SERVICE = "PoyiFleetWatchdog"
 
 _TRIGGER_DIR_ENV = "POYI_FLEET_TRIGGER_DIR"
 _DEFAULT_TRIGGER_DIR = r"C:\ProgramData\Poyi\FleetWatchdog\triggers"
+_SOURCE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_REPAIR_COOLDOWN_SECONDS = 60
+_REPAIR_LOCK = threading.Lock()
 
 _STATE_LABELS = {
     1: "stopped",
@@ -102,19 +109,87 @@ def repair_supported() -> bool:
     return trigger_dir().is_dir()
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            json.dump(payload, temporary, separators=(",", ":"))
+            temporary.flush()
+            temporary_path = Path(temporary.name)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _lease_is_current(path: Path, now: datetime) -> bool:
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return False
+        requested_at = datetime.fromisoformat(str(cast(dict[str, Any], raw)["requestedAt"]))
+    except (KeyError, OSError, ValueError):
+        return False
+    if requested_at.tzinfo is None:
+        return False
+    age = (now - requested_at.astimezone(UTC)).total_seconds()
+    return 0 <= age < _REPAIR_COOLDOWN_SECONDS
+
+
+def _trigger_is_current(path: Path, source: str, now: datetime) -> bool:
+    try:
+        if path.is_symlink() or path.stat().st_size > 4096:
+            return False
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return False
+        payload = cast(dict[str, Any], raw)
+        if set(payload) != {"schemaVersion", "requestId", "requestedAt", "source"}:
+            return False
+        if payload["schemaVersion"] != 1 or payload["source"] != source:
+            return False
+        uuid.UUID(str(payload["requestId"]))
+        requested_at = datetime.fromisoformat(str(payload["requestedAt"]))
+    except (KeyError, OSError, ValueError):
+        return False
+    if requested_at.tzinfo is None:
+        return False
+    age = (now - requested_at.astimezone(UTC)).total_seconds()
+    return -60 <= age <= 600
+
+
 def request_repair(source: str) -> Path:
-    """Drop a repair request for the watchdog; returns the file written.
+    """Drop or coalesce one repair request for the watchdog.
 
     Raises ``OSError`` when the trigger directory is absent or not writable, so
     callers can surface a useful message instead of pretending it worked.
     """
+    if _SOURCE_PATTERN.fullmatch(source) is None:
+        raise ValueError("invalid repair source")
     directory = trigger_dir()
     if not directory.is_dir():
         raise FileNotFoundError(f"trigger directory missing: {directory}")
-    payload = {
-        "requestedAt": datetime.now(UTC).isoformat(),
-        "source": source,
-    }
-    path = directory / f"repair-{uuid.uuid4().hex}.json"
-    path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    path = directory / f"repair-{source}.json"
+    lease = directory / f".repair-{source}.lease.json"
+    now = datetime.now(UTC)
+    with _REPAIR_LOCK:
+        if _trigger_is_current(path, source, now):
+            return path
+        if not path.exists() and _lease_is_current(lease, now):
+            return path
+        payload = {
+            "schemaVersion": 1,
+            "requestId": str(uuid.uuid4()),
+            "requestedAt": now.isoformat(),
+            "source": source,
+        }
+        _atomic_write_json(path, payload)
+        _atomic_write_json(lease, payload)
     return path

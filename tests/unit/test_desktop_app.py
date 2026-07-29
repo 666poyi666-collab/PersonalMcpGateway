@@ -41,6 +41,13 @@ class FakeClient:
             return self._snapshots.pop(0)
         return DesktopSnapshot(connected=True, status=STATUS_ONLINE, fetched_at="t")
 
+    def initial_snapshot(self) -> DesktopSnapshot:
+        return DesktopSnapshot(
+            connected=False,
+            status=STATUS_DISCONNECTED,
+            fetched_at="",
+        )
+
 
 class FakeWindow:
     def __init__(self) -> None:
@@ -89,6 +96,24 @@ def _isolated_state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 def _controller(client: FakeClient | None = None) -> DesktopController:
     return DesktopController(client=client or FakeClient())  # pyright: ignore[reportArgumentType]
+
+
+def test_controller_exposes_persisted_snapshot_before_the_first_poll(tmp_path: Path) -> None:
+    from personal_mcp_gateway.desktop.client import GatewayClient
+
+    cache = tmp_path / "last-good.json"
+    cache.write_text(
+        '{"schemaVersion":1,"savedAt":"2026-07-29T00:00:00+00:00",'
+        '"data":{"summary":{"total":1,"online":1,"degraded":0,"offline":0},'
+        '"targets":[],"widgets":[],"errors":[],"events":[]}}',
+        encoding="utf-8",
+    )
+
+    controller = DesktopController(client=GatewayClient(cache_path=cache))
+
+    assert controller.current().connected is True
+    assert controller.current().stale is True
+    assert controller.current().data is not None
 
 
 def test_apply_updates_the_snapshot_and_the_tray_icon() -> None:
