@@ -149,6 +149,14 @@ describe("public staging boundary", () => {
     const body = await response.json() as { ready: boolean; dependencies: { authorities: { verified: number; required: number } } };
     expect(body.ready).toBe(false);
     expect(body.dependencies.authorities).toMatchObject({ verified: 0, required: 4 });
+    expect(body.dependencies.authorities).toMatchObject({
+      products: [
+        { productId: "identity-focus", state: "missing", issue: "authority_not_configured" },
+        { productId: "journal", state: "missing", issue: "authority_not_configured" },
+        { productId: "watch", state: "missing", issue: "authority_not_configured" },
+        { productId: "suixin", state: "missing", issue: "authority_not_configured" },
+      ],
+    });
   });
 
   it("reports unavailable configured OAuth dependencies as 503 instead of throwing", async () => {

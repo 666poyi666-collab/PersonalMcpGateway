@@ -712,6 +712,29 @@ async function ready(env: Env): Promise<Response> {
   }
   const oauthReady = Object.values(oauth).every((value) => value === true);
   const authorityReady = authority.verifiedCount === PRODUCTS.length && authority.operationalCount === PRODUCTS.length;
+  const authorityProducts = Array.isArray(authority.summary.products)
+    ? authority.summary.products.flatMap((value): Array<{
+      productId: ProductId;
+      state: ProductSummary["authorityVerification"]["state"];
+      issue: AuthorityIssue | null;
+    }> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const product = value as Record<string, unknown>;
+      const verification = product.authorityVerification;
+      if (!isProductId(product.productId)
+        || !verification
+        || typeof verification !== "object"
+        || Array.isArray(verification)) return [];
+      const record = verification as Record<string, unknown>;
+      if (!["verified", "rejected", "missing"].includes(String(record.state))) return [];
+      if (!(record.issue === null || typeof record.issue === "string")) return [];
+      return [{
+        productId: product.productId,
+        state: record.state as ProductSummary["authorityVerification"]["state"],
+        issue: record.issue as AuthorityIssue | null,
+      }];
+    })
+    : [];
   return json({
     ready: oauthReady && authorityReady,
     environment: env.ENVIRONMENT,
@@ -724,6 +747,7 @@ async function ready(env: Env): Promise<Response> {
         operational: authority.operationalCount,
         required: PRODUCTS.length,
         probeError: authorityProbeError,
+        products: authorityProducts,
       },
     },
   }, oauthReady && authorityReady ? 200 : 503);
