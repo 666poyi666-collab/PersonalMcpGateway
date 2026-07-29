@@ -12,7 +12,10 @@ type AuthorityIssue =
   | "authority_not_configured"
   | "authority_fetch_failed"
   | "authority_source_binding_missing"
-  | "authority_source_capability_invalid"
+  | "authority_source_capability_missing"
+  | "authority_source_capability_not_string"
+  | "authority_source_capability_length_invalid"
+  | "authority_source_capability_characters_invalid"
   | "authority_source_unauthorized"
   | "authority_source_forbidden"
   | "authority_source_route_missing"
@@ -288,7 +291,10 @@ function authoritySourceIssue(response: BoundedHttpResponse): AuthorityIssue {
     return "authority_fetch_failed";
   }
   if (record.sourceIssue === "binding_missing" && record.sourceStatus === null) return "authority_source_binding_missing";
-  if (record.sourceIssue === "capability_invalid" && record.sourceStatus === null) return "authority_source_capability_invalid";
+  if (record.sourceIssue === "capability_missing" && record.sourceStatus === null) return "authority_source_capability_missing";
+  if (record.sourceIssue === "capability_not_string" && record.sourceStatus === null) return "authority_source_capability_not_string";
+  if (record.sourceIssue === "capability_length_invalid" && record.sourceStatus === null) return "authority_source_capability_length_invalid";
+  if (record.sourceIssue === "capability_characters_invalid" && record.sourceStatus === null) return "authority_source_capability_characters_invalid";
   if (record.sourceIssue === "invalid_response" && record.sourceStatus === 200) return "authority_source_contract_invalid";
   if (record.sourceIssue === "transport_failed" && record.sourceStatus === null) return "authority_fetch_failed";
   if ((record.sourceIssue === "http_rejected" || record.sourceIssue === "redirect_rejected") && Number.isInteger(record.sourceStatus)) {

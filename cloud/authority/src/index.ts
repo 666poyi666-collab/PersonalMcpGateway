@@ -70,7 +70,10 @@ interface SignerCheckpointV1 {
 
 type ObservationSourceIssue =
   | "binding_missing"
-  | "capability_invalid"
+  | "capability_missing"
+  | "capability_not_string"
+  | "capability_length_invalid"
+  | "capability_characters_invalid"
   | "redirect_rejected"
   | "http_rejected"
   | "invalid_response"
@@ -259,6 +262,14 @@ function validCapability(value: string | undefined): value is string {
   return typeof value === "string" && value.length >= 32 && value.length <= 512 && /^[A-Za-z0-9._~-]+$/.test(value);
 }
 
+function capabilityIssue(value: unknown): ObservationSourceIssue | null {
+  if (value === undefined || value === null) return "capability_missing";
+  if (typeof value !== "string") return "capability_not_string";
+  if (value.length < 32 || value.length > 512) return "capability_length_invalid";
+  if (!/^[A-Za-z0-9._~-]+$/.test(value)) return "capability_characters_invalid";
+  return null;
+}
+
 async function readBoundedResponse(response: Response): Promise<unknown | null> {
   const mediaType = (response.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase();
   if (!response.ok || mediaType !== OBSERVATION_MEDIA_TYPE) {
@@ -310,9 +321,9 @@ async function fetchObservation(
 ): Promise<ObservationFetchResult> {
   const source = sourceFor(env, productId);
   if (!source.fetcher) return { observation: null, issue: "binding_missing", status: null };
-  if (!validCapability(source.capability)) {
-    return { observation: null, issue: "capability_invalid", status: null };
-  }
+  const invalidCapability = capabilityIssue(source.capability);
+  if (invalidCapability) return { observation: null, issue: invalidCapability, status: null };
+  const capability = source.capability as string;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
   try {
@@ -322,7 +333,7 @@ async function fetchObservation(
       signal: controller.signal,
       headers: {
         accept: OBSERVATION_MEDIA_TYPE,
-        authorization: `Capability ${source.capability}`,
+        authorization: `Capability ${capability}`,
         "x-poyi-authority-audience": expectedAudience,
       },
     });

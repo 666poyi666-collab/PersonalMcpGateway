@@ -455,7 +455,7 @@ describe("signed staging authority verification", () => {
       expect(missingCapability.status).toBe(503);
       expect(await missingCapability.json()).toEqual({
         error: "authority_source_unavailable",
-        sourceIssue: "capability_invalid",
+        sourceIssue: "capability_missing",
         sourceStatus: null,
       });
     } finally {
