@@ -165,6 +165,15 @@ let projectViewportHeight = 0;
 let projectResizeObserver = null;
 let sectionsRendered = false;
 let windowResizeTimer = 0;
+let projectResizeFrame = 0;
+
+// Renderer-owned animations are deliberately short and compositor-only.  The
+// window host can dispatch dozens of resize observations per second, so motion
+// is suppressed while a window/tile resize is active and restarted afterwards.
+const renderAnimations = new WeakMap();
+const exitAnimations = new WeakMap();
+const exitTimers = new WeakMap();
+const densityTimers = new WeakMap();
 
 /* ---------- helpers ---------- */
 
@@ -221,8 +230,278 @@ function niceMax(value) {
   return 10 * magnitude;
 }
 
+function renderKey(node, key) {
+  if (node && node.nodeType === Node.ELEMENT_NODE) {
+    node.dataset.renderKey = String(key);
+  }
+  return node;
+}
+
+function nodeRenderKey(node) {
+  return node && node.nodeType === Node.ELEMENT_NODE
+    ? node.getAttribute("data-render-key")
+    : null;
+}
+
+function sameNodeShape(current, desired) {
+  if (!current || !desired || current.nodeType !== desired.nodeType) return false;
+  if (current.nodeType !== Node.ELEMENT_NODE) return true;
+  return current.namespaceURI === desired.namespaceURI && current.localName === desired.localName;
+}
+
+function renderMotionAllowed() {
+  if (!dom.body || dom.body.classList.contains("window-resizing") || activeTileInteraction) return false;
+  return !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function playRenderAnimation(node, keyframes, options) {
+  if (!node || typeof node.animate !== "function" || !renderMotionAllowed()) return null;
+  const previous = renderAnimations.get(node);
+  if (previous) previous.cancel();
+  const animation = node.animate(keyframes, options);
+  renderAnimations.set(node, animation);
+  animation.finished.catch(() => {}).finally(() => {
+    if (renderAnimations.get(node) === animation) renderAnimations.delete(node);
+  });
+  return animation;
+}
+
+function animateRenderEnter(node) {
+  playRenderAnimation(
+    node,
+    [
+      { opacity: 0, transform: "translate3d(0, 7px, 0) scale(.985)" },
+      { opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" },
+    ],
+    { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" },
+  );
+}
+
+function animateRenderUpdate(node) {
+  if (!node || node.childElementCount > 0) return;
+  playRenderAnimation(
+    node,
+    [
+      { opacity: 0.42, transform: "translate3d(0, 3px, 0)" },
+      { opacity: 1, transform: "translate3d(0, 0, 0)" },
+    ],
+    { duration: 210, easing: "cubic-bezier(.2,.8,.2,1)" },
+  );
+}
+
+function removeWithMotion(node, onRemoved = null) {
+  const pending = exitAnimations.get(node);
+  if (pending) {
+    pending.cancel();
+    exitAnimations.delete(node);
+  }
+  const pendingTimer = exitTimers.get(node);
+  if (pendingTimer) {
+    window.clearTimeout(pendingTimer);
+    exitTimers.delete(node);
+  }
+  if (!node.isConnected || !renderMotionAllowed() || typeof node.animate !== "function") {
+    node.remove();
+    if (onRemoved) onRemoved();
+    return;
+  }
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    node.dataset.renderExiting = "true";
+    node.setAttribute("aria-hidden", "true");
+    node.style.pointerEvents = "none";
+  }
+  const animation = node.animate(
+    [
+      { opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" },
+      { opacity: 0, transform: "translate3d(0, -5px, 0) scale(.985)" },
+    ],
+    { duration: 170, easing: "cubic-bezier(.4,0,1,1)", fill: "forwards" },
+  );
+  exitAnimations.set(node, animation);
+  const finish = () => {
+    if (exitAnimations.get(node) !== animation) return;
+    exitAnimations.delete(node);
+    const timer = exitTimers.get(node);
+    if (timer) window.clearTimeout(timer);
+    exitTimers.delete(node);
+    node.remove();
+    if (onRemoved) onRemoved();
+  };
+  // Background/minimized WebViews can throttle animation timelines while JS
+  // timers keep advancing.  The fallback prevents exited rows accumulating.
+  exitTimers.set(node, window.setTimeout(finish, 520));
+  animation.finished.catch(() => {}).finally(finish);
+}
+
+function syncAttributes(current, desired) {
+  const previousHeight = current.style ? current.style.height : "";
+  const previousStrokeOffset = current.style ? current.style.strokeDashoffset : "";
+  const previousTrafficHeight = current.style ? current.style.getPropertyValue("--gw-bar-height") : "";
+  let changed = false;
+  let detailedMotion = false;
+  for (const attribute of [...current.attributes]) {
+    if (!desired.hasAttribute(attribute.name)) {
+      current.removeAttribute(attribute.name);
+      changed = true;
+    }
+  }
+  for (const attribute of [...desired.attributes]) {
+    if (current.getAttribute(attribute.name) !== attribute.value) {
+      current.setAttribute(attribute.name, attribute.value);
+      changed = true;
+    }
+  }
+  if (current.matches(".seg") && previousHeight !== current.style.height) {
+    detailedMotion = true;
+    playRenderAnimation(
+      current,
+      [{ height: previousHeight || "0px" }, { height: current.style.height || "0px" }],
+      { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" },
+    );
+  } else if (current.matches(".wi-score-value")
+      && previousStrokeOffset !== current.style.strokeDashoffset) {
+    detailedMotion = true;
+    playRenderAnimation(
+      current,
+      [
+        { strokeDashoffset: previousStrokeOffset || "100" },
+        { strokeDashoffset: current.style.strokeDashoffset || "100" },
+      ],
+      { duration: 460, easing: "cubic-bezier(.2,.8,.2,1)" },
+    );
+  } else if (current.matches(".gw-traffic-bar")
+      && previousTrafficHeight !== current.style.getPropertyValue("--gw-bar-height")) {
+    detailedMotion = true;
+    playRenderAnimation(
+      current,
+      [
+        { opacity: 0.55, transform: "scaleY(.72)", transformOrigin: "50% 100%" },
+        { opacity: 1, transform: "scaleY(1)", transformOrigin: "50% 100%" },
+      ],
+      { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)" },
+    );
+  }
+  if (!detailedMotion && changed
+      && (current.matches(".dot, .seg, .gw-traffic-bar") || current.childElementCount === 0)) {
+    animateRenderUpdate(current);
+  }
+}
+
+function patchRenderNode(current, desired) {
+  if (current.nodeType === Node.TEXT_NODE) {
+    if (current.data !== desired.data) {
+      current.data = desired.data;
+      animateRenderUpdate(current.parentElement);
+    }
+    return current;
+  }
+  if (current.nodeType !== Node.ELEMENT_NODE) return current;
+  const exiting = exitAnimations.get(current);
+  if (exiting) {
+    exiting.cancel();
+    exitAnimations.delete(current);
+    const exitTimer = exitTimers.get(current);
+    if (exitTimer) window.clearTimeout(exitTimer);
+    exitTimers.delete(current);
+    delete current.dataset.renderExiting;
+    current.removeAttribute("aria-hidden");
+    current.style.pointerEvents = "";
+  }
+  syncAttributes(current, desired);
+  reconcileRenderChildren(current, [...desired.childNodes]);
+  return current;
+}
+
+function shouldFlipChildren(container) {
+  return container.matches(
+    ".jr-ledger, .gw-service-rows, .gw-event-list, .proj-tail, .widget-rows, #eventList, #widgetGrid, #compactList",
+  );
+}
+
+function reconcileRenderChildren(container, desiredChildren, { animateNew = true, animateExit = true } = {}) {
+  const existing = [...container.childNodes];
+  const keyed = new Map();
+  for (const child of existing) {
+    const key = nodeRenderKey(child);
+    if (key == null) continue;
+    if (!keyed.has(key)) keyed.set(key, []);
+    keyed.get(key).push(child);
+  }
+  const used = new Set();
+  const resolved = [];
+  const oldRects = new Map();
+  const flip = renderMotionAllowed() && shouldFlipChildren(container) && container.isConnected;
+  if (flip) {
+    for (const child of existing) {
+      if (nodeRenderKey(child) != null && child.nodeType === Node.ELEMENT_NODE) {
+        oldRects.set(child, child.getBoundingClientRect());
+      }
+    }
+  }
+
+  for (let index = 0; index < desiredChildren.length; index += 1) {
+    const desired = desiredChildren[index];
+    const key = nodeRenderKey(desired);
+    let current = key == null ? null : (keyed.get(key) || []).find((candidate) => (
+      !used.has(candidate) && sameNodeShape(candidate, desired)
+    ));
+    if (!current) {
+      const indexed = existing[index];
+      if (key == null && indexed && !used.has(indexed) && nodeRenderKey(indexed) == null
+          && sameNodeShape(indexed, desired)) {
+        current = indexed;
+      }
+    }
+    if (!current && key == null) {
+      current = existing.find((candidate) => (
+        !used.has(candidate) && nodeRenderKey(candidate) == null && sameNodeShape(candidate, desired)
+      ));
+    }
+    if (current) {
+      used.add(current);
+      resolved.push(patchRenderNode(current, desired));
+    } else {
+      resolved.push(desired);
+    }
+  }
+
+  let cursor = container.firstChild;
+  for (let index = 0; index < resolved.length; index += 1) {
+    const child = resolved[index];
+    const isNew = !used.has(child);
+    if (child !== cursor) container.insertBefore(child, cursor);
+    cursor = child.nextSibling;
+    if (isNew && animateNew && container.isConnected) animateRenderEnter(child);
+  }
+
+  for (const child of existing) {
+    if (used.has(child)) continue;
+    if (animateExit) removeWithMotion(child);
+    else child.remove();
+  }
+
+  if (flip) {
+    for (const child of resolved) {
+      const first = oldRects.get(child);
+      if (!first || child.nodeType !== Node.ELEMENT_NODE) continue;
+      const last = child.getBoundingClientRect();
+      const dx = first.left - last.left;
+      const dy = first.top - last.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      playRenderAnimation(
+        child,
+        [
+          { transform: `translate3d(${dx}px, ${dy}px, 0)` },
+          { transform: "translate3d(0, 0, 0)" },
+        ],
+        { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)" },
+      );
+    }
+  }
+}
+
 function replace(node, children) {
-  node.replaceChildren(...children);
+  reconcileRenderChildren(node, children);
 }
 
 function make(tag, className, text) {
@@ -230,6 +509,14 @@ function make(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function setRenderText(node, value) {
+  if (!node) return;
+  const next = value == null ? "" : String(value);
+  if (node.textContent === next) return;
+  node.textContent = next;
+  animateRenderUpdate(node);
 }
 
 /* ---------- bridge ---------- */
@@ -264,15 +551,15 @@ function render(payload) {
     dom.body.classList.add("disconnected");
     dom.body.classList.remove("recovering");
     dom.offlineScreen.hidden = num(payload.consecutiveFailures) < RECOVERY_BANNER_FAILURES;
-    dom.offlineTitle.textContent = "本机网关暂不可用";
+    setRenderText(dom.offlineTitle, "本机网关暂不可用");
     const failures = Math.min(FAILURE_DISPLAY_CAP, Math.max(0, num(payload.consecutiveFailures)));
     const failureText = failures >= FAILURE_DISPLAY_CAP ? `${FAILURE_DISPLAY_CAP}+` : failures;
-    dom.offlineHint.textContent = failures
+    setRenderText(dom.offlineHint, failures
       ? `已连续重试 ${failureText} 次 · ${clockOf(payload.fetchedAt)}`
-      : "";
+      : "");
     setStatusChrome("disconnected", "—", "网关未连接");
-    dom.sbSync.textContent = clockOf(payload.fetchedAt);
-    dom.sbProbe.textContent = "—";
+    setRenderText(dom.sbSync, clockOf(payload.fetchedAt));
+    setRenderText(dom.sbProbe, "—");
     renderGuard(null);
     if (!sectionsRendered) {
       renderSections({
@@ -300,10 +587,10 @@ function render(payload) {
   dom.body.classList.toggle("recovering", recoveryVisible);
   dom.offlineScreen.hidden = !recoveryVisible;
   if (recoveryVisible) {
-    dom.offlineTitle.textContent = "实时连接中断，矩阵仍可查看";
+    setRenderText(dom.offlineTitle, "实时连接中断，矩阵仍可查看");
     const failures = Math.min(FAILURE_DISPLAY_CAP, Math.max(0, num(payload.consecutiveFailures)));
     const failureText = failures >= FAILURE_DISPLAY_CAP ? `${FAILURE_DISPLAY_CAP}+` : failures;
-    dom.offlineHint.textContent = `显示上次有效数据 · 后台重试 ${failureText} 次`;
+    setRenderText(dom.offlineHint, `显示上次有效数据 · 后台重试 ${failureText} 次`);
   }
 
   const data = payload.data;
@@ -317,9 +604,9 @@ function render(payload) {
     `${online}/${total}`,
     recoveryVisible ? "同步恢复中" : (payload.statusLabel || ""),
   );
-  if (recoveryVisible) dom.sbState.textContent = "RECOVERING";
-  dom.sbSync.textContent = `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`;
-  dom.sbProbe.textContent = `探测 ${num(data.probeDurationMs)}ms`;
+  if (recoveryVisible) setRenderText(dom.sbState, "RECOVERING");
+  setRenderText(dom.sbSync, `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`);
+  setRenderText(dom.sbProbe, `探测 ${num(data.probeDurationMs)}ms`);
   renderGuard(data.fleet || null);
 
   // Skip the DOM rebuild when nothing but timestamps changed — the board polls
@@ -349,37 +636,37 @@ function setStatusChrome(status, count, label) {
   dom.tbChipDot.dataset.status = status;
   dom.sbDot.dataset.status = status;
   if (dom.fsDot) dom.fsDot.dataset.status = status;
-  dom.tbCount.textContent = count;
-  dom.tbLabel.textContent = label;
-  dom.sbState.textContent = status === "disconnected" ? "DISCONNECTED" : "CONNECTED";
+  setRenderText(dom.tbCount, count);
+  setRenderText(dom.tbLabel, label);
+  setRenderText(dom.sbState, status === "disconnected" ? "DISCONNECTED" : "CONNECTED");
 }
 
 function renderGuard(fleet) {
   const state = fleet && fleet.watchdog ? fleet.watchdog.state : null;
   if (state === "running") {
-    dom.sbGuard.textContent = "看护在线";
+    setRenderText(dom.sbGuard, "看护在线");
     dom.sbGuard.dataset.state = "ok";
   } else if (state) {
-    dom.sbGuard.textContent = state === "missing" ? "看护未安装" : "看护离线";
+    setRenderText(dom.sbGuard, state === "missing" ? "看护未安装" : "看护离线");
     dom.sbGuard.dataset.state = "bad";
   } else {
-    dom.sbGuard.textContent = "看护 —";
+    setRenderText(dom.sbGuard, "看护 —");
     dom.sbGuard.dataset.state = "";
   }
 }
 
 function renderStrip(payload, online, total, gateway, summary, data) {
-  dom.heroValue.textContent = `${online}/${total}`;
+  setRenderText(dom.heroValue, `${online}/${total}`);
   const titles = {
     online: "所有系统正常运行",
     degraded: "部分链路已降级",
     offline: "存在离线项目",
   };
-  dom.heroTitle.textContent = titles[payload.status] || "状态未知";
-  dom.tileCalls.textContent = compact(summary.calls24h);
-  dom.tileRate.textContent = `${num(summary.successRate, 100).toFixed(1)}%`;
-  dom.tileUptime.textContent = duration(gateway.uptimeSeconds);
-  dom.tileProbe.textContent = `${num(data.probeDurationMs)}ms`;
+  setRenderText(dom.heroTitle, titles[payload.status] || "状态未知");
+  setRenderText(dom.tileCalls, compact(summary.calls24h));
+  setRenderText(dom.tileRate, `${num(summary.successRate, 100).toFixed(1)}%`);
+  setRenderText(dom.tileUptime, duration(gateway.uptimeSeconds));
+  setRenderText(dom.tileProbe, `${num(data.probeDurationMs)}ms`);
 }
 
 /* ---------- project sections ---------- */
@@ -504,6 +791,7 @@ function gatewayLatestSignal(data) {
   const remainingEvents = events.slice(event && !error ? 1 : 0);
   for (const item of remainingErrors) {
     entries.push({
+      key: `error:${item.id || item.createdAt || item.created_at || item.code || item.error || entries.length}`,
       status: "offline",
       title: String(item.code || item.error || "网关异常"),
       detail: String(item.module_id || item.module || item.message || "已脱敏错误"),
@@ -512,6 +800,7 @@ function gatewayLatestSignal(data) {
   }
   for (const item of remainingEvents) {
     entries.push({
+      key: `event:${item.id || item.occurredAt || `${item.target || item.name}:${item.toState || "?"}`}`,
       status: item.toState === "online" ? "online" : item.toState === "degraded" ? "degraded" : "offline",
       title: String(item.name || item.target || "链路状态"),
       detail: `${item.fromState || "?"} -> ${item.toState || "?"}`,
@@ -523,6 +812,7 @@ function gatewayLatestSignal(data) {
     for (const target of targets) {
       const style = PROJECT_STYLE[target.id] || {};
       entries.push({
+        key: `target:${target.id}`,
         status: target.state || "offline",
         title: String(style.display || target.name || target.id),
         detail: `MCP ${target.mcp && target.mcp.ok ? `${num(target.mcp.latencyMs)}ms` : "--"} / LINK ${target.tunnel && target.tunnel.ok ? `${num(target.tunnel.latencyMs)}ms` : "--"}`,
@@ -531,7 +821,7 @@ function gatewayLatestSignal(data) {
     }
   }
   for (const entry of entries.slice(0, 5)) {
-    const row = make("div", "gw-event-row");
+    const row = renderKey(make("div", "gw-event-row"), entry.key);
     row.dataset.status = entry.status;
     const rowDot = make("i", "dot mini");
     rowDot.dataset.status = entry.status;
@@ -596,7 +886,7 @@ function gatewayConsole(target, data) {
   const rows = make("div", "gw-service-rows");
   targets.forEach((item, index) => {
     const style = PROJECT_STYLE[item.id] || {};
-    const row = make("div", "gw-service-row");
+    const row = renderKey(make("div", "gw-service-row"), item.id || item.name || index);
     const state = item.state || "offline";
     row.dataset.status = state;
     const dot = make("i", "dot mini");
@@ -620,14 +910,16 @@ function gatewayConsole(target, data) {
   const hourly = data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : [];
   const peak = Math.max(1, ...hourly.map((bucket) => num(bucket.calls)));
   for (const bucket of hourly) {
-    const bar = make("i", "gw-traffic-bar");
+    const bar = renderKey(make("i", "gw-traffic-bar"), bucket.bucket || bars.childElementCount);
     bar.style.setProperty("--gw-bar-height", `${Math.max(2, num(bucket.calls) / peak * 100)}%`);
     bar.dataset.failed = num(bucket.failures) > 0 ? "true" : "false";
     bar.title = `${hourOf(bucket.bucket)} · ${compact(bucket.calls)} 次 · ${compact(bucket.failures)} 失败`;
     bars.append(bar);
   }
   if (!hourly.length) {
-    for (let index = 0; index < 24; index += 1) bars.append(make("i", "gw-traffic-bar"));
+    for (let index = 0; index < 24; index += 1) {
+      bars.append(renderKey(make("i", "gw-traffic-bar"), `empty:${index}`));
+    }
   }
   traffic.append(trafficHead, bars);
   telemetry.append(traffic, gatewayLatestSignal(data));
@@ -761,7 +1053,7 @@ function focusConsole(widgets) {
   console.dataset.dataState = ready ? "online" : "offline";
 
   const head = make("header", "fl-head");
-  head.append(make("span", null, "TEMPORAL FIELD / TODAY"), make("b", null, ready ? "FLOW LOCKED" : "DATA WAIT"));
+  head.append(make("span", null, "TEMPORAL FIELD / TODAY"), make("b", null, ready ? "TODAY VERIFIED" : "DATA WAIT"));
   const reading = make("div", "fl-reading");
   reading.append(make("strong", null, value), make("span", null, label), make("small", null, note));
   const ribbon = make("div", "fl-ribbon");
@@ -772,7 +1064,7 @@ function focusConsole(widgets) {
     ribbon.append(segment);
   }
   const foot = make("footer", "fl-foot");
-  foot.append(make("span", null, "ACTIVE WINDOW"), make("b", null, ready ? "LIVE CACHE" : "NO SAMPLE"));
+  foot.append(make("span", null, "TODAY WINDOW"), make("b", null, ready ? "MCP READ" : "NO SAMPLE"));
   console.append(head, reading, ribbon, foot);
   return console;
 }
@@ -780,6 +1072,7 @@ function focusConsole(widgets) {
 function journalConsole(widgets) {
   const recent = widgets.find((item) => item.id === "journal_recent");
   const count = widgets.find((item) => item.id === "journal_count");
+  const recentReady = Boolean(recent && recent.ok && recent.data);
   const items = recent && recent.ok && recent.data && Array.isArray(recent.data.items)
     ? recent.data.items.slice(0, 4)
     : [];
@@ -787,7 +1080,7 @@ function journalConsole(widgets) {
     ? String(count.data.value)
     : "—";
   const console = make("div", "journal-console");
-  console.dataset.dataState = items.length ? "online" : "offline";
+  console.dataset.dataState = recentReady ? "online" : "offline";
 
   const head = make("header", "jr-head");
   const headCopy = make("div");
@@ -798,10 +1091,11 @@ function journalConsole(widgets) {
 
   const ledger = make("div", "jr-ledger");
   if (!items.length) {
-    ledger.append(make("p", "jr-empty", "云端与本机均未返回最近记录"));
+    ledger.append(make("p", "jr-empty", recentReady ? "还没有日记，留白也是今天的一部分" : "日记数据源暂未返回"));
   }
   items.forEach((item, index) => {
-    const row = make("article", "jr-entry");
+    const identity = item.id || `${item.value || ""}:${item.title || ""}:${item.subtitle || ""}` || index;
+    const row = renderKey(make("article", "jr-entry"), identity);
     row.dataset.entryIndex = String(index);
     const date = make("time", null, item.value || "—");
     const copy = make("div");
@@ -941,7 +1235,8 @@ function sectionTail(target, data) {
   const rows = [];
   const events = Array.isArray(data.events) ? data.events : [];
   for (const event of events.filter((e) => e.target === target.id).slice(0, 3)) {
-    const row = make("div", "pt-row");
+    const identity = event.id || event.occurredAt || `${event.target}:${event.fromState}:${event.toState}`;
+    const row = renderKey(make("div", "pt-row"), `event:${identity}`);
     const dot = make("i", "dot");
     dot.dataset.status = event.toState === "online" ? "online" : event.toState === "degraded" ? "degraded" : "offline";
     row.append(
@@ -953,7 +1248,8 @@ function sectionTail(target, data) {
   }
   const recent = data.activity && Array.isArray(data.activity.recent) ? data.activity.recent : [];
   for (const item of recent.filter((r) => (r.module || "") === target.id).slice(0, 3)) {
-    const row = make("div", "pt-row");
+    const identity = item.id || item.occurredAt || item.createdAt || `${item.tool}:${item.durationMs}:${item.result}`;
+    const row = renderKey(make("div", "pt-row"), `activity:${identity}`);
     const mark = make("i", "pt-mark", "↗");
     if (item.result !== "success") mark.classList.add("fail");
     row.append(
@@ -964,6 +1260,140 @@ function sectionTail(target, data) {
     rows.push(row);
   }
   return rows;
+}
+
+function projectSectionSignature(target, index, widgets, data) {
+  const style = PROJECT_STYLE[target.id] || { groups: [] };
+  const widgetIds = {
+    foxlink: new Set(["focus_today"]),
+    watch: new Set(["watch_workouts", "watch_sleep"]),
+    journal: new Set(["journal_recent", "journal_count"]),
+    bzsjk: new Set(["projects", "focus_today"]),
+  };
+  const ids = widgetIds[target.id] || new Set();
+  const relevantWidgets = target.id === "personal"
+    ? []
+    : widgets.filter((widget) => ids.has(widget.id) || style.groups.includes(widget.group || ""));
+  const targetEvents = Array.isArray(data.events)
+    ? data.events.filter((event) => event.target === target.id)
+    : [];
+  const targetActivity = data.activity && Array.isArray(data.activity.recent)
+    ? data.activity.recent.filter((item) => (item.module || "") === target.id)
+    : [];
+  const gatewayData = target.id === "personal" ? {
+    summary: data.summary,
+    gateway: data.gateway,
+    fleet: data.fleet,
+    targets: data.targets,
+    hourly: data.activity && data.activity.hourly,
+    events: data.events,
+    errors: data.errors,
+    refreshIntervalSeconds: data.refreshIntervalSeconds,
+  } : null;
+  return JSON.stringify([index, target, relevantWidgets, targetEvents, targetActivity, gatewayData]);
+}
+
+function buildProjectSection(target, index, widgets, data) {
+  const style = PROJECT_STYLE[target.id] || {
+    flavor: "neutral",
+    accent: target.accent || "#8878ff",
+    display: target.name,
+    tagline: target.description || "",
+    groups: [],
+  };
+  const section = renderKey(
+    make("section", `proj proj-${style.flavor} project-${target.id}`),
+    target.id,
+  );
+  section.style.setProperty("--p-accent", style.accent);
+  section.style.setProperty("--tile-index", String(index));
+  section.dataset.state = target.state || "offline";
+  section.dataset.projectId = target.id;
+
+  const head = make("header", "proj-head");
+  const naming = make("div", "proj-naming");
+  if (style.eyebrow) naming.append(make("span", "proj-eyebrow", style.eyebrow));
+  naming.append(make("h2", null, style.display));
+  const sub = make("p", "proj-tagline");
+  sub.textContent = `${style.tagline}${target.version ? ` · v${String(target.version).replace(/^v/, "")}` : ""}`;
+  naming.append(sub);
+  const state = make("div", "proj-state");
+  const dot = make("i", "dot");
+  dot.dataset.status = target.state || "offline";
+  const stateText = { online: "正常", degraded: "降级", offline: "离线", local: "本机" }[target.state] || "未知";
+  state.append(dot, make("b", null, stateText));
+  const grip = make("span", "tile-grip");
+  grip.setAttribute("aria-hidden", "true");
+  head.append(naming, state, projectCore(target, widgets, data));
+  if (target.id === "personal") {
+    const identity = make("div", "gw-identity");
+    identity.append(
+      make("span", null, "CORE  /  LOCAL :8761"),
+      make("span", null, `POLL  /  ${num(data.refreshIntervalSeconds, 4)} SEC`),
+      make("span", null, "MODE  /  AUTO RECOVERY"),
+    );
+    head.append(identity);
+  }
+  head.append(make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
+
+  const vitals = make("div", "proj-vitals");
+  if (target.mcp) vitals.append(probeChip("MCP", target.mcp));
+  if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
+  if (target.id !== "personal") vitals.append(syncChip(target.sync));
+
+  const dataZone = make("div", "proj-data");
+  if (target.id === "personal") dataZone.classList.add("gateway-data");
+  if (target.id === "watch") dataZone.classList.add("watch-data");
+  for (const card of sectionDataCards(target, widgets, data)) dataZone.append(card);
+
+  const tail = make("div", "proj-tail");
+  const tailRows = sectionTail(target, data);
+  if (tailRows.length) {
+    for (const row of tailRows) tail.append(row);
+  } else {
+    tail.append(renderKey(make("p", "pt-quiet", "近期安静，无状态变化"), "quiet"));
+  }
+
+  const sizeBadge = renderKey(make("span", "tile-size-badge"), "size");
+  sizeBadge.setAttribute("aria-hidden", "true");
+  section.append(head, vitals, dataZone, tail, sizeBadge);
+  const handleLabels = {
+    n: "调整磁贴上边缘",
+    ne: "调整磁贴右上角",
+    e: "调整磁贴右边缘",
+    se: "调整磁贴右下角",
+    s: "调整磁贴下边缘",
+    sw: "调整磁贴左下角",
+    w: "调整磁贴左边缘",
+    nw: "调整磁贴左上角",
+  };
+  for (const [edge, label] of Object.entries(handleLabels)) {
+    const handle = renderKey(make("button", `tile-handle tile-handle-${edge}`), `handle:${edge}`);
+    handle.type = "button";
+    handle.dataset.edge = edge;
+    handle.title = label;
+    handle.setAttribute("aria-label", label);
+    section.append(handle);
+  }
+  return section;
+}
+
+function projectTiles() {
+  return [...dom.projectSections.querySelectorAll('.proj:not([data-render-exiting="true"])')];
+}
+
+function patchProjectSection(current, desired) {
+  const dynamicClasses = [...current.classList].filter((name) => (
+    name.startsWith("tile-") || name === "interacting" || name === "settling"
+  ));
+  current.className = desired.className;
+  current.classList.add(...dynamicClasses);
+  current.dataset.state = desired.dataset.state;
+  current.dataset.projectId = desired.dataset.projectId;
+  current.dataset.renderKey = desired.dataset.renderKey;
+  current.style.setProperty("--p-accent", desired.style.getPropertyValue("--p-accent"));
+  current.style.setProperty("--tile-index", desired.style.getPropertyValue("--tile-index"));
+  reconcileRenderChildren(current, [...desired.childNodes]);
 }
 
 function renderSections(data) {
@@ -984,92 +1414,42 @@ function renderSections(data) {
     return a - b;
   });
 
-  const sections = ordered.map((target, index) => {
-    const style = PROJECT_STYLE[target.id] || {
-      flavor: "neutral",
-      accent: target.accent || "#8878ff",
-      display: target.name,
-      tagline: target.description || "",
-      groups: [],
-    };
-    const section = make("section", `proj proj-${style.flavor} project-${target.id}`);
-    section.style.setProperty("--p-accent", style.accent);
-    section.style.setProperty("--tile-index", String(index));
-    section.dataset.state = target.state || "offline";
-    section.dataset.projectId = target.id;
-
-    const head = make("header", "proj-head");
-    const naming = make("div", "proj-naming");
-    if (style.eyebrow) naming.append(make("span", "proj-eyebrow", style.eyebrow));
-    naming.append(make("h2", null, style.display));
-    const sub = make("p", "proj-tagline");
-    sub.textContent = `${style.tagline}${target.version ? ` · v${String(target.version).replace(/^v/, "")}` : ""}`;
-    naming.append(sub);
-    const state = make("div", "proj-state");
-    const dot = make("i", "dot");
-    dot.dataset.status = target.state || "offline";
-    const stateText = { online: "正常", degraded: "降级", offline: "离线", local: "本机" }[target.state] || "未知";
-    state.append(dot, make("b", null, stateText));
-    const grip = make("span", "tile-grip");
-    grip.setAttribute("aria-hidden", "true");
-    head.append(naming, state, projectCore(target, widgets, data));
-    if (target.id === "personal") {
-      const identity = make("div", "gw-identity");
-      identity.append(
-        make("span", null, "CORE  /  LOCAL :8761"),
-        make("span", null, `POLL  /  ${num(data.refreshIntervalSeconds, 4)} SEC`),
-        make("span", null, "MODE  /  AUTO RECOVERY"),
-      );
-      head.append(identity);
-    }
-    head.append(make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
-
-    const vitals = make("div", "proj-vitals");
-    if (target.mcp) vitals.append(probeChip("MCP", target.mcp));
-    if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
-    if (target.id !== "personal") vitals.append(syncChip(target.sync));
-
-    const dataZone = make("div", "proj-data");
-    if (target.id === "personal") dataZone.classList.add("gateway-data");
-    if (target.id === "watch") dataZone.classList.add("watch-data");
-    for (const card of sectionDataCards(target, widgets, data)) {
-      dataZone.append(card);
-    }
-
-    const tail = make("div", "proj-tail");
-    const tailRows = sectionTail(target, data);
-    if (tailRows.length) {
-      for (const row of tailRows) tail.append(row);
-    } else {
-      tail.append(make("p", "pt-quiet", "近期安静，无状态变化"));
-    }
-
-    const sizeBadge = make("span", "tile-size-badge");
-    sizeBadge.setAttribute("aria-hidden", "true");
-    section.append(head, vitals, dataZone, tail, sizeBadge);
-    const handleLabels = {
-      n: "调整磁贴上边缘",
-      ne: "调整磁贴右上角",
-      e: "调整磁贴右边缘",
-      se: "调整磁贴右下角",
-      s: "调整磁贴下边缘",
-      sw: "调整磁贴左下角",
-      w: "调整磁贴左边缘",
-      nw: "调整磁贴左上角",
-    };
-    for (const [edge, label] of Object.entries(handleLabels)) {
-      const handle = make("button", `tile-handle tile-handle-${edge}`);
-      handle.type = "button";
-      handle.dataset.edge = edge;
-      handle.title = label;
-      handle.setAttribute("aria-label", label);
-      section.append(handle);
-    }
-    return section;
-  });
-  replace(dom.projectSections, sections);
   installLayoutChrome();
-  applyProjectLayout(!sectionsRendered);
+  const existing = new Map(projectTiles().map((section) => [section.dataset.projectId, section]));
+  const nextSections = [];
+  const added = [];
+  let structureChanged = existing.size !== ordered.length;
+  for (let index = 0; index < ordered.length; index += 1) {
+    const target = ordered[index];
+    const signature = projectSectionSignature(target, index, widgets, data);
+    let section = existing.get(target.id);
+    if (!section) {
+      section = buildProjectSection(target, index, widgets, data);
+      section._renderSignature = signature;
+      added.push(section);
+      structureChanged = true;
+    } else if (section._renderSignature !== signature) {
+      patchProjectSection(section, buildProjectSection(target, index, widgets, data));
+      section._renderSignature = signature;
+    }
+    existing.delete(target.id);
+    nextSections.push(section);
+  }
+
+  let sectionCursor = dom.projectSections.firstChild;
+  for (const section of nextSections) {
+    if (section !== sectionCursor) dom.projectSections.insertBefore(section, sectionCursor);
+    sectionCursor = section.nextSibling;
+  }
+  for (const section of existing.values()) {
+    structureChanged = true;
+    removeWithMotion(section, () => {
+      if (!activeTileInteraction) updateProjectCanvasSize(null, true);
+    });
+  }
+
+  if (structureChanged || !sectionsRendered) applyProjectLayout(!sectionsRendered);
+  if (sectionsRendered) for (const section of added) animateRenderEnter(section);
   configureTileEditing();
   sectionsRendered = true;
 }
@@ -1078,15 +1458,15 @@ function renderCompact(data, payload) {
   const summary = data.summary || {};
   const online = num(summary.online);
   const total = num(summary.total);
-  dom.heroValueCompact.textContent = `${online}/${total}`;
-  dom.heroLabelCompact.textContent = payload.statusLabel || "在线";
+  setRenderText(dom.heroValueCompact, `${online}/${total}`);
+  setRenderText(dom.heroLabelCompact, payload.statusLabel || "在线");
   setMeter(dom.meterCompact, dom.meterFillCompact, online, total, payload.status);
-  dom.compactCalls.textContent = compact(summary.calls24h);
-  dom.compactRate.textContent = `${num(summary.successRate, 100).toFixed(1)}%`;
+  setRenderText(dom.compactCalls, compact(summary.calls24h));
+  setRenderText(dom.compactRate, `${num(summary.successRate, 100).toFixed(1)}%`);
 
   const targets = Array.isArray(data.targets) ? data.targets : [];
   const rows = targets.map((target) => {
-    const row = make("div", "compact-row");
+    const row = renderKey(make("div", "compact-row"), target.id);
     const dot = make("i", "dot");
     dot.dataset.status = target.state || "offline";
     const meta = make("div", "cr-meta");
@@ -1104,8 +1484,17 @@ function renderCompact(data, payload) {
 function setMeter(meter, fill, online, total, status) {
   const ratio = total > 0 ? Math.min(1, online / total) : 0;
   meter.dataset.status = status;
+  const previousOffset = fill.style.strokeDashoffset || String(CIRCUMFERENCE);
+  const nextOffset = String(CIRCUMFERENCE * (1 - ratio));
   fill.style.strokeDasharray = String(CIRCUMFERENCE);
-  fill.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - ratio));
+  fill.style.strokeDashoffset = nextOffset;
+  if (previousOffset !== nextOffset) {
+    playRenderAnimation(
+      fill,
+      [{ strokeDashoffset: previousOffset }, { strokeDashoffset: nextOffset }],
+      { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" },
+    );
+  }
 }
 
 /* ---------- chart / events / extension widgets ---------- */
@@ -1118,16 +1507,16 @@ function renderChart(hourly) {
 
   dom.plotEmpty.hidden = !empty;
   replace(dom.yAxis, [
-    make("span", null, empty ? "" : compact(scale)),
-    make("span", null, empty ? "" : compact(scale / 2)),
-    make("span", null, empty ? "" : "0"),
+    renderKey(make("span", null, empty ? "" : compact(scale)), "max"),
+    renderKey(make("span", null, empty ? "" : compact(scale / 2)), "mid"),
+    renderKey(make("span", null, empty ? "" : "0"), "min"),
   ]);
 
   const bars = hourly.map((bucket) => {
     const calls = num(bucket.calls);
     const failures = Math.min(calls, num(bucket.failures));
     const ok = calls - failures;
-    const column = make("div", "hour");
+    const column = renderKey(make("div", "hour"), bucket.bucket);
     column.dataset.tip = `${hourOf(bucket.bucket)} · 调用 ${compact(calls)} · 失败 ${compact(failures)}`;
 
     if (calls === 0) {
@@ -1156,7 +1545,8 @@ function renderEvents(data) {
 
   for (const event of events.slice(0, 12)) {
     const recovered = event.toState === "online";
-    const row = make("div", "event-row");
+    const identity = event.id || event.occurredAt || `${event.target}:${event.fromState}:${event.toState}`;
+    const row = renderKey(make("div", "event-row"), `event:${identity}`);
     const dot = make("i", "dot");
     dot.dataset.status = recovered ? "online" : event.toState === "degraded" ? "degraded" : "offline";
     const copy = make("div", "event-copy");
@@ -1167,7 +1557,8 @@ function renderEvents(data) {
   }
 
   for (const error of errors.slice(0, 8)) {
-    const row = make("div", "event-row");
+    const identity = error.id || error.createdAt || error.created_at || error.code || error.error;
+    const row = renderKey(make("div", "event-row"), `error:${identity}`);
     const dot = make("i", "dot");
     dot.dataset.status = "offline";
     const copy = make("div", "event-copy");
@@ -1177,7 +1568,7 @@ function renderEvents(data) {
     rows.push(row);
   }
 
-  dom.eventCount.textContent = String(rows.length);
+  setRenderText(dom.eventCount, String(rows.length));
   replace(dom.eventList, rows.length ? rows : [make("p", "empty-note", "暂无状态变化或异常")]);
 }
 
@@ -1199,7 +1590,7 @@ function widgetBody(widget) {
   if (widget.kind === "keyvalue") {
     const rows = make("div", "widget-kv");
     for (const pair of Array.isArray(data.pairs) ? data.pairs : []) {
-      const row = make("div");
+      const row = renderKey(make("div"), pair.label);
       row.append(make("span", null, pair.label), make("b", null, pair.value));
       rows.append(row);
     }
@@ -1213,8 +1604,10 @@ function widgetBody(widget) {
       return body;
     }
     const rows = make("div", "widget-rows");
-    for (const item of items) {
-      const row = make("div", "widget-row");
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const identity = item.id || `${item.title || ""}:${item.subtitle || ""}:${item.value || ""}` || index;
+      const row = renderKey(make("div", "widget-row"), identity);
       if (item.state) {
         const dot = make("i", "dot");
         dot.dataset.status = item.state;
@@ -1246,7 +1639,7 @@ function renderExtensionWidgets(widgets) {
     for (const g of style.groups) claimed.add(g);
   }
   const rest = widgets.filter((w) => !claimed.has(w.group || ""));
-  dom.widgetCount.textContent = String(rest.length);
+  setRenderText(dom.widgetCount, String(rest.length));
   const nodes = [];
   let currentGroup = null;
   for (const widget of rest) {
@@ -1254,14 +1647,17 @@ function renderExtensionWidgets(widgets) {
     if (group !== currentGroup) {
       currentGroup = group;
       if (group) {
-        const head = make("div", "widget-group-head");
+        const head = renderKey(make("div", "widget-group-head"), `group:${group}`);
         if (widget.accent) head.style.setProperty("--w-accent", widget.accent);
         head.append(make("i"), make("span", null, group));
         nodes.push(head);
       }
     }
     const flavor = `flavor-${widget.flavor || "neutral"}`;
-    const card = make("article", `widget-card ${flavor}${widget.ok ? "" : " error"}`);
+    const card = renderKey(
+      make("article", `widget-card ${flavor}${widget.ok ? "" : " error"}`),
+      `widget:${widget.id}`,
+    );
     if (widget.accent) card.style.setProperty("--w-accent", widget.accent);
     const head = make("div", "widget-head");
     const heading = make("div");
@@ -1373,7 +1769,7 @@ function geometryForTile(projectId, index, viewportWidth, viewportHeight, source
     // The old free canvas often left a single second-row tile stranded at its
     // absolute pixel width. It is safe to fill that otherwise empty row while
     // keeping multi-tile rows and all ordering intact.
-    const hasBzsjkTile = Boolean(dom.projectSections.querySelector('[data-project-id="bzsjk"]'));
+    const hasBzsjkTile = projectTiles().some((tile) => tile.dataset.projectId === "bzsjk");
     if (projectId === "personal" && hasBzsjkTile) {
       Object.assign(units, DEFAULT_TILE_LAYOUT.personal);
     } else if (units.x < 12 && units.w < 900 && legacyTileIsAloneInRow(projectId, saved)) {
@@ -1403,12 +1799,31 @@ function setTileDensity(tile, width, height) {
     || (projectViewportWidth < 500 && height < 165 && width < 450)
     || area < 24000;
   const micro = (width < 145 && height < 125) || area < 15500;
-  tile.dataset.widthClass = width < 280 ? "small" : width < 480 ? "medium" : "large";
-  tile.dataset.heightClass = height < 150 ? "short" : height < 225 ? "medium" : "tall";
-  tile.classList.toggle("tile-narrow", width < 390);
+  const widthClass = width < 280 ? "small" : width < 480 ? "medium" : "large";
+  const heightClass = height < 150 ? "short" : height < 225 ? "medium" : "tall";
+  const narrow = width < 390;
+  const densityKey = `${widthClass}:${heightClass}:${narrow ? 1 : 0}:${summaryOnly ? 1 : 0}:${micro ? 1 : 0}`;
+  const densityChanged = Boolean(tile.dataset.densityKey && tile.dataset.densityKey !== densityKey);
+  tile.dataset.densityKey = densityKey;
+  tile.dataset.widthClass = widthClass;
+  tile.dataset.heightClass = heightClass;
+  tile.classList.toggle("tile-narrow", narrow);
   tile.classList.toggle("tile-summary", summaryOnly);
   tile.classList.toggle("tile-tiny", summaryOnly);
   tile.classList.toggle("tile-micro", micro);
+  if (densityChanged && tile.isConnected) {
+    tile.classList.remove("density-changing");
+    // Restart the small compositor-only settle animation only when a density
+    // boundary is actually crossed, never for every resize frame.
+    void tile.offsetWidth;
+    tile.classList.add("density-changing");
+    const previous = densityTimers.get(tile);
+    if (previous) window.clearTimeout(previous);
+    densityTimers.set(tile, window.setTimeout(() => {
+      tile.classList.remove("density-changing");
+      densityTimers.delete(tile);
+    }, 240));
+  }
 }
 
 function setTileRect(tile, rect) {
@@ -1431,11 +1846,12 @@ function setTileRect(tile, rect) {
 }
 
 function installLayoutChrome() {
-  const vertical = make("i", "layout-guide layout-guide-v");
+  if (dom.projectSections.querySelector(".layout-guide-v")) return;
+  const vertical = renderKey(make("i", "layout-guide layout-guide-v"), "chrome:vertical");
   vertical.setAttribute("aria-hidden", "true");
-  const horizontal = make("i", "layout-guide layout-guide-h");
+  const horizontal = renderKey(make("i", "layout-guide layout-guide-h"), "chrome:horizontal");
   horizontal.setAttribute("aria-hidden", "true");
-  const badge = make("span", "layout-snap-badge", "对齐 OK");
+  const badge = renderKey(make("span", "layout-snap-badge", "对齐 OK"), "chrome:badge");
   badge.setAttribute("role", "status");
   badge.setAttribute("aria-live", "polite");
   dom.projectSections.append(vertical, horizontal, badge);
@@ -1475,7 +1891,7 @@ function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
   projectViewportHeight = viewportHeight;
   let right = extraRect ? extraRect.left + extraRect.width : 0;
   let bottom = extraRect ? extraRect.top + extraRect.height : 0;
-  for (const tile of dom.projectSections.querySelectorAll(".proj")) {
+  for (const tile of projectTiles()) {
     const rect = rectOfTile(tile);
     right = Math.max(right, rect.left + rect.width);
     bottom = Math.max(bottom, rect.top + rect.height);
@@ -1506,7 +1922,7 @@ function applyProjectLayout(animate = false) {
   dom.projectSections.style.width = `${viewportWidth}px`;
   dom.projectSections.style.height = `${viewportHeight}px`;
   dom.projectSections.classList.add("free-layout");
-  const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+  const tiles = projectTiles();
   const sourceVersion = projectLayoutVersion;
   tiles.forEach((tile, index) => {
     const geometry = geometryForTile(tile.dataset.projectId, index, viewportWidth, viewportHeight, sourceVersion);
@@ -1518,8 +1934,9 @@ function applyProjectLayout(animate = false) {
     };
     tile.style.zIndex = String(geometry.order + 1);
     setTileRect(tile, rect);
-    if (animate && typeof tile.animate === "function") {
-      tile.animate(
+    if (animate) {
+      playRenderAnimation(
+        tile,
         [
           { opacity: 0, transform: "translateY(14px) scale(.985)" },
           { opacity: 1, transform: "translateY(0) scale(1)" },
@@ -1529,7 +1946,7 @@ function applyProjectLayout(animate = false) {
           delay: index * 45,
           easing: "cubic-bezier(.2,.8,.2,1)",
           fill: "both",
-        }
+        },
       );
     }
   });
@@ -1546,7 +1963,7 @@ function applyProjectLayout(animate = false) {
 
 function tileLayoutFromDom() {
   const layout = {};
-  const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+  const tiles = projectTiles();
   const viewportWidth = Math.max(1, projectViewportWidth || workspaceViewportWidth());
   const viewportHeight = Math.max(1, projectViewportHeight || workspaceViewportHeight());
   const ranked = [...tiles].sort((first, second) => num(first.style.zIndex) - num(second.style.zIndex));
@@ -1578,7 +1995,7 @@ function configureTileEditing() {
   if (dom.matrixFitState) dom.matrixFitState.textContent = layoutMode ? "FREE EDIT" : "AUTO FIT";
   if (!layoutMode) hideAlignmentChrome();
   if (changed) {
-    const tiles = [...dom.projectSections.querySelectorAll(".proj")];
+    const tiles = projectTiles();
     tiles.forEach((tile, index) => {
       if (typeof tile.animate !== "function") return;
       tile.animate(
@@ -1646,7 +2063,7 @@ function closestSnap(sources, guides) {
 function snapTileRect(rect, tile, edge) {
   const verticalGuides = [0, projectViewportWidth / 2, projectViewportWidth];
   const horizontalGuides = [0];
-  for (const other of dom.projectSections.querySelectorAll(".proj")) {
+  for (const other of projectTiles()) {
     if (other === tile) continue;
     const candidate = rectOfTile(other);
     verticalGuides.push(candidate.left, candidate.left + candidate.width / 2, candidate.left + candidate.width);
@@ -1812,7 +2229,7 @@ function beginTileInteraction(event) {
   if (!tile) return;
   const handle = event.target.closest(".tile-handle");
   event.preventDefault();
-  const highest = Math.max(0, ...[...dom.projectSections.querySelectorAll(".proj")].map((node) => num(node.style.zIndex)));
+  const highest = Math.max(0, ...projectTiles().map((node) => num(node.style.zIndex)));
   tile.style.zIndex = String(highest + 1);
   tile.classList.add("interacting");
   activeTileInteraction = {
@@ -1878,30 +2295,35 @@ function finishTileInteraction(event) {
   persistTileLayout();
 }
 
+function queueProjectResizeLayout() {
+  if (projectResizeFrame) return;
+  projectResizeFrame = window.requestAnimationFrame(() => {
+    projectResizeFrame = 0;
+    if (!activeTileInteraction) applyProjectLayout(false);
+  });
+}
+
 function observeProjectCanvas() {
   if (projectResizeObserver || typeof ResizeObserver === "undefined") return;
   projectResizeObserver = new ResizeObserver(() => {
-    const width = workspaceViewportWidth();
-    const height = workspaceViewportHeight();
-    if (width <= 0 || height <= 0) return;
-    if (width === Math.round(projectViewportWidth) && height === Math.round(projectViewportHeight)) return;
-    if (!activeTileInteraction) applyProjectLayout(false);
+    if (!activeTileInteraction) queueProjectResizeLayout();
   });
   projectResizeObserver.observe(dom.stage);
 }
 
 function markWindowResizing() {
   dom.body.classList.add("window-resizing");
+  queueProjectResizeLayout();
   if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
   windowResizeTimer = window.setTimeout(() => {
     windowResizeTimer = 0;
     dom.body.classList.remove("window-resizing");
     if (layoutMode) return;
-    for (const tile of dom.projectSections.querySelectorAll(".proj")) {
-      if (typeof tile.animate !== "function") continue;
-      tile.animate(
+    for (const tile of projectTiles()) {
+      playRenderAnimation(
+        tile,
         [{ transform: "scale(.997)" }, { transform: "scale(1)" }],
-        { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" }
+        { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" },
       );
     }
   }, 140);
@@ -2108,5 +2530,6 @@ window.addEventListener("resize", markWindowResizing);
 window.addEventListener("beforeunload", () => {
   if (timer) window.clearInterval(timer);
   if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
+  if (projectResizeFrame) window.cancelAnimationFrame(projectResizeFrame);
   if (interactionScrollFrame) window.cancelAnimationFrame(interactionScrollFrame);
 });

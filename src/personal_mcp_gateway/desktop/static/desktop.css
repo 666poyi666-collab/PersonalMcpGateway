@@ -46,7 +46,15 @@ body {
 button { font: inherit; letter-spacing: 0; }
 button:focus-visible { outline: 2px solid var(--blue-strong); outline-offset: 2px; }
 
-.window-resize-zone { position: fixed; z-index: 10000; touch-action: none; }
+.window-resize-zone {
+  position: fixed;
+  z-index: 10000;
+  touch-action: none;
+  /* A fully transparent pixel in a layered WebView2 window is click-through at
+     the Win32 compositor. Keep the resize rim visually transparent but give it
+     a non-zero alpha so real pointer input can reach the native hit test. */
+  background: rgb(0 0 0 / 1%);
+}
 .window-resize-n, .window-resize-s { left: 16px; right: 16px; height: 8px; cursor: ns-resize; }
 .window-resize-n { top: 0; }
 .window-resize-s { bottom: 0; }
@@ -880,3 +888,455 @@ body.recovering .tb-chip { border-color: var(--amber); }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* --------------------------------------------------------------------------
+   Tile surface v2
+
+   The host window is intentionally transparent. Each piece of information is
+   its own readable surface, so desktop mode behaves like a set of real tiles
+   instead of a rectangular dashboard painted behind them.
+   -------------------------------------------------------------------------- */
+
+html,
+body,
+#stage,
+.board,
+.view-panel,
+.overview-deck,
+.project-grid {
+  background-color: transparent;
+}
+
+body {
+  --glass: rgb(248 251 253 / 92%);
+  --glass-strong: rgb(255 255 255 / 96%);
+  --glass-line: rgb(72 89 102 / 20%);
+  --tile-shadow: 0 18px 48px rgb(31 45 55 / 14%), 0 2px 8px rgb(31 45 55 / 9%);
+  background: transparent;
+}
+
+html[data-theme="dark"] body {
+  --glass: rgb(26 32 38 / 93%);
+  --glass-strong: rgb(31 38 45 / 97%);
+  --glass-line: rgb(221 235 244 / 15%);
+  --tile-shadow: 0 20px 56px rgb(0 0 0 / 30%), 0 2px 9px rgb(0 0 0 / 24%);
+}
+
+.titlebar,
+.viewbar {
+  background: var(--glass);
+  border-color: var(--glass-line);
+  -webkit-backdrop-filter: blur(18px) saturate(1.16);
+  backdrop-filter: blur(18px) saturate(1.16);
+}
+
+.titlebar { box-shadow: 0 1px 0 rgb(255 255 255 / 34%); }
+.viewbar { box-shadow: 0 10px 28px rgb(31 45 55 / 7%); }
+
+.board { padding: 12px 14px 14px; }
+.overview-deck { border: 0; }
+
+.overview-rail {
+  margin: 0;
+  overflow: hidden;
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: 18px;
+  box-shadow: var(--tile-shadow);
+}
+
+.overview-rail .signal-panel {
+  background:
+    radial-gradient(circle at 86% 18%, rgb(255 255 255 / 48%), transparent 27%),
+    linear-gradient(135deg, #9eddf4, #72c4e6 58%, #8fd9d2);
+}
+
+.system-panel {
+  background:
+    linear-gradient(135deg, rgb(237 247 250 / 98%), rgb(223 238 244 / 98%));
+  color: #18303b;
+  border-left-color: rgb(41 86 105 / 18%) !important;
+}
+
+.system-panel > header,
+.system-grid div { border-color: rgb(41 86 105 / 17%); }
+.system-grid span { color: #657a84; }
+
+html[data-theme="dark"] .system-panel {
+  background: linear-gradient(135deg, #1d343e, #243d47);
+  color: #eef9fb;
+}
+
+.matrix-heading { padding-inline: 8px; }
+.matrix-heading h2 { letter-spacing: -.02em; }
+
+.proj {
+  border-width: 1px;
+  border-radius: 18px;
+  box-shadow: var(--tile-shadow);
+  transition:
+    left .24s cubic-bezier(.22,.78,.18,1),
+    top .24s cubic-bezier(.22,.78,.18,1),
+    width .24s cubic-bezier(.22,.78,.18,1),
+    height .24s cubic-bezier(.22,.78,.18,1),
+    transform .18s cubic-bezier(.22,.78,.18,1),
+    opacity .18s ease,
+    background-color .22s ease,
+    border-color .22s ease,
+    box-shadow .22s ease;
+}
+
+.proj::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 58%);
+  pointer-events: none;
+}
+
+.proj > :not(.tile-handle):not(.tile-size-badge) { position: relative; z-index: 1; }
+body:not(.layout-mode) .proj:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 22px 58px rgb(31 45 55 / 19%), 0 4px 12px rgb(31 45 55 / 10%);
+}
+
+body.window-resizing .proj {
+  box-shadow: 0 8px 24px rgb(31 45 55 / 10%);
+  pointer-events: none;
+}
+
+.proj-head,
+.proj-vitals,
+.proj-data,
+.proj-tail,
+.proj-core,
+.proj-naming,
+.proj-state {
+  transition: opacity .18s ease, transform .22s cubic-bezier(.22,.78,.18,1);
+}
+
+.proj.density-changing .proj-data,
+.proj.density-changing .proj-vitals,
+.proj.density-changing .proj-core {
+  animation: density-settle .22s cubic-bezier(.22,.78,.18,1);
+}
+
+@keyframes density-settle {
+  from { opacity: .35; transform: translateY(4px) scale(.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.dot {
+  transition:
+    background-color .2s ease,
+    border-radius .2s ease,
+    clip-path .2s ease,
+    opacity .2s ease,
+    transform .24s cubic-bezier(.22,.78,.18,1);
+}
+
+.dot[data-status="online"] { box-shadow: 0 0 0 3px rgb(8 167 87 / 10%); }
+
+/* FocusLink: quiet time instrument with the application's violet signal. */
+.proj-instrument,
+.project-foxlink {
+  background-color: rgb(247 251 249 / 96%);
+  background-image:
+    linear-gradient(to right, rgb(0 122 85 / 4%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(0 122 85 / 4%) 1px, transparent 1px),
+    radial-gradient(circle at 100% 0, rgb(126 78 207 / 10%), transparent 36%);
+  border-color: rgb(30 113 88 / 50%);
+}
+
+.project-foxlink::before {
+  width: 4px;
+  background: linear-gradient(to bottom, #007a55 0 68%, #7a49cd 68% 100%);
+}
+
+.project-foxlink { border-radius: 8px; }
+
+.focus-console {
+  overflow: hidden;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 52%);
+}
+
+.fl-reading strong { letter-spacing: -.045em; }
+.fl-ribbon { background: linear-gradient(90deg, rgb(0 122 85 / 9%), rgb(122 73 205 / 8%)); }
+
+/* Watch: titanium recovery instrument, retaining lime as a signal rather than
+   painting the whole tile like an AMOLED void. */
+.proj-sport,
+.project-watch {
+  --wi-lime: #477600;
+  --wi-ink: #172310;
+  --wi-muted: #65725e;
+  --wi-line: #c4d2ba;
+  --wi-alert: #d84e42;
+  background-color: rgb(239 246 234 / 97%);
+  background-image:
+    linear-gradient(to right, rgb(76 116 45 / 5%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(76 116 45 / 5%) 1px, transparent 1px),
+    radial-gradient(circle at 78% 12%, rgb(182 255 57 / 24%), transparent 31%);
+  border-color: #9fb391;
+  color: var(--wi-ink);
+}
+
+.project-watch { border-radius: 16px; }
+
+.project-watch::before {
+  height: 4px;
+  background: linear-gradient(90deg, #79b80c, #b6ff39 54%, #6c9e17);
+}
+
+.project-watch .proj-naming h2,
+.project-watch .proj-eyebrow,
+.wi-run-primary strong { color: #568b00; }
+.project-watch .pv-chip { background: rgb(255 255 255 / 42%); }
+
+.watch-console {
+  border-radius: 12px;
+  background: rgb(255 255 255 / 48%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 65%);
+}
+
+.wi-plan { background: rgb(111 166 20 / 8%); }
+.wi-score-track { stroke: #d5dfce; }
+
+html[data-theme="dark"] .proj-sport,
+html[data-theme="dark"] .project-watch {
+  --wi-lime: #b6ff39;
+  --wi-ink: #f0f8ea;
+  --wi-muted: #a3b39b;
+  --wi-line: #4a6040;
+  background-color: #20301c;
+  border-color: #58704d;
+}
+
+html[data-theme="dark"] .watch-console { background: rgb(18 31 15 / 62%); }
+
+/* Journal: a warm sheet with a restrained sunrise tab. */
+.proj-paper,
+.project-journal {
+  background-color: rgb(255 249 239 / 97%);
+  background-image:
+    repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgb(168 95 39 / 8%) 28px),
+    radial-gradient(circle at 92% 2%, rgb(231 172 102 / 20%), transparent 32%);
+  border-color: rgb(112 72 47 / 52%);
+}
+
+.project-journal::before {
+  width: 8px;
+  height: 44px;
+  border-radius: 0 0 5px 5px;
+  background: linear-gradient(#d48b4d, #a85f27);
+}
+
+.project-journal { border-radius: 6px; }
+
+.journal-console {
+  border-radius: 10px;
+  background: rgb(255 255 255 / 30%);
+}
+
+/* Personal Gateway: an airy routing blueprint. */
+.project-personal {
+  --gw-cyan: #087f9f;
+  --gw-green: #128a56;
+  --gw-amber: #b47a12;
+  --gw-red: #d14e56;
+  --gw-line: #b9cdd5;
+  --gw-faint: #627985;
+  --gw-ink: #17313c;
+  background-color: rgb(232 245 249 / 97%);
+  background-image:
+    linear-gradient(to right, rgb(8 127 159 / 6%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(8 127 159 / 6%) 1px, transparent 1px),
+    radial-gradient(circle at 96% 4%, rgb(85 206 231 / 20%), transparent 34%);
+  border-color: #8eb3c1;
+  color: var(--gw-ink);
+}
+
+.project-personal { border-radius: 12px; }
+
+.project-personal .proj-naming h2,
+.project-personal .proj-state,
+.project-personal .sync-chip strong,
+.project-personal .gw-route-node b,
+.project-personal .gw-metric strong,
+.project-personal .gw-service-row strong,
+.project-personal .gw-signal > strong,
+.project-personal .gw-event-row strong { color: var(--gw-ink); }
+
+.project-personal .gw-route-node .gw-node-code,
+.project-personal .gw-route-node small,
+.project-personal .gw-metric span,
+.project-personal .gw-metric small,
+.project-personal .gw-service-code,
+.project-personal .gw-service-row > span:not(.gw-service-code),
+.project-personal .gw-service-matrix > header,
+.project-personal .gw-traffic > header,
+.project-personal .gw-signal-head,
+.project-personal .gw-signal > p,
+.project-personal .gw-event-row small,
+.project-personal .gw-event-row time { color: var(--gw-faint); }
+
+.gateway-console {
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 40%);
+}
+
+.gateway-console .gw-sync-chip { background: rgb(8 127 159 / 5%); }
+.gw-route-link { background: #a9c0c9; }
+.gw-service-row,
+.gw-event-row,
+.gw-event-list { border-color: rgb(91 126 140 / 22%); }
+
+html[data-theme="dark"] .project-personal {
+  --gw-cyan: #63d8ff;
+  --gw-green: #41d58d;
+  --gw-amber: #f0bd55;
+  --gw-red: #ff7078;
+  --gw-line: #48616c;
+  --gw-faint: #9bb0ba;
+  --gw-ink: #eef9fb;
+  background-color: #19333d;
+  border-color: #527887;
+}
+
+html[data-theme="dark"] .gateway-console { background: rgb(8 24 30 / 45%); }
+
+/* Discipline: warm lock seal, not a second black terminal. */
+.proj-discipline,
+.project-bzsjk {
+  --bz-red: #c65345;
+  --bz-ink: #1b1d1a;
+  --bz-muted: #6f726b;
+  --bz-line: #d9dad3;
+  background-color: rgb(247 247 243 / 97%);
+  background-image:
+    linear-gradient(to right, rgb(207 70 62 / 4%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(207 70 62 / 4%) 1px, transparent 1px),
+    radial-gradient(circle at 92% 8%, rgb(198 83 69 / 13%), transparent 34%);
+  border-color: #bebfb7;
+  color: var(--bz-ink);
+}
+
+.project-bzsjk::before {
+  height: 4px;
+  background: repeating-linear-gradient(90deg, #c65345 0 22px, #e5aaa1 22px 27px);
+}
+
+.bz-console {
+  border-radius: 12px;
+  background: rgb(255 255 255 / 82%);
+}
+
+.bz-foot b { color: #5f4d48; }
+
+html[data-theme="dark"] .proj-discipline,
+html[data-theme="dark"] .project-bzsjk {
+  --bz-red: #ff776b;
+  --bz-ink: #fff4f0;
+  --bz-muted: #c6aaa3;
+  --bz-line: #72534d;
+  background-color: #3a2925;
+  border-color: #7c5b54;
+}
+
+/* Full-window desktop mode strips away control chrome and leaves only tiles. */
+body.desktop-mode {
+  grid-template-rows: 0 0 minmax(0, 1fr);
+  background: transparent;
+}
+
+body.desktop-mode .titlebar,
+body.desktop-mode .viewbar {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.desktop-mode #stage { grid-row: 3; }
+body.desktop-mode .board { padding: 10px; }
+body.desktop-mode .overview-deck {
+  min-height: calc(100vh - 20px);
+  grid-template-rows: minmax(260px, 1fr);
+}
+
+body.desktop-mode .overview-rail,
+body.desktop-mode .matrix-heading { display: none; }
+
+body.desktop-mode .project-grid { min-height: calc(100vh - 20px); }
+
+body.desktop-mode:not(.layout-mode) .proj { cursor: default; }
+
+/* A short Watch tile still answers the two questions worth keeping: how far
+   did I train, and how well did I recover? */
+.project-watch[data-height-class="short"]:not(.tile-summary) .watch-console {
+  grid-template-columns: minmax(0, 1.35fr) minmax(74px, .65fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-recovery {
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  padding: 3px 5px;
+}
+
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-recovery-head,
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-recovery > .wi-metric,
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-sync-note { display: none; }
+
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-score,
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-score svg {
+  width: 52px;
+  height: 52px;
+}
+
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-score-reading strong { font-size: 15px; }
+.project-watch[data-height-class="short"]:not(.tile-summary) .wi-score-reading span { display: none; }
+
+/* Filters and perpetual signal loops are unnecessary while every pixel is
+   already being repainted by a native window resize. */
+body.window-resizing .titlebar,
+body.window-resizing .viewbar {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+body.window-resizing .gw-route-link::after,
+body.window-resizing .fl-ribbon i { animation-play-state: paused; }
+
+body.compact .compact-board {
+  margin-top: 10px;
+  overflow: hidden;
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: 18px;
+  box-shadow: var(--tile-shadow);
+}
+
+.compact-hero {
+  background: linear-gradient(145deg, #203b47, #275665);
+  border-color: rgb(255 255 255 / 14%);
+  border-radius: 14px;
+}
+
+@media (max-width: 700px) {
+  .overview-rail { border-radius: 15px; }
+  .system-panel { border-top-color: rgb(41 86 105 / 17%) !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proj.density-changing .proj-data,
+  .proj.density-changing .proj-vitals,
+  .proj.density-changing .proj-core { animation: none; }
+}

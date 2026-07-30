@@ -17,6 +17,7 @@ WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
 WM_NCDESTROY = 0x0082
 WM_CANCELMODE = 0x001F
+WM_NCLBUTTONDOWN = 0x00A1
 
 HTLEFT = 10
 HTRIGHT = 11
@@ -42,7 +43,6 @@ _SUBCLASS_ID = 0x504F5949
 _VK_LBUTTON = 0x01
 _RESIZE_FRAME_SECONDS = 1 / 120
 _RESIZE_RESPONSE_SECONDS = 0.055
-_RESIZE_SETTLE_SECONDS = 0.24
 
 
 class _Rect(ctypes.Structure):
@@ -51,6 +51,15 @@ class _Rect(ctypes.Structure):
         ("top", wintypes.LONG),
         ("right", wintypes.LONG),
         ("bottom", wintypes.LONG),
+    ]
+
+
+class _Margins(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_int),
+        ("right", ctypes.c_int),
+        ("top", ctypes.c_int),
+        ("bottom", ctypes.c_int),
     ]
 
 
@@ -78,7 +87,7 @@ def resize_target_rect(
     edge: str,
     minimum: tuple[int, int],
 ) -> tuple[int, int, int, int]:
-    """Return the pointer-driven target rectangle for one resize edge."""
+    """Return a pointer-driven rectangle, retained for geometry callers and tests."""
     left, top, right, bottom = rect
     delta_x = cursor[0] - start[0]
     delta_y = cursor[1] - start[1]
@@ -108,7 +117,7 @@ def resize_target_rect(
 def resize_smoothing_factor(
     elapsed_seconds: float, response_seconds: float = _RESIZE_RESPONSE_SECONDS
 ) -> float:
-    """Return a frame-rate-independent easing factor for window bounds."""
+    """Return the legacy frame-rate-independent easing factor for callers."""
     if elapsed_seconds <= 0:
         return 0.0
     if response_seconds <= 0:
@@ -121,7 +130,7 @@ def interpolate_window_rect(
     target: tuple[int, int, int, int],
     factor: float,
 ) -> tuple[float, float, float, float]:
-    """Ease every window boundary toward its latest pointer target."""
+    """Interpolate rectangle boundaries without driving the native resize path."""
     amount = max(0.0, min(1.0, factor))
     return (
         current[0] + (target[0] - current[0]) * amount,
@@ -129,6 +138,28 @@ def interpolate_window_rect(
         current[2] + (target[2] - current[2]) * amount,
         current[3] + (target[3] - current[3]) * amount,
     )
+
+
+def enable_transparent_background(window: Any) -> bool:
+    """Let transparent WebView2 pixels compose with windows behind the board.
+
+    pywebview makes the WebView2 controller transparent. Extending the DWM frame
+    across the client area supplies the matching alpha-capable native surface.
+    Failure is deliberately non-fatal: the themed ``background_color`` remains a
+    readable fallback on hosts where DWM composition is unavailable.
+    """
+    hwnd = native_handle(window)
+    if os.name != "nt" or hwnd <= 0:
+        return False
+    try:
+        dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+        extend_frame = dwmapi.DwmExtendFrameIntoClientArea
+        extend_frame.argtypes = [wintypes.HWND, ctypes.POINTER(_Margins)]
+        extend_frame.restype = ctypes.c_long
+        margins = _Margins(-1, -1, -1, -1)
+        return int(extend_frame(hwnd, ctypes.byref(margins))) == 0
+    except (AttributeError, OSError):
+        return False
 
 
 def resize_hit_test(
@@ -293,8 +324,8 @@ class _Point(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
 
-def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 224) -> bool:
-    """Lock the board below normal windows with a lightly translucent surface."""
+def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 255) -> bool:
+    """Lock the board below normal windows without fading readable tile content."""
     hwnd = native_handle(window)
     if os.name != "nt" or hwnd <= 0:
         return False
@@ -374,7 +405,7 @@ def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 224) -> boo
     return bool(user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_DESKTOP_MODE))
 
 
-def _animate_window_resize(
+def _track_window_resize(
     hwnd: int,
     edge: str,
     original: tuple[int, int, int, int],
@@ -383,28 +414,23 @@ def _animate_window_resize(
     cancel: threading.Event,
     user32: Any,
 ) -> None:
-    current = (
-        float(original[0]),
-        float(original[1]),
-        float(original[2]),
-        float(original[3]),
-    )
-    target = original
-    last_applied = original
-    previous_frame = time.perf_counter()
-    released_at: float | None = None
-    saw_button_down = False
-    button_grace_deadline = previous_frame + 0.12
+    """Apply pointer bounds directly so live resize ignores the OS outline setting."""
     point = _Point(start[0], start[1])
+    last_applied = original
+    saw_button_down = False
+    grace_deadline = time.perf_counter() + 0.12
     try:
         while not cancel.is_set():
             frame_started = time.perf_counter()
-            elapsed = min(0.05, frame_started - previous_frame)
-            previous_frame = frame_started
             button_down = bool(user32.GetAsyncKeyState(_VK_LBUTTON) & 0x8000)
-            if button_down:
-                saw_button_down = True
-            if user32.GetCursorPos(ctypes.byref(point)) and (button_down or released_at is None):
+            if not button_down:
+                if not saw_button_down and frame_started < grace_deadline:
+                    time.sleep(_RESIZE_FRAME_SECONDS)
+                    continue
+                break
+            saw_button_down = True
+
+            if user32.GetCursorPos(ctypes.byref(point)):
                 target = resize_target_rect(
                     original,
                     start,
@@ -412,47 +438,18 @@ def _animate_window_resize(
                     edge,
                     minimum,
                 )
-
-            if not button_down:
-                if not saw_button_down and frame_started < button_grace_deadline:
-                    time.sleep(_RESIZE_FRAME_SECONDS)
-                    continue
-                if released_at is None:
-                    released_at = frame_started
-
-            factor = resize_smoothing_factor(elapsed)
-            current = interpolate_window_rect(current, target, factor)
-            applied = tuple(round(value) for value in current)
-            if applied != last_applied:
-                left, top, right, bottom = applied
-                user32.SetWindowPos(
-                    hwnd,
-                    0,
-                    left,
-                    top,
-                    max(1, right - left),
-                    max(1, bottom - top),
-                    SWP_RESIZE_FRAME,
-                )
-                last_applied = applied
-
-            remaining = max(
-                abs(destination - value) for value, destination in zip(current, target, strict=True)
-            )
-            if released_at is not None and (
-                remaining < 0.6 or frame_started - released_at >= _RESIZE_SETTLE_SECONDS
-            ):
-                left, top, right, bottom = target
-                user32.SetWindowPos(
-                    hwnd,
-                    0,
-                    left,
-                    top,
-                    max(1, right - left),
-                    max(1, bottom - top),
-                    SWP_RESIZE_FRAME,
-                )
-                break
+                if target != last_applied:
+                    left, top, right, bottom = target
+                    user32.SetWindowPos(
+                        hwnd,
+                        0,
+                        left,
+                        top,
+                        max(1, right - left),
+                        max(1, bottom - top),
+                        SWP_RESIZE_FRAME,
+                    )
+                    last_applied = target
 
             spent = time.perf_counter() - frame_started
             time.sleep(max(0.0, _RESIZE_FRAME_SECONDS - spent))
@@ -463,7 +460,7 @@ def _animate_window_resize(
 
 
 def begin_window_resize(window: Any, edge: str) -> bool:
-    """Start a smoothed outer-window resize from one WebView pointer-down."""
+    """Track a WebView edge drag at 120 Hz with no smoothing or release lag."""
     hwnd = native_handle(window)
     if os.name != "nt" or hwnd <= 0 or edge not in _edge_hits or hwnd in _desktop_window_handles:
         return False
@@ -480,6 +477,13 @@ def begin_window_resize(window: Any, edge: str) -> bool:
     user32.ReleaseCapture.restype = wintypes.BOOL
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
     user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
     user32.SetWindowPos.argtypes = [
         wintypes.HWND,
         wintypes.HWND,
@@ -490,13 +494,6 @@ def begin_window_resize(window: Any, edge: str) -> bool:
         wintypes.UINT,
     ]
     user32.SetWindowPos.restype = wintypes.BOOL
-    user32.SendMessageW.argtypes = [
-        wintypes.HWND,
-        wintypes.UINT,
-        wintypes.WPARAM,
-        wintypes.LPARAM,
-    ]
-    user32.SendMessageW.restype = ctypes.c_ssize_t
     get_dpi = getattr(user32, "GetDpiForWindow", None)
     if get_dpi is not None:
         get_dpi.argtypes = [wintypes.HWND]
@@ -531,7 +528,7 @@ def begin_window_resize(window: Any, edge: str) -> bool:
             previous.set()
         _resize_sessions[hwnd] = cancel
     threading.Thread(
-        target=_animate_window_resize,
+        target=_track_window_resize,
         args=(hwnd, edge, original, start, minimum, cancel, user32),
         name="poyi-window-resize",
         daemon=True,

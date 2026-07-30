@@ -175,31 +175,68 @@ def create_window(
     min_size: tuple[int, int],
     on_top: bool,
     background: str,
+    transparent: bool = True,
 ) -> Any:
     """``page`` is the fully inlined document, not a path -- see :mod:`.page`."""
+    if transparent:
+        # WebView2 reads this before the controller exists. It prevents the
+        # otherwise visible opaque flash while pywebview applies its transparent
+        # DefaultBackgroundColor. Preserve an explicit operator override.
+        os.environ.setdefault("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "00000000")
     import webview
 
-    return webview.create_window(
-        "Poyi Control Center",
-        html=page,
-        js_api=js_api,
-        width=width,
-        height=height,
-        x=x,
-        y=y,
-        min_size=min_size,
-        resizable=True,
-        frameless=True,
-        easy_drag=False,
-        background_color=background,
-        on_top=on_top,
-    )
+    options: dict[str, Any] = {
+        "html": page,
+        "js_api": js_api,
+        "width": width,
+        "height": height,
+        "x": x,
+        "y": y,
+        "min_size": min_size,
+        "resizable": True,
+        "frameless": True,
+        "easy_drag": False,
+        "background_color": background,
+        "on_top": on_top,
+        "transparent": transparent,
+    }
+    create_webview_window = cast(Any, webview.create_window)
+    try:
+        return create_webview_window("Poyi Control Center", **options)
+    except TypeError as error:
+        # The locked pywebview version supports transparency, but retain a solid
+        # themed fallback for an older system package instead of aborting startup.
+        if "transparent" not in str(error):
+            raise
+        options.pop("transparent")
+        return create_webview_window("Poyi Control Center", **options)
 
 
 def enable_native_resize(window: Any) -> bool:
     from personal_mcp_gateway.desktop.native_window import install_frameless_resize
 
     return install_frameless_resize(window)
+
+
+def enable_native_transparency(window: Any) -> bool:
+    from personal_mcp_gateway.desktop.native_window import enable_transparent_background
+
+    if not enable_transparent_background(window):
+        return False
+    try:
+        color = __import__("System.Drawing", fromlist=["Color"]).Color
+
+        native = window.native
+        # A black WinForms backing brush is the transparent key for the extended
+        # DWM glass surface. WebView2 content remains fully color-accurate; only
+        # pixels left transparent by the page reveal windows behind the board.
+        native.browser.webview.DefaultBackgroundColor = color.Transparent
+        native.BackColor = color.Black
+    except Exception:
+        # pywebview's own background remains readable if a non-WinForms host or
+        # an unusual WebView2 build cannot expose these native properties.
+        return False
+    return True
 
 
 def begin_native_resize(window: Any, edge: str) -> bool:
@@ -210,8 +247,16 @@ def begin_native_resize(window: Any, edge: str) -> bool:
     if native is None:
         return False
     if native.InvokeRequired:
-        native.BeginInvoke(action_type(lambda: begin_window_resize(window, edge)))
-        return True
+        # The JS bridge calls us from a worker thread. Enter the Win32 sizing
+        # loop before that pointer-down can be released; queueing with
+        # BeginInvoke races WebView2's mouse message and produces a dead drag.
+        result = [False]
+
+        def begin_resize() -> None:
+            result[0] = begin_window_resize(window, edge)
+
+        native.Invoke(action_type(begin_resize))
+        return result[0]
     return begin_window_resize(window, edge)
 
 

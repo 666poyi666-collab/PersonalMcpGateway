@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -17,6 +16,7 @@ from personal_mcp_gateway.desktop.native_window import (
     HTTOPLEFT,
     HTTOPRIGHT,
     begin_window_resize,
+    enable_transparent_background,
     install_frameless_resize,
     interpolate_window_rect,
     resize_hit_test,
@@ -42,26 +42,22 @@ class _ResizeUser32:
         self.button_reads = 0
         self.positions: list[tuple[int, int, int, int]] = []
         self.messages: list[tuple[object, ...]] = []
+        self.foreground: list[int] = []
+        self.released = False
         self.GetCursorPos = _FakeCall(self._get_cursor_pos)
         self.GetWindowRect = _FakeCall(self._get_window_rect)
         self.WindowFromPoint = _FakeCall(self._window_from_point)
         self.GetAsyncKeyState = _FakeCall(self._get_async_key_state)
         self.ReleaseCapture = _FakeCall(self._release_capture)
         self.SetForegroundWindow = _FakeCall(self._set_foreground_window)
-        self.SetWindowPos = _FakeCall(self._set_window_pos)
         self.SendMessageW = _FakeCall(self._send_message)
+        self.SetWindowPos = _FakeCall(self._set_window_pos)
         self.GetDpiForWindow = _FakeCall(self._get_dpi_for_window)
 
     def _get_cursor_pos(self, pointer: object) -> bool:
         point = cast(Any, pointer)._obj
-        if self.cursor_reads == 0:
-            point.x, point.y = 1300, 1100
-        elif self.cursor_reads <= 3:
-            point.x, point.y = 1400, 1160
-        else:
-            # The cursor can move elsewhere while the ease-out is settling. The
-            # release rectangle must stay frozen at the last pressed position.
-            point.x, point.y = 1900, 1560
+        positions = ((1300, 1100), (1340, 1120), (1400, 1160))
+        point.x, point.y = positions[min(self.cursor_reads, len(positions) - 1)]
         self.cursor_reads += 1
         return True
 
@@ -71,25 +67,25 @@ class _ResizeUser32:
         rect.left, rect.top, rect.right, rect.bottom = 100, 200, 1300, 1100
         return True
 
-    def _get_async_key_state(self, _key: object) -> int:
-        self.button_reads += 1
-        return 0x8000 if self.button_reads <= 2 else 0
-
     @staticmethod
     def _window_from_point(_point: object) -> int:
         return 456
 
-    @staticmethod
-    def _release_capture() -> bool:
+    def _get_async_key_state(self, _key: object) -> int:
+        self.button_reads += 1
+        return 0x8000 if self.button_reads <= 2 else 0
+
+    def _release_capture(self) -> bool:
+        self.released = True
         return True
 
-    @staticmethod
-    def _set_foreground_window(_hwnd: object) -> bool:
+    def _set_foreground_window(self, hwnd: object) -> bool:
+        self.foreground.append(int(cast(int, hwnd)))
         return True
 
-    @staticmethod
-    def _get_dpi_for_window(_hwnd: object) -> int:
-        return 144
+    def _send_message(self, *args: object) -> int:
+        self.messages.append(args)
+        return 0
 
     def _set_window_pos(
         self,
@@ -111,9 +107,9 @@ class _ResizeUser32:
         )
         return True
 
-    def _send_message(self, *args: object) -> int:
-        self.messages.append(args)
-        return 0
+    @staticmethod
+    def _get_dpi_for_window(_hwnd: object) -> int:
+        return 144
 
 
 class _ImmediateThread:
@@ -132,6 +128,22 @@ class _ImmediateThread:
 
     def start(self) -> None:
         self.target(*self.args)
+
+class _DwmApi:
+    def __init__(self, result: int = 0) -> None:
+        self.result = result
+        self.calls: list[tuple[int, tuple[int, int, int, int]]] = []
+        self.DwmExtendFrameIntoClientArea = _FakeCall(self._extend_frame)
+
+    def _extend_frame(self, hwnd: object, pointer: object) -> int:
+        margins = cast(Any, pointer)._obj
+        self.calls.append(
+            (
+                int(cast(int, hwnd)),
+                (margins.left, margins.right, margins.top, margins.bottom),
+            )
+        )
+        return self.result
 
 
 class _DesktopUser32:
@@ -199,7 +211,57 @@ def test_native_resize_requires_a_real_window_handle() -> None:
     assert install_frameless_resize(object()) is False
     assert begin_window_resize(object(), "se") is False
     assert begin_window_resize(object(), "not-an-edge") is False
+    assert enable_transparent_background(object()) is False
     assert set_desktop_window_mode(object(), True) is False
+
+
+def test_transparent_background_extends_the_dwm_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dwmapi = _DwmApi()
+
+    def fake_native_handle(_window: Any) -> int:
+        return 321
+
+    def fake_windll(_name: str, *, use_last_error: bool) -> _DwmApi:
+        assert use_last_error is True
+        return dwmapi
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+
+    assert enable_transparent_background(object()) is True
+    assert dwmapi.calls == [(321, (-1, -1, -1, -1))]
+
+
+def test_transparent_background_falls_back_when_dwm_rejects_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dwmapi = _DwmApi(result=-1)
+
+    def fake_native_handle(_window: Any) -> int:
+        return 321
+
+    def fake_windll(_name: str, *, use_last_error: bool) -> _DwmApi:
+        assert use_last_error is True
+        return dwmapi
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+
+    assert enable_transparent_background(object()) is False
 
 
 def test_desktop_mode_adds_and_restores_native_window_styles(
@@ -226,7 +288,7 @@ def test_desktop_mode_adds_and_restores_native_window_styles(
     assert set_desktop_window_mode(object(), True) is True
     assert user32.ex_style & native_window.WS_EX_LAYERED
     assert user32.ex_style & native_window.WS_EX_NOACTIVATE
-    assert user32.alpha_calls == [224]
+    assert user32.alpha_calls == [255]
     assert user32.position_after == [native_window.HWND_BOTTOM]
     assert begin_window_resize(object(), "se") is False
 
@@ -269,7 +331,7 @@ def test_resize_target_rect_enforces_minimum_from_the_active_edge() -> None:
     )
 
 
-def test_window_rect_interpolation_is_smooth_and_frame_rate_independent() -> None:
+def test_window_rect_interpolation_remains_available_for_geometry_callers() -> None:
     factor = resize_smoothing_factor(1 / 60)
     assert 0.2 < factor < 0.4
     current = (0.0, 0.0, 100.0, 100.0)
@@ -283,11 +345,10 @@ def test_window_rect_interpolation_is_smooth_and_frame_rate_independent() -> Non
     assert resize_smoothing_factor(1, 0) == 1
 
 
-def test_window_resize_runs_a_smoothed_session(
+def test_window_resize_tracks_pointer_without_smoothing_or_release_lag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user32 = _ResizeUser32()
-    ticks = itertools.count()
 
     def fake_native_handle(_window: Any) -> int:
         return 123
@@ -308,14 +369,15 @@ def test_window_resize_runs_a_smoothed_session(
         raising=False,
     )
     monkeypatch.setattr(native_window.threading, "Thread", _ImmediateThread)
-    monkeypatch.setattr(native_window.time, "perf_counter", lambda: next(ticks) * 0.02)
     monkeypatch.setattr(native_window.time, "sleep", no_sleep)
 
     assert begin_window_resize(object(), "se") is True
 
     assert user32.messages and user32.messages[0][1] == native_window.WM_CANCELMODE
-    assert len(user32.positions) >= 3
-    assert user32.positions[-1] == (100, 200, 1300, 960)
-    assert user32.cursor_reads >= 5
-    widths = {position[2] for position in user32.positions}
-    assert len(widths) >= 3
+    assert user32.foreground == [123]
+    assert user32.released is True
+    assert user32.messages[1:] == []
+    assert user32.positions == [
+        (100, 200, 1240, 920),
+        (100, 200, 1300, 960),
+    ]

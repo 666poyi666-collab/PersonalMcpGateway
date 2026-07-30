@@ -213,12 +213,18 @@ public static class PoyiWindowProbe
             SetCursorPos(startX, startY);
             Thread.Sleep(120);
             mouse_event(LEFT_DOWN, 0, 0, 0, UIntPtr.Zero);
-            Thread.Sleep(180);
-            SetCursorPos(startX - 48, startY - 32);
+            Thread.Sleep(120);
             HashSet<string> transitionFrames = new HashSet<string>();
-            for (int frame = 0; frame < 16; frame++)
+            // Native sizing follows pointer movement 1:1. Move progressively so
+            // this probe measures live resize frames instead of teleporting the
+            // cursor once and mistaking the immediate response for a missing
+            // transition.
+            for (int frame = 1; frame <= 8; frame++)
             {
-                Thread.Sleep(12);
+                SetCursorPos(
+                    startX - ((48 * frame) / 8),
+                    startY - ((32 * frame) / 8));
+                Thread.Sleep(18);
                 RECT sample;
                 if (GetWindowRect(hWnd, out sample))
                 {

@@ -373,6 +373,7 @@ def main() -> int:
     controller.window = window
 
     def prepare_native_window() -> None:
+        shell.enable_native_transparency(window)
         shell.enable_native_resize(window)
 
     window.events.before_show += prepare_native_window

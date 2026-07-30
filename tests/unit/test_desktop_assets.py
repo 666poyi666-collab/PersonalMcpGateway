@@ -59,6 +59,18 @@ def test_renderer_never_makes_its_own_network_calls() -> None:
     assert "pywebview.api" in script
 
 
+def test_renderer_keeps_project_dom_stable_and_batches_resize_work() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+
+    assert "replaceChildren" not in script
+    assert "function reconcileRenderChildren(" in script
+    assert "function projectSectionSignature(" in script
+    assert "section._renderSignature" in script
+    assert "function removeWithMotion(" in script
+    assert "function queueProjectResizeLayout(" in script
+    assert "projectResizeFrame = window.requestAnimationFrame" in script
+
+
 def test_unified_shell_keeps_live_status_with_the_board() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
@@ -181,6 +193,7 @@ def test_capture_and_freeform_tile_controls_ship_together() -> None:
     assert 'document.addEventListener("pointerdown", requestWindowResize, true)' in script
     assert "bridge.begin_window_resize(edge)" in script
     assert "window-resize-se::after" in style
+    assert "background: rgb(0 0 0 / 1%);" in style
     assert "tile-handle-nw" in style and "layout-guide.visible" in style
     assert "dragstart" not in script and "tile-resizer" not in style
 
