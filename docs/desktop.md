@@ -95,6 +95,7 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 | Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
 | Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
 | Desktop | Locks the board in place on a genuinely transparent host, hides application chrome, avoids activation, and keeps the tiles below normal application windows. This is independent from Pin and disables conflicting window controls until released. |
+| Widget controls | In Desktop mode, the small floating control at the top-right can enter tile editing, hide the board to the tray, or quit it completely. Tile editing first releases Desktop mode; drag a tile to move it or any edge/corner handle to resize it, then finish editing to persist the layout. |
 | Compact | Shrinks to a narrow status panel that fits beside other work. |
 | Close | Hides to the tray; the poll loop and the tray icon keep running. |
 | Tray menu | Show, desktop mode, compact, pin, open the web dashboard, refresh, quit. |

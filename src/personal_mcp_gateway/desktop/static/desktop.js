@@ -64,6 +64,10 @@ const dom = {
   viewClock: el("viewClock"),
   btnCapture: el("btnCapture"),
   btnLayout: el("btnLayout"),
+  btnLayoutReset: el("btnLayoutReset"),
+  btnWidgetEdit: el("btnWidgetEdit"),
+  btnWidgetHide: el("btnWidgetHide"),
+  btnWidgetQuit: el("btnWidgetQuit"),
   overviewRail: el("overviewRail"),
   matrixHeading: el("matrixHeading"),
   matrixFitState: el("matrixFitState"),
@@ -178,6 +182,7 @@ const renderAnimations = new WeakMap();
 const exitAnimations = new WeakMap();
 const exitTimers = new WeakMap();
 const densityTimers = new WeakMap();
+const densityFrames = new WeakMap();
 
 /* ---------- helpers ---------- */
 
@@ -1823,16 +1828,22 @@ function setTileDensity(tile, width, height) {
   tile.classList.toggle("tile-micro", micro);
   if (densityChanged && tile.isConnected) {
     tile.classList.remove("density-changing");
-    // Restart the small compositor-only settle animation only when a density
-    // boundary is actually crossed, never for every resize frame.
-    void tile.offsetWidth;
-    tile.classList.add("density-changing");
+    // Restart the compositor-only settle animation without a synchronous
+    // layout read. A forced offsetWidth here used to hitch the exact resize
+    // frame on which a tile crossed a density boundary.
+    const previousFrame = densityFrames.get(tile);
+    if (previousFrame) window.cancelAnimationFrame(previousFrame);
     const previous = densityTimers.get(tile);
     if (previous) window.clearTimeout(previous);
-    densityTimers.set(tile, window.setTimeout(() => {
-      tile.classList.remove("density-changing");
-      densityTimers.delete(tile);
-    }, 240));
+    const frame = window.requestAnimationFrame(() => {
+      densityFrames.delete(tile);
+      tile.classList.add("density-changing");
+      densityTimers.set(tile, window.setTimeout(() => {
+        tile.classList.remove("density-changing");
+        densityTimers.delete(tile);
+      }, 240));
+    });
+    densityFrames.set(tile, frame);
   }
 }
 
@@ -1998,11 +2009,26 @@ async function persistTileLayout() {
   if (bridge && bridge.set_project_layout) await bridge.set_project_layout(projectLayout);
 }
 
+async function resetTileLayout() {
+  const bridge = api();
+  projectLayout = {};
+  projectLayoutVersion = PROJECT_LAYOUT_VERSION;
+  applyProjectLayout(true);
+  if (bridge && bridge.reset_project_layout) {
+    const payload = await bridge.reset_project_layout();
+    if (payload) render(payload);
+  }
+}
+
 function configureTileEditing() {
   const changed = dom.body.classList.contains("layout-mode") !== layoutMode;
   dom.body.classList.toggle("layout-mode", layoutMode);
   dom.btnLayout.setAttribute("aria-pressed", String(layoutMode));
-  if (dom.matrixFitState) dom.matrixFitState.textContent = layoutMode ? "FREE EDIT" : "AUTO FIT";
+  dom.btnLayout.title = layoutMode ? "完成并保存磁贴布局" : "编辑磁贴布局";
+  dom.btnLayout.setAttribute("aria-label", dom.btnLayout.title);
+  if (dom.matrixFitState) {
+    dom.matrixFitState.textContent = layoutMode ? "拖动卡片 · 边角缩放 · 自动保存" : "AUTO FIT";
+  }
   if (!layoutMode) hideAlignmentChrome();
   if (changed) {
     const tiles = projectTiles();
@@ -2590,14 +2616,32 @@ function bindControls() {
       await pull(false);
     }
   });
+  dom.btnLayoutReset.addEventListener("click", () => resetTileLayout());
   dom.btnRepair.addEventListener("click", () => requestRepair(dom.btnRepair));
   dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
   el("btnMin").addEventListener("click", () => api() && api().minimize());
   el("btnClose").addEventListener("click", () => api() && api().hide_to_tray());
+  dom.btnWidgetEdit.addEventListener("click", async () => {
+    const bridge = api();
+    if (!bridge || !bridge.set_desktop_mode) return;
+    const payload = await bridge.set_desktop_mode(false);
+    if (payload) render(payload);
+    if (dom.body.classList.contains("desktop-mode")) return;
+    layoutMode = true;
+    configureTileEditing();
+  });
+  dom.btnWidgetHide.addEventListener("click", () => api() && api().hide_to_tray());
+  dom.btnWidgetQuit.addEventListener("click", () => api() && api().quit());
   dom.btnDesktop.addEventListener("click", async () => {
     const next = dom.btnDesktop.getAttribute("aria-pressed") !== "true";
     const bridge = api();
-    if (bridge && bridge.set_desktop_mode) render(await bridge.set_desktop_mode(next));
+    if (!bridge || !bridge.set_desktop_mode) return;
+    if (next && layoutMode) {
+      layoutMode = false;
+      configureTileEditing();
+      await persistTileLayout();
+    }
+    render(await bridge.set_desktop_mode(next));
   });
   el("btnTop").addEventListener("click", async () => {
     const next = dom.btnTop.getAttribute("aria-pressed") !== "true";

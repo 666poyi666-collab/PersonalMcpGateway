@@ -218,6 +218,30 @@ def test_shutdown_stops_the_tray_and_destroys_the_window() -> None:
     assert "destroy" in window.events
 
 
+def test_tray_restore_reapplies_desktop_widget_native_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    window = FakeWindow()
+    controller.window = window
+    controller.state.desktop_mode = True
+    calls: list[tuple[Any, bool]] = []
+
+    def fake_set_native_desktop_mode(target: Any, enabled: bool) -> bool:
+        calls.append((target, enabled))
+        return True
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.set_native_desktop_mode",
+        fake_set_native_desktop_mode,
+    )
+
+    controller.show_window()
+
+    assert window.events == ["show", "restore"]
+    assert calls == [(window, True)]
+
+
 def test_snapshot_payload_carries_the_view_preferences() -> None:
     controller = _controller()
     payload = DesktopApi(controller).snapshot()

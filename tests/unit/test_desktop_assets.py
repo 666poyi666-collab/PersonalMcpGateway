@@ -203,8 +203,10 @@ def test_capture_and_freeform_tile_controls_ship_together() -> None:
     assert 'id="btnCapture"' in markup
     assert 'id="btnDesktop"' in markup
     assert 'id="btnLayout"' in markup
+    assert 'id="btnLayoutReset"' in markup
     assert "bridge.capture()" in script
     assert "bridge.set_project_layout(projectLayout)" in script
+    assert "bridge.reset_project_layout()" in script
     assert "bridge.set_desktop_mode(next)" in script
     assert "projectLayoutVersion" in script
     assert "RECOVERY_BANNER_FAILURES = 3" in script
@@ -227,6 +229,8 @@ def test_capture_and_freeform_tile_controls_ship_together() -> None:
     assert "window-resize-se::after" in style
     assert "background: rgb(0 0 0 / 1%);" in style
     assert "tile-handle-nw" in style and "layout-guide.visible" in style
+    assert "body.layout-mode .tb-btn.layout-only { display: grid; }" in style
+    assert "拖动卡片 · 边角缩放 · 自动保存" in script
     assert "dragstart" not in script and "tile-resizer" not in style
 
 
@@ -242,6 +246,40 @@ def test_widget_mode_is_transparent_from_first_paint_and_keeps_only_tiles() -> N
     assert "html,\nbody,\n#stage,\n.board,\n.view-panel,\n.overview-deck,\n.project-grid" in style
     assert "body.desktop-mode #stage { background: transparent; }" in style
     assert "body.desktop-mode .connection-banner { display: none !important; }" in style
+
+
+def test_widget_mode_keeps_edit_hide_and_quit_escape_controls() -> None:
+    markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert 'class="widget-controls"' in markup
+    assert 'id="btnWidgetEdit"' in markup
+    assert 'id="btnWidgetHide"' in markup
+    assert 'id="btnWidgetQuit"' in markup
+    assert "body.desktop-mode .widget-controls { display: flex; }" in style
+    assert 'dom.btnWidgetEdit.addEventListener("click", async () =>' in script
+    assert "const payload = await bridge.set_desktop_mode(false);" in script
+    assert "layoutMode = true;" in script
+    assert 'dom.btnWidgetHide.addEventListener("click"' in script
+    assert 'dom.btnWidgetQuit.addEventListener("click"' in script
+    assert "api().hide_to_tray()" in script
+    assert "api().quit()" in script
+
+
+def test_widget_controls_are_quiet_until_discovered_and_density_changes_settle() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert "opacity: .42;" in style
+    assert ".widget-controls:hover, .widget-controls:focus-within" in style
+    assert '#btnWidgetEdit::before { content: "\\2726"; }' in style
+    assert ".proj.density-changing::after { animation: density-surface-settle" in style
+    assert "@keyframes density-surface-settle" in style
+    assert ".proj.density-changing::after { animation: none; }" in style
+    assert "const densityFrames = new WeakMap();" in script
+    assert "window.requestAnimationFrame(() =>" in script
+    assert "void tile.offsetWidth" not in script
 
 
 def test_watch_tile_has_a_responsive_training_and_recovery_instrument() -> None:
