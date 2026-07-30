@@ -98,10 +98,13 @@ body.desktop-mode .window-resize-zone { display: none; }
   height: var(--viewbar); display: flex; align-items: stretch; padding: 0 14px; gap: 4px;
   background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.view-tab { position: relative; min-width: 64px; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-weight: 650; }
+.view-tab { position: relative; min-width: 94px; padding: 3px 11px 2px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: grid; align-content: center; gap: 1px; text-align: left; }
+.view-tab > span { color: inherit; font-size: 11px; font-weight: 680; line-height: 1.15; }
+.view-tab > small { color: var(--muted); font: 8px/1.2 var(--mono); white-space: nowrap; transition: color .18s ease; }
 .view-tab::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 3px; background: transparent; transform: scaleX(.35); opacity: 0; transition: transform .24s cubic-bezier(.2,.8,.2,1), opacity .2s ease, background-color .2s ease; }
 .view-tab:hover { color: var(--ink); }
 .view-tab.active { color: var(--ink); }
+.view-tab:hover > small, .view-tab.active > small { color: color-mix(in srgb, var(--ink) 65%, var(--muted)); }
 .view-tab.active::after { background: var(--line-strong); transform: scaleX(1); opacity: 1; }
 .view-rule { flex: 1; }
 .view-live, .view-health { align-self: center; white-space: nowrap; font: 9px var(--mono); }
@@ -111,7 +114,10 @@ body.desktop-mode .window-resize-zone { display: none; }
 .view-health[data-state="bad"] { color: var(--red); }
 .view-clock { align-self: center; color: var(--muted); font: 10px var(--mono); }
 
-#stage { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#stage { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; -ms-overflow-style: none; }
+#stage::-webkit-scrollbar { width: 0; height: 0; display: none; }
+body.canvas-panning #stage,
+body.canvas-panning #stage * { cursor: grabbing !important; user-select: none !important; }
 body[data-view="overview"].overview-fits:not(.layout-mode):not(.recovering):not(.disconnected) #stage { overflow: hidden; }
 .board { width: 100%; min-width: 100%; min-height: 100%; margin: 0; padding: 10px 12px 12px; }
 .view-panel[hidden] { display: none; }
@@ -874,6 +880,8 @@ body.recovering .tb-chip { border-color: var(--amber); }
 @media (max-width: 640px) {
   .brand-text small, .tb-chip em, #btnRepair, #btnRefresh, #btnCapture, #btnTop { display: none; }
   .board { padding: 9px; }
+  .view-tab { min-width: 76px; padding-inline: 9px; text-align: center; }
+  .view-tab > small { display: none; }
   .view-health, .view-clock { display: none; }
   .overview-deck { min-height: calc(100vh - var(--titlebar) - var(--viewbar) - 18px); }
   .signal-copy p { display: none; }
@@ -904,34 +912,66 @@ body,
 .view-panel,
 .overview-deck,
 .project-grid {
-  background-color: transparent;
+  background: transparent;
 }
 
 body {
-  --glass: rgb(248 251 253 / 92%);
-  --glass-strong: rgb(255 255 255 / 96%);
+  --glass: rgb(248 251 253 / 86%);
+  --glass-strong: rgb(255 255 255 / 92%);
   --glass-line: rgb(72 89 102 / 20%);
   --tile-shadow: 0 18px 48px rgb(31 45 55 / 14%), 0 2px 8px rgb(31 45 55 / 9%);
   background: transparent;
 }
 
 html[data-theme="dark"] body {
-  --glass: rgb(26 32 38 / 93%);
-  --glass-strong: rgb(31 38 45 / 97%);
+  --glass: rgb(26 32 38 / 87%);
+  --glass-strong: rgb(31 38 45 / 93%);
   --glass-line: rgb(221 235 244 / 15%);
   --tile-shadow: 0 20px 56px rgb(0 0 0 / 30%), 0 2px 9px rgb(0 0 0 / 24%);
 }
 
 .titlebar,
 .viewbar {
-  background: var(--glass);
-  border-color: var(--glass-line);
-  -webkit-backdrop-filter: blur(18px) saturate(1.16);
-  backdrop-filter: blur(18px) saturate(1.16);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
-.titlebar { box-shadow: 0 1px 0 rgb(255 255 255 / 34%); }
-.viewbar { box-shadow: 0 10px 28px rgb(31 45 55 / 7%); }
+.titlebar { padding: 4px 8px; gap: 8px; }
+.tb-drag { background: rgb(0 0 0 / 1%); border-radius: 11px; }
+.brand-text,
+.tb-chip,
+.tb-actions {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  box-shadow: 0 6px 18px rgb(31 45 55 / 8%);
+}
+.brand-text { min-height: 28px; padding: 0 10px; border-radius: 9px; }
+.tb-chip { border-radius: 9px; }
+.tb-actions { height: 32px; padding: 0 4px; border-radius: 11px; }
+
+.viewbar { padding: 4px 10px; align-items: center; gap: 6px; }
+.view-tab,
+.view-live,
+.view-health,
+.view-clock {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: 11px;
+  box-shadow: 0 7px 20px rgb(31 45 55 / 7%);
+}
+.view-tab { height: 34px; }
+.view-tab:hover,
+.view-tab.active { background: var(--glass-strong); }
+.view-live,
+.view-health,
+.view-clock { padding: 6px 8px; }
+
+/* Interactive mode needs a nearly invisible hit surface for middle-button
+   panning. Desktop mode removes even that 1% surface so tile gaps are true
+   click-through desktop pixels. */
+body:not(.desktop-mode) #stage { background: rgb(0 0 0 / 1%); }
+body.desktop-mode #stage { background: transparent; }
 
 .board { padding: 12px 14px 14px; }
 .overview-deck { border: 0; }
@@ -1273,6 +1313,8 @@ body.desktop-mode .overview-deck {
 body.desktop-mode .overview-rail,
 body.desktop-mode .matrix-heading { display: none; }
 
+body.desktop-mode .connection-banner { display: none !important; }
+
 body.desktop-mode .project-grid { min-height: calc(100vh - 20px); }
 
 body.desktop-mode:not(.layout-mode) .proj { cursor: default; }
@@ -1307,9 +1349,12 @@ body.desktop-mode:not(.layout-mode) .proj { cursor: default; }
 /* Filters and perpetual signal loops are unnecessary while every pixel is
    already being repainted by a native window resize. */
 body.window-resizing .titlebar,
-body.window-resizing .viewbar {
+body.window-resizing .viewbar,
+body.window-resizing .proj,
+body.window-resizing .overview-rail {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+  box-shadow: none;
 }
 
 body.window-resizing .gw-route-link::after,

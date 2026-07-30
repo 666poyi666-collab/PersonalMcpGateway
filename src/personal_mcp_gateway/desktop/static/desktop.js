@@ -128,6 +128,8 @@ const AUTO_SCROLL_MAX = 20;
 const RECOVERY_BANNER_FAILURES = 3;
 const FAILURE_DISPLAY_CAP = 999;
 const SNAP_DISTANCE = 10;
+const MIDDLE_MOUSE_BUTTON = 1;
+const MIDDLE_MOUSE_BUTTONS_MASK = 4;
 const DEFAULT_TILE_LAYOUT = {
   foxlink: { x: 0, y: 0, w: 280, h: 440, order: 0 },
   watch: { x: 288, y: 0, w: 380, h: 440, order: 1 },
@@ -157,8 +159,10 @@ let projectLayout = {};
 let projectLayoutVersion = PROJECT_LAYOUT_VERSION;
 let layoutMode = false;
 let activeTileInteraction = null;
+let activeCanvasPan = null;
 let layoutFrame = 0;
 let interactionScrollFrame = 0;
+let canvasPanFrame = 0;
 let projectCanvasWidth = 0;
 let projectViewportWidth = 0;
 let projectViewportHeight = 0;
@@ -250,7 +254,12 @@ function sameNodeShape(current, desired) {
 }
 
 function renderMotionAllowed() {
-  if (!dom.body || dom.body.classList.contains("window-resizing") || activeTileInteraction) return false;
+  if (
+    !dom.body
+    || dom.body.classList.contains("window-resizing")
+    || activeTileInteraction
+    || activeCanvasPan
+  ) return false;
   return !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 }
 
@@ -1682,6 +1691,7 @@ function applyView(view) {
       : Object.keys(projectLayout).length ? 1 : PROJECT_LAYOUT_VERSION;
   }
   const desktopMode = Boolean(view.desktopMode);
+  if (desktopMode && dom.body.dataset.view !== "overview") selectView("overview");
   dom.body.classList.toggle("compact", Boolean(view.compact));
   dom.body.classList.toggle("desktop-mode", desktopMode);
   dom.btnCompact.setAttribute("aria-pressed", String(Boolean(view.compact)));
@@ -2224,7 +2234,7 @@ function updateInteractionAutoScroll(event) {
 }
 
 function beginTileInteraction(event) {
-  if (!layoutMode || activeTileInteraction || event.button !== 0) return;
+  if (!layoutMode || activeTileInteraction || activeCanvasPan || event.button !== 0) return;
   const tile = event.target.closest(".proj");
   if (!tile) return;
   const handle = event.target.closest(".tile-handle");
@@ -2327,6 +2337,100 @@ function markWindowResizing() {
       );
     }
   }, 140);
+}
+
+/* Middle-button canvas panning is intentionally separate from tile editing:
+   left drag moves/resizes a tile in layout mode, while middle drag always
+   moves the viewport. Pointer events are sampled once per animation frame so
+   high-frequency WebView2 input never forces multiple layouts per paint. */
+function applyCanvasPanFrame() {
+  canvasPanFrame = 0;
+  const active = activeCanvasPan;
+  if (!active) return;
+  dom.stage.scrollLeft = active.pendingScrollLeft;
+  dom.stage.scrollTop = active.pendingScrollTop;
+}
+
+function queueCanvasPanFrame() {
+  if (canvasPanFrame) return;
+  canvasPanFrame = window.requestAnimationFrame(applyCanvasPanFrame);
+}
+
+function beginCanvasPan(event) {
+  if (
+    event.button !== MIDDLE_MOUSE_BUTTON
+    || activeCanvasPan
+    || activeTileInteraction
+  ) return;
+  event.preventDefault();
+  activeCanvasPan = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startScrollLeft: dom.stage.scrollLeft,
+    startScrollTop: dom.stage.scrollTop,
+    pendingScrollLeft: dom.stage.scrollLeft,
+    pendingScrollTop: dom.stage.scrollTop,
+  };
+  dom.body.classList.add("canvas-panning");
+  try {
+    if (dom.stage.setPointerCapture) dom.stage.setPointerCapture(event.pointerId);
+  } catch (error) {
+    // Window-level listeners still keep the gesture usable if capture is lost
+    // during a WebView/native window hand-off.
+  }
+}
+
+function moveCanvasPan(event) {
+  const active = activeCanvasPan;
+  if (!active || event.pointerId !== active.pointerId) return;
+  if ((event.buttons & MIDDLE_MOUSE_BUTTONS_MASK) === 0) {
+    finishCanvasPan(event);
+    return;
+  }
+  event.preventDefault();
+  active.pendingScrollLeft = Math.max(
+    0,
+    active.startScrollLeft - (event.clientX - active.startX),
+  );
+  active.pendingScrollTop = Math.max(
+    0,
+    active.startScrollTop - (event.clientY - active.startY),
+  );
+  queueCanvasPanFrame();
+}
+
+function finishCanvasPan(event) {
+  const active = activeCanvasPan;
+  if (!active || event.pointerId !== active.pointerId) return;
+  if (canvasPanFrame) {
+    window.cancelAnimationFrame(canvasPanFrame);
+    canvasPanFrame = 0;
+  }
+  dom.stage.scrollLeft = active.pendingScrollLeft;
+  dom.stage.scrollTop = active.pendingScrollTop;
+  activeCanvasPan = null;
+  dom.body.classList.remove("canvas-panning");
+  try {
+    if (dom.stage.hasPointerCapture && dom.stage.hasPointerCapture(active.pointerId)) {
+      dom.stage.releasePointerCapture(active.pointerId);
+    }
+  } catch (error) {
+    // Capture may already have been released by Chromium.
+  }
+}
+
+function preventMiddleAuxClick(event) {
+  if (event.button === MIDDLE_MOUSE_BUTTON) event.preventDefault();
+}
+
+function bindCanvasPanning() {
+  dom.stage.addEventListener("pointerdown", beginCanvasPan);
+  dom.stage.addEventListener("auxclick", preventMiddleAuxClick);
+  dom.stage.addEventListener("lostpointercapture", finishCanvasPan);
+  window.addEventListener("pointermove", moveCanvasPan);
+  window.addEventListener("pointerup", finishCanvasPan);
+  window.addEventListener("pointercancel", finishCanvasPan);
 }
 
 function bindTileEditing() {
@@ -2460,6 +2564,7 @@ function requestWindowResize(event) {
 
 function bindControls() {
   bindTileEditing();
+  bindCanvasPanning();
   document.addEventListener("pointerdown", requestWindowResize, true);
   for (const button of document.querySelectorAll(".view-tab")) {
     button.addEventListener("click", () => selectView(button.dataset.view));
@@ -2532,4 +2637,5 @@ window.addEventListener("beforeunload", () => {
   if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
   if (projectResizeFrame) window.cancelAnimationFrame(projectResizeFrame);
   if (interactionScrollFrame) window.cancelAnimationFrame(interactionScrollFrame);
+  if (canvasPanFrame) window.cancelAnimationFrame(canvasPanFrame);
 });

@@ -129,6 +129,7 @@ class _ImmediateThread:
     def start(self) -> None:
         self.target(*self.args)
 
+
 class _DwmApi:
     def __init__(self, result: int = 0) -> None:
         self.result = result
@@ -148,14 +149,12 @@ class _DwmApi:
 
 class _DesktopUser32:
     def __init__(self) -> None:
-        self.ex_style = 0x00000100
-        self.alpha_calls: list[int] = []
+        self.ex_style = native_window.WS_EX_APPWINDOW | 0x00000100
         self.position_after: list[int] = []
         self.GetWindowLongPtrW = _FakeCall(self._get_window_long)
         self.GetWindowLongW = self.GetWindowLongPtrW
         self.SetWindowLongPtrW = _FakeCall(self._set_window_long)
         self.SetWindowLongW = self.SetWindowLongPtrW
-        self.SetLayeredWindowAttributes = _FakeCall(self._set_layered_window_attributes)
         self.SetWindowPos = _FakeCall(self._set_window_pos)
 
     def _get_window_long(self, _hwnd: object, index: object) -> int:
@@ -167,17 +166,6 @@ class _DesktopUser32:
         previous = self.ex_style
         self.ex_style = int(cast(int, style))
         return previous
-
-    def _set_layered_window_attributes(
-        self,
-        _hwnd: object,
-        _color: object,
-        alpha: object,
-        flags: object,
-    ) -> bool:
-        assert int(cast(int, flags)) == native_window.LWA_ALPHA
-        self.alpha_calls.append(int(cast(int, alpha)))
-        return True
 
     def _set_window_pos(
         self,
@@ -286,15 +274,14 @@ def test_desktop_mode_adds_and_restores_native_window_styles(
     )
 
     assert set_desktop_window_mode(object(), True) is True
-    assert user32.ex_style & native_window.WS_EX_LAYERED
     assert user32.ex_style & native_window.WS_EX_NOACTIVATE
-    assert user32.alpha_calls == [255]
+    assert user32.ex_style & native_window.WS_EX_TOOLWINDOW
+    assert not user32.ex_style & native_window.WS_EX_APPWINDOW
     assert user32.position_after == [native_window.HWND_BOTTOM]
     assert begin_window_resize(object(), "se") is False
 
     assert set_desktop_window_mode(object(), False) is True
-    assert user32.ex_style == 0x00000100
-    assert user32.alpha_calls[-1] == 255
+    assert user32.ex_style == native_window.WS_EX_APPWINDOW | 0x00000100
     assert user32.position_after[-1] == native_window.HWND_NOTOPMOST
 
 

@@ -90,11 +90,11 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 | --- | --- |
 | Refresh | Bypasses the shared probe cache. |
 | Camera | Captures the board through Win32 `PrintWindow` without activating or controlling it, then saves a PNG under `Pictures\Poyi Control Center`. |
-| Tiles | Enters a freeform pixel canvas. Drag any tile surface horizontally or vertically, or drag any edge/corner to resize continuously. The workspace fills the window and expands beyond it in both directions; edge auto-scroll and both scrollbars expose off-screen content. Alignment guides appear near viewport and peer-tile edges; changes save automatically. |
-| Window edges | Drag any edge or corner to resize the whole frameless window. A 120 Hz Win32 bounds animator eases the outer edge toward the pointer and settles on the exact final size after release. |
+| Tiles | Enters a freeform pixel canvas. Drag any tile surface horizontally or vertically, or drag any edge/corner to resize continuously. The workspace fills the window and expands in both directions; hold the middle mouse button and drag to pan without visible scrollbars. Alignment guides appear near viewport and peer-tile edges; changes save automatically. |
+| Window edges | Drag any edge or corner to resize the whole frameless window. A 120 Hz Win32 tracker applies pointer bounds directly, without low-pass lag or a post-release settle animation, even when Windows is configured to show only an outline while resizing. |
 | Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
 | Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
-| Desktop | Locks the board in place, applies light transparency, avoids activation, and keeps it below normal application windows. This is independent from Pin and disables conflicting window controls until released. |
+| Desktop | Locks the board in place on a genuinely transparent host, hides application chrome, avoids activation, and keeps the tiles below normal application windows. This is independent from Pin and disables conflicting window controls until released. |
 | Compact | Shrinks to a narrow status panel that fits beside other work. |
 | Close | Hides to the tray; the poll loop and the tray icon keep running. |
 | Tray menu | Show, desktop mode, compact, pin, open the web dashboard, refresh, quit. |

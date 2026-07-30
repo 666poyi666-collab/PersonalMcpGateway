@@ -19,8 +19,9 @@ scripts, reinstalls with `desktop\install-desktop.ps1 -Autostart -Launch`, and f
 `PoyiControlCenter.exe`, the application tree contains only that GUI launcher plus WebView2, and an
 in-app `PrintWindow` capture renders the full board without activating the window. When the board is
 visible, the verifier also performs and restores a real bottom-right mouse drag using physical DPI-
-aware coordinates. It jumps the pointer once and requires at least four distinct intermediate window
-rectangles; checking `WM_NCHITTEST` values or only the final size is not accepted as resize evidence.
+aware coordinates. It advances the pointer through eight physical steps and requires at least four
+distinct intermediate window rectangles; checking `WM_NCHITTEST` values or only the final size is not
+accepted as resize evidence.
 
 Contract tests freeze the `personal_*` management surface and each installed adapter's independent
 tool namespace. They also assert that WatchIntervals tools and Resources are absent. Fault tests

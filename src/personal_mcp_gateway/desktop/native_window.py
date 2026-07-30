@@ -31,9 +31,9 @@ HTBOTTOMRIGHT = 17
 GWL_STYLE = -16
 GWL_EXSTYLE = -20
 WS_THICKFRAME = 0x00040000
-WS_EX_LAYERED = 0x00080000
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
 WS_EX_NOACTIVATE = 0x08000000
-LWA_ALPHA = 0x00000002
 HWND_BOTTOM = 1
 HWND_NOTOPMOST = -2
 SWP_REFRESH_FRAME = 0x0037
@@ -324,8 +324,8 @@ class _Point(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
 
-def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 255) -> bool:
-    """Lock the board below normal windows without fading readable tile content."""
+def set_desktop_window_mode(window: Any, enabled: bool) -> bool:
+    """Lock the transparent tile host below apps without taking focus or taskbar space."""
     hwnd = native_handle(window)
     if os.name != "nt" or hwnd <= 0:
         return False
@@ -337,13 +337,6 @@ def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 255) -> boo
     get_style.restype = result_type
     set_style.argtypes = [wintypes.HWND, ctypes.c_int, result_type]
     set_style.restype = result_type
-    user32.SetLayeredWindowAttributes.argtypes = [
-        wintypes.HWND,
-        wintypes.COLORREF,
-        wintypes.BYTE,
-        wintypes.DWORD,
-    ]
-    user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
     user32.SetWindowPos.argtypes = [
         wintypes.HWND,
         wintypes.HWND,
@@ -365,23 +358,13 @@ def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 255) -> boo
             set_style(
                 hwnd,
                 GWL_EXSTYLE,
-                current_style | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                (current_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW,
             )
         )
         if previous == 0 and ctypes.get_last_error():
             _desktop_window_styles.pop(hwnd, None)
             return False
-        if not user32.SetLayeredWindowAttributes(
-            hwnd,
-            0,
-            max(1, min(255, int(alpha))),
-            LWA_ALPHA,
-        ):
-            set_style(hwnd, GWL_EXSTYLE, current_style)
-            _desktop_window_styles.pop(hwnd, None)
-            return False
         if not user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_DESKTOP_MODE):
-            user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
             set_style(hwnd, GWL_EXSTYLE, current_style)
             _desktop_window_styles.pop(hwnd, None)
             return False
@@ -394,10 +377,9 @@ def set_desktop_window_mode(window: Any, enabled: bool, alpha: int = 255) -> boo
 
     original_style = _desktop_window_styles.pop(
         hwnd,
-        current_style & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE),
+        current_style & ~(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW),
     )
     _desktop_window_handles.discard(hwnd)
-    user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
     ctypes.set_last_error(0)
     previous = int(set_style(hwnd, GWL_EXSTYLE, original_style))
     if previous == 0 and ctypes.get_last_error():

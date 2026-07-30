@@ -75,7 +75,7 @@ def test_unified_shell_keeps_live_status_with_the_board() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert '<body class="booting" data-view="overview">' in markup
+    assert '<body class="booting desktop-mode" data-view="overview">' in markup
     assert '<span class="view-live">' in markup
     status_nodes = ("sbDot", "sbState", "sbGuard", "sbSync", "sbProbe")
     assert all(f'id="{node}"' in markup for node in status_nodes)
@@ -85,6 +85,38 @@ def test_unified_shell_keeps_live_status_with_the_board() -> None:
     assert "#stage { min-width: 0; min-height: 0; overflow: auto;" in style
     assert ".overview-deck" in style and ".overview-rail" in style
     assert 'id="overviewRail"' in markup and 'id="matrixHeading"' in markup
+
+
+def test_dashboard_navigation_explains_each_view_in_plain_language() -> None:
+    markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
+
+    assert "项目磁贴" in markup
+    assert "状态 · 关键数据" in markup
+    assert "调用记录" in markup
+    assert "24H · 异常" in markup
+    assert "数据卡片" in markup
+    assert "备忘 · 日程" in markup
+    assert "异常与状态变化" in markup
+    assert "扩展面板" not in markup
+
+
+def test_stage_hides_scrollbars_and_middle_drag_pans_on_animation_frames() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert "scrollbar-width: none" in style
+    assert "#stage::-webkit-scrollbar" in style
+    assert "body.canvas-panning #stage" in style
+    assert "const MIDDLE_MOUSE_BUTTON = 1;" in script
+    assert "const MIDDLE_MOUSE_BUTTONS_MASK = 4;" in script
+    assert "function beginCanvasPan(event)" in script
+    assert "function moveCanvasPan(event)" in script
+    assert "function finishCanvasPan(event)" in script
+    assert "window.requestAnimationFrame(applyCanvasPanFrame)" in script
+    assert "active.startScrollLeft - (event.clientX - active.startX)" in script
+    assert "active.startScrollTop - (event.clientY - active.startY)" in script
+    assert 'dom.stage.addEventListener("auxclick", preventMiddleAuxClick)' in script
+    assert "activeTileInteraction || activeCanvasPan" in script
 
 
 def test_layout_v3_normalizes_legacy_geometry_once_and_persists_units() -> None:
@@ -196,6 +228,20 @@ def test_capture_and_freeform_tile_controls_ship_together() -> None:
     assert "background: rgb(0 0 0 / 1%);" in style
     assert "tile-handle-nw" in style and "layout-guide.visible" in style
     assert "dragstart" not in script and "tile-resizer" not in style
+
+
+def test_widget_mode_is_transparent_from_first_paint_and_keeps_only_tiles() -> None:
+    markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert '<body class="booting desktop-mode" data-view="overview">' in markup
+    assert (
+        'if (desktopMode && dom.body.dataset.view !== "overview") selectView("overview");' in script
+    )
+    assert "html,\nbody,\n#stage,\n.board,\n.view-panel,\n.overview-deck,\n.project-grid" in style
+    assert "body.desktop-mode #stage { background: transparent; }" in style
+    assert "body.desktop-mode .connection-banner { display: none !important; }" in style
 
 
 def test_watch_tile_has_a_responsive_training_and_recovery_instrument() -> None:

@@ -155,8 +155,16 @@ public static class PoyiWindowProbe
         if (found == IntPtr.Zero) return "failed:no-board-window";
 
         const long WS_THICKFRAME = 0x00040000;
+        const long WS_EX_TOOLWINDOW = 0x00000080;
+        const long WS_EX_APPWINDOW = 0x00040000;
+        const long WS_EX_NOACTIVATE = 0x08000000;
         long style = GetWindowLongPtr(found, -16).ToInt64();
         if ((style & WS_THICKFRAME) == 0) return "failed:no-thickframe";
+        long exStyle = GetWindowLongPtr(found, -20).ToInt64();
+        bool desktopWidget =
+            (exStyle & WS_EX_TOOLWINDOW) != 0 &&
+            (exStyle & WS_EX_NOACTIVATE) != 0 &&
+            (exStyle & WS_EX_APPWINDOW) == 0;
         RECT windowRect;
         RECT clientRect;
         GetWindowRect(found, out windowRect);
@@ -167,18 +175,29 @@ public static class PoyiWindowProbe
             (uint)((windowRect.Right - 2) & 0xffff);
         long right = SendMessageW(found, 0x0084, IntPtr.Zero, new IntPtr(rightPoint)).ToInt64();
         long corner = SendMessageW(found, 0x0084, IntPtr.Zero, new IntPtr(cornerPoint)).ToInt64();
-        if (right != 11 || corner != 17) return "failed:hit=" + right + "/" + corner;
+        if (desktopWidget)
+        {
+            if (right != 1 || corner != 1)
+                return "failed:desktop-hit=" + right + "/" + corner;
+        }
+        else if (right != 11 || corner != 17)
+        {
+            return "failed:hit=" + right + "/" + corner;
+        }
         int frameX = (windowRect.Right - windowRect.Left) - (clientRect.Right - clientRect.Left);
         int frameY = (windowRect.Bottom - windowRect.Top) - (clientRect.Bottom - clientRect.Top);
         if (Math.Abs(frameX) > 1 || Math.Abs(frameY) > 1)
             return "failed:visible-frame=" + frameX + "x" + frameY;
 
-        string live = "skipped-window-state";
-        if (IsWindowVisible(found) && !IsIconic(found) && !IsZoomed(found))
+        string live = desktopWidget ? "skipped-desktop-widget" : "skipped-window-state";
+        if (!desktopWidget && IsWindowVisible(found) && !IsIconic(found) && !IsZoomed(found))
         {
             live = DragBottomRight(found, windowRect);
             if (live.StartsWith("failed:")) return live;
         }
+        if (desktopWidget)
+            return "passed:desktop-widget hit=1/1 frame=" + frameX + "x" + frameY +
+                " live=" + live;
         return "passed:right=11 corner=17 frame=" + frameX + "x" + frameY + " live=" + live;
     }
 
