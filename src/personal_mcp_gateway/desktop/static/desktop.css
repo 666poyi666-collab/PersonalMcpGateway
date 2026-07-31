@@ -78,11 +78,11 @@ body.desktop-mode .window-resize-zone { display: none; }
   align-items: center;
   gap: 4px;
   padding: 5px;
-  background: rgb(19 27 33 / 68%);
-  border: 1px solid rgb(255 255 255 / 17%);
+  background: rgb(13 20 25 / 82%);
+  border: 1px solid rgb(255 255 255 / 24%);
   border-radius: 13px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 16%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  opacity: .42;
+  opacity: .7;
   transform: translateY(-3px) scale(.98);
   transform-origin: top right;
   transition:
@@ -90,6 +90,7 @@ body.desktop-mode .window-resize-zone { display: none; }
     transform .24s cubic-bezier(.22,.78,.18,1),
     background-color .2s ease,
     box-shadow .2s ease;
+  backdrop-filter: blur(16px) saturate(1.18);
 }
 .widget-controls:hover, .widget-controls:focus-within {
   background: rgb(19 27 33 / 88%);
@@ -119,8 +120,16 @@ body.desktop-mode .widget-controls { display: flex; }
 }
 .widget-controls button:hover::before { color: #fff; transform: scale(1.08); }
 #btnWidgetEdit::before { content: "\2726"; }
+#btnWidgetReset::before { content: "\21ba"; }
 #btnWidgetHide::before { content: "\2212"; }
 #btnWidgetQuit::before { content: "\00d7"; }
+.widget-controls .widget-layout-only { display: none; }
+body.desktop-mode.layout-mode .widget-controls .widget-layout-only { display: block; }
+body.desktop-mode.layout-mode .widget-controls {
+  background: rgb(19 27 33 / 92%);
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
 .widget-controls button:hover { background: rgb(255 255 255 / 15%); }
 .widget-controls button:active { transform: scale(.95); }
 .widget-controls button.danger:hover { background: rgb(255 90 90 / 20%); color: #ffb4b4; }
@@ -241,7 +250,11 @@ body:not(.layout-mode) .proj:hover { box-shadow: inset 0 0 0 1px color-mix(in sr
 .proj-core strong { min-width: 0; overflow: hidden; color: var(--p-accent); font: 750 15px/1.2 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .proj-index { margin-top: auto; color: var(--muted); font: 42px/1 var(--mono); opacity: .28; }
 .tile-grip { display: none; width: 22px; height: 14px; margin-top: 10px; opacity: .7; background-image: radial-gradient(circle, currentColor 1.2px, transparent 1.4px); background-size: 7px 7px; }
-.tile-size-badge { display: none; position: absolute; z-index: 8; top: 8px; right: 10px; padding: 4px 6px; color: #fff; background: color-mix(in srgb, #080b0f 88%, transparent); border-radius: 4px; font: 9px var(--mono); pointer-events: none; opacity: 0; transform: translateY(-3px); transition: opacity .16s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
+.tile-size-badge { display: none; position: absolute; z-index: 8; right: 10px; bottom: 9px; padding: 4px 6px; color: #fff; background: color-mix(in srgb, #080b0f 88%, transparent); border-radius: 4px; font: 9px var(--mono); pointer-events: none; opacity: 0; transform: translateY(3px); transition: opacity .16s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
+.tile-edit-toolbar { position: absolute !important; z-index: 12 !important; top: 8px; right: 8px; display: none; gap: 2px; padding: 3px; border: 1px solid rgb(255 255 255 / 18%); border-radius: 9px; background: rgb(10 15 19 / 88%); box-shadow: 0 8px 20px rgb(0 0 0 / 18%); pointer-events: auto !important; backdrop-filter: blur(12px) saturate(1.15); }
+.tile-edit-toolbar button { width: 27px; height: 25px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #dce8ed; cursor: pointer; font: 700 10px var(--mono); transition: background-color .14s ease, color .14s ease, transform .14s ease; }
+.tile-edit-toolbar button:hover { background: rgb(255 255 255 / 16%); color: #fff; }
+.tile-edit-toolbar button:active { transform: scale(.9); }
 .tile-handle { display: none; position: absolute; z-index: 9; border: 0; padding: 0; background: transparent; color: var(--p-accent); }
 .tile-handle::after { content: ""; position: absolute; opacity: .72; transition: opacity .15s ease, transform .15s ease; }
 .tile-handle:hover::after { opacity: 1; transform: scale(1.18); }
@@ -276,8 +289,9 @@ body:not(.layout-mode) .proj:hover { box-shadow: inset 0 0 0 1px color-mix(in sr
 body.layout-mode .project-grid { touch-action: none; outline: 1px dashed var(--blue-strong); outline-offset: 7px; background-image: linear-gradient(to right, color-mix(in srgb, var(--line) 34%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in srgb, var(--line) 34%, transparent) 1px, transparent 1px); background-size: 24px 24px; transition: none; }
 body.layout-mode .layout-guide, body.layout-mode .layout-snap-badge { display: block; }
 body.layout-mode .proj { outline: 2px solid color-mix(in srgb, var(--p-accent) 68%, transparent); outline-offset: -2px; overflow: hidden; cursor: grab; user-select: none; box-shadow: 0 8px 24px color-mix(in srgb, #000 15%, transparent); }
-body.layout-mode .proj > :not(.tile-handle):not(.tile-size-badge) { pointer-events: none; }
+body.layout-mode .proj > :not(.tile-handle):not(.tile-size-badge):not(.tile-edit-toolbar) { pointer-events: none; }
 body.layout-mode .tile-grip, body.layout-mode .tile-size-badge, body.layout-mode .tile-handle { display: block; }
+body.layout-mode .tile-edit-toolbar { display: flex; }
 body.layout-mode .tile-size-badge { opacity: .72; transform: translateY(0); }
 body.layout-mode .proj.interacting { z-index: 100 !important; cursor: grabbing; transform: scale(1.006); box-shadow: 0 17px 42px color-mix(in srgb, #000 24%, transparent); transition: none; }
 body.layout-mode .proj.interacting .tile-size-badge { opacity: 1; }

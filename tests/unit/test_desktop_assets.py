@@ -255,12 +255,16 @@ def test_widget_mode_keeps_edit_hide_and_quit_escape_controls() -> None:
 
     assert 'class="widget-controls"' in markup
     assert 'id="btnWidgetEdit"' in markup
+    assert 'id="btnWidgetReset"' in markup
     assert 'id="btnWidgetHide"' in markup
     assert 'id="btnWidgetQuit"' in markup
     assert "body.desktop-mode .widget-controls { display: flex; }" in style
     assert 'dom.btnWidgetEdit.addEventListener("click", async () =>' in script
-    assert "const payload = await bridge.set_desktop_mode(false);" in script
-    assert "layoutMode = true;" in script
+    assert "layoutMode = !layoutMode;" in script
+    assert 'dom.btnWidgetEdit.textContent = layoutMode ? "完成编辑" : "编辑磁贴";' in script
+    assert 'dom.btnWidgetReset.addEventListener("click"' in script
+    assert "await persistTileLayout();" in script
+    assert "set_desktop_mode(false)" not in script
     assert 'dom.btnWidgetHide.addEventListener("click"' in script
     assert 'dom.btnWidgetQuit.addEventListener("click"' in script
     assert "api().hide_to_tray()" in script
@@ -271,7 +275,8 @@ def test_widget_controls_are_quiet_until_discovered_and_density_changes_settle()
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert "opacity: .42;" in style
+    assert "opacity: .7;" in style
+    assert "backdrop-filter: blur(16px)" in style
     assert ".widget-controls:hover, .widget-controls:focus-within" in style
     assert '#btnWidgetEdit::before { content: "\\2726"; }' in style
     assert ".proj.density-changing::after { animation: density-surface-settle" in style
@@ -280,6 +285,22 @@ def test_widget_controls_are_quiet_until_discovered_and_density_changes_settle()
     assert "const densityFrames = new WeakMap();" in script
     assert "window.requestAnimationFrame(() =>" in script
     assert "void tile.offsetWidth" not in script
+
+
+def test_tile_editor_offers_responsive_size_presets_without_losing_manual_handles() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert "const TILE_SIZE_PRESETS" in script
+    assert 'make("div", "tile-edit-toolbar")' in script
+    assert 'button.dataset.tilePreset = preset;' in script
+    assert "function applyTileSizePreset(tile, presetName)" in script
+    assert 'event.target.closest(".tile-edit-toolbar")' in script
+    assert 'dom.projectSections.addEventListener("click"' in script
+    assert "persistTileLayout().catch(() => {});" in script
+    assert "body.layout-mode .tile-edit-toolbar { display: flex; }" in style
+    assert "body.layout-mode .tile-grip" in style
+    assert "tile-handle-se" in style
 
 
 def test_watch_tile_has_a_responsive_training_and_recovery_instrument() -> None:

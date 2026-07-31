@@ -66,6 +66,7 @@ const dom = {
   btnLayout: el("btnLayout"),
   btnLayoutReset: el("btnLayoutReset"),
   btnWidgetEdit: el("btnWidgetEdit"),
+  btnWidgetReset: el("btnWidgetReset"),
   btnWidgetHide: el("btnWidgetHide"),
   btnWidgetQuit: el("btnWidgetQuit"),
   overviewRail: el("overviewRail"),
@@ -140,6 +141,11 @@ const DEFAULT_TILE_LAYOUT = {
   journal: { x: 676, y: 0, w: 324, h: 440, order: 2 },
   personal: { x: 0, y: 450, w: 720, h: 550, order: 3 },
   bzsjk: { x: 730, y: 450, w: 270, h: 550, order: 4 },
+};
+const TILE_SIZE_PRESETS = {
+  small: { width: 0.28, height: 0.34 },
+  medium: { width: 0.46, height: 0.5 },
+  large: { width: 0.7, height: 0.68 },
 };
 const OFFLINE_MATRIX_TARGETS = SECTION_ORDER.map((id) => {
   const style = PROJECT_STYLE[id];
@@ -1370,7 +1376,17 @@ function buildProjectSection(target, index, widgets, data) {
 
   const sizeBadge = renderKey(make("span", "tile-size-badge"), "size");
   sizeBadge.setAttribute("aria-hidden", "true");
-  section.append(head, vitals, dataZone, tail, sizeBadge);
+  const editToolbar = renderKey(make("div", "tile-edit-toolbar"), "edit-toolbar");
+  editToolbar.setAttribute("aria-label", "磁贴快捷尺寸");
+  for (const [preset, label] of [["small", "小"], ["medium", "中"], ["large", "大"]]) {
+    const button = renderKey(make("button", null, label), `preset:${preset}`);
+    button.type = "button";
+    button.dataset.tilePreset = preset;
+    button.title = `${label}尺寸`;
+    button.setAttribute("aria-label", `设为${label}尺寸`);
+    editToolbar.append(button);
+  }
+  section.append(head, vitals, dataZone, tail, sizeBadge, editToolbar);
   const handleLabels = {
     n: "调整磁贴上边缘",
     ne: "调整磁贴右上角",
@@ -1866,6 +1882,27 @@ function setTileRect(tile, rect) {
   setTileDensity(tile, width, height);
 }
 
+function applyTileSizePreset(tile, presetName) {
+  const preset = TILE_SIZE_PRESETS[presetName];
+  if (!preset || !layoutMode) return;
+  const viewportWidth = Math.max(MIN_TILE_WIDTH, projectViewportWidth || workspaceViewportWidth());
+  const viewportHeight = Math.max(MIN_TILE_HEIGHT, projectViewportHeight || workspaceViewportHeight());
+  const current = rectOfTile(tile);
+  const width = clamp(viewportWidth * preset.width, MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+  const height = clamp(viewportHeight * preset.height, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT);
+  const rect = constrainTileRect({
+    left: clamp(current.left, 0, Math.max(0, viewportWidth - width)),
+    top: clamp(current.top, 0, Math.max(0, viewportHeight - height)),
+    width,
+    height,
+  }, "se");
+  setTileRect(tile, rect);
+  tile.classList.add("settling");
+  window.setTimeout(() => tile.classList.remove("settling"), 300);
+  updateProjectCanvasSize(rect, true);
+  persistTileLayout().catch(() => {});
+}
+
 function installLayoutChrome() {
   if (dom.projectSections.querySelector(".layout-guide-v")) return;
   const vertical = renderKey(make("i", "layout-guide layout-guide-v"), "chrome:vertical");
@@ -2026,6 +2063,9 @@ function configureTileEditing() {
   dom.btnLayout.setAttribute("aria-pressed", String(layoutMode));
   dom.btnLayout.title = layoutMode ? "完成并保存磁贴布局" : "编辑磁贴布局";
   dom.btnLayout.setAttribute("aria-label", dom.btnLayout.title);
+  dom.btnWidgetEdit.textContent = layoutMode ? "完成编辑" : "编辑磁贴";
+  dom.btnWidgetEdit.title = layoutMode ? "完成并保存磁贴布局" : "进入自由布局，移动或缩放磁贴";
+  dom.btnWidgetEdit.setAttribute("aria-pressed", String(layoutMode));
   if (dom.matrixFitState) {
     dom.matrixFitState.textContent = layoutMode ? "拖动卡片 · 边角缩放 · 自动保存" : "AUTO FIT";
   }
@@ -2263,6 +2303,7 @@ function beginTileInteraction(event) {
   if (!layoutMode || activeTileInteraction || activeCanvasPan || event.button !== 0) return;
   const tile = event.target.closest(".proj");
   if (!tile) return;
+  if (event.target.closest(".tile-edit-toolbar")) return;
   const handle = event.target.closest(".tile-handle");
   event.preventDefault();
   const highest = Math.max(0, ...projectTiles().map((node) => num(node.style.zIndex)));
@@ -2460,6 +2501,15 @@ function bindCanvasPanning() {
 }
 
 function bindTileEditing() {
+  dom.projectSections.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-tile-preset]");
+    if (!button) return;
+    const tile = button.closest(".proj");
+    if (!tile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    applyTileSizePreset(tile, button.dataset.tilePreset);
+  });
   dom.projectSections.addEventListener("pointerdown", (event) => {
     beginTileInteraction(event);
   });
@@ -2617,18 +2667,19 @@ function bindControls() {
     }
   });
   dom.btnLayoutReset.addEventListener("click", () => resetTileLayout());
+  dom.btnWidgetReset.addEventListener("click", () => resetTileLayout());
   dom.btnRepair.addEventListener("click", () => requestRepair(dom.btnRepair));
   dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
   el("btnMin").addEventListener("click", () => api() && api().minimize());
   el("btnClose").addEventListener("click", () => api() && api().hide_to_tray());
   dom.btnWidgetEdit.addEventListener("click", async () => {
-    const bridge = api();
-    if (!bridge || !bridge.set_desktop_mode) return;
-    const payload = await bridge.set_desktop_mode(false);
-    if (payload) render(payload);
-    if (dom.body.classList.contains("desktop-mode")) return;
-    layoutMode = true;
+    layoutMode = !layoutMode;
     configureTileEditing();
+    if (!layoutMode) {
+      await persistTileLayout();
+      lastDataKey = "";
+      await pull(false);
+    }
   });
   dom.btnWidgetHide.addEventListener("click", () => api() && api().hide_to_tray());
   dom.btnWidgetQuit.addEventListener("click", () => api() && api().quit());
