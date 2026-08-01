@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 import webbrowser
 from typing import Any
 
@@ -56,6 +57,8 @@ CARD_TITLES = {
     "bzsjk": "不做手机控",
 }
 CARD_SIZE_SCALES = {"small": 0.72, "medium": 1.0, "large": 1.35}
+_ACTIVATION_SIGNAL_ATTEMPTS = 8
+_ACTIVATION_SIGNAL_DELAY = 0.05
 
 
 def acquire_single_instance() -> object | None:
@@ -82,10 +85,20 @@ def show_existing_instance() -> bool:
     """Ask an already-running instance to restore its configured desktop view."""
     try:
         from personal_mcp_gateway.desktop import shell
-
-        return shell.signal_activation_event() or shell.show_existing_window()
     except Exception:
         return False
+    # Never reveal the management window from the new process. In desktop mode
+    # it is only a hidden control surface. Retry the controller event briefly to
+    # cover a second shortcut launch racing the first process's cold startup.
+    for attempt in range(_ACTIVATION_SIGNAL_ATTEMPTS):
+        try:
+            if shell.signal_activation_event():
+                return True
+        except Exception:
+            pass
+        if attempt + 1 < _ACTIVATION_SIGNAL_ATTEMPTS:
+            time.sleep(_ACTIVATION_SIGNAL_DELAY)
+    return False
 
 
 class DesktopController:
@@ -224,6 +237,8 @@ class DesktopController:
                 window.hide()
         except Exception:
             return False
+        finally:
+            self.hide_management_window()
         return True
 
     def set_card_size(self, project_id: str, preset: str) -> bool:
@@ -289,6 +304,16 @@ class DesktopController:
             except Exception:
                 pass
 
+    def hide_management_window(self) -> None:
+        """Enforce the desktop-mode invariant: no shared host behind the cards."""
+        window = self.window
+        if window is None:
+            return
+        try:
+            window.hide()
+        except Exception:
+            pass
+
     def activate_from_shortcut(self) -> None:
         """Make an explicit Desktop/Start Menu launch produce a visible surface."""
         if self.state.desktop_mode and self.card_windows:
@@ -333,12 +358,15 @@ class DesktopController:
         window = self.window
         if window is None:
             return
-        if self.state.desktop_mode and self.card_windows:
-            if self.show_card_windows():
-                try:
-                    window.hide()
-                except Exception:
-                    pass
+        if self.state.desktop_mode:
+            self.hide_management_window()
+            try:
+                if self.card_windows:
+                    self.show_card_windows()
+            finally:
+                # WebView2 can realize hidden forms asynchronously, so enforce
+                # the invariant both before and after the per-card show calls.
+                self.hide_management_window()
             return
         try:
             window.show()
@@ -440,56 +468,38 @@ class DesktopApi:
         enabled = bool(desktop_mode)
         window = controller.window
         if enabled == controller.state.desktop_mode:
+            if enabled:
+                controller.show_window()
             return self.snapshot()
 
-        if window is not None:
-            from personal_mcp_gateway.desktop import shell
+        from personal_mcp_gateway.desktop import shell
 
-            if enabled and controller.state.compact:
+        if enabled:
+            controller.remember_geometry()
+            if window is not None and controller.state.compact:
                 window.resize(controller.state.width, controller.state.height)
-            if enabled:
+            if window is not None:
                 try:
                     window.on_top = False
                 except Exception:
                     pass
-            if controller.card_windows:
-                if enabled:
-                    controller.remember_geometry()
-                    if not controller.show_card_windows():
-                        if controller.state.compact:
-                            window.resize(*COMPACT_SIZE)
-                        if controller.state.on_top:
-                            try:
-                                window.on_top = True
-                            except Exception:
-                                pass
-                        return self.snapshot()
-                    try:
-                        window.hide()
-                    except Exception:
-                        controller.hide_card_windows()
-                        return self.snapshot()
-                else:
-                    controller.hide_card_windows()
-                    try:
-                        window.show()
-                        window.restore()
-                    except Exception:
-                        return self.snapshot()
-            elif not shell.set_native_desktop_mode(window, enabled):
-                if enabled and controller.state.compact:
-                    window.resize(*COMPACT_SIZE)
-                if enabled and controller.state.on_top:
-                    try:
-                        window.on_top = True
-                    except Exception:
-                        pass
-                return self.snapshot()
-
-        if enabled:
             controller.state.compact = False
             controller.state.on_top = False
-        controller.state.desktop_mode = enabled
+            controller.state.desktop_mode = True
+            save_state(controller.state)
+            controller.show_window()
+            return self.snapshot()
+
+        controller.state.desktop_mode = False
+        controller.hide_card_windows()
+        if window is not None:
+            if not controller.card_windows:
+                shell.set_native_desktop_mode(window, False)
+            try:
+                window.show()
+                window.restore()
+            except Exception:
+                pass
         save_state(controller.state)
         return self.snapshot()
 
@@ -554,7 +564,7 @@ class DesktopApi:
         controller.state.hidden_cards = None
         save_state(controller.state)
         if controller.state.desktop_mode:
-            controller.show_card_windows()
+            controller.show_window()
         return self.snapshot()
 
     def capture(self) -> dict[str, Any]:
@@ -695,6 +705,8 @@ def main() -> int:
         min_size=MIN_SIZE,
         on_top=state.on_top and not state.desktop_mode,
         background=BACKGROUND_DARK if state.theme == "dark" else BACKGROUND_LIGHT,
+        hidden=state.desktop_mode,
+        focus=not state.desktop_mode,
     )
     if window is None:
         if activation_event is not None:

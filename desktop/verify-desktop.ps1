@@ -288,6 +288,14 @@ $layout = Get-DesktopLayout -InstallDir $InstallDir
 $python = $layout.Python
 $resultPath = Join-Path $EvidenceDir 'desktop-verification-result.json'
 New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
+$desktopMode = $false
+if (Test-Path -LiteralPath $layout.State) {
+    $savedState = Get-Content -LiteralPath $layout.State -Raw | ConvertFrom-Json
+    $desktopModeProperty = $savedState.PSObject.Properties['desktop_mode']
+    if ($null -ne $desktopModeProperty) {
+        $desktopMode = [bool]$desktopModeProperty.Value
+    }
+}
 
 function Test-Shortcut {
     param(
@@ -387,10 +395,20 @@ try {
                 throw "No $($layout.AppName) window appeared within $LaunchTimeoutSeconds seconds."
             }
             $launch.window = $window
-            $launch.resize = [PoyiWindowProbe]::ResizeContract(
-                [uint32]$windowProcessId, $layout.AppName)
-            if (-not $launch.resize.StartsWith('passed:')) {
-                throw "The frameless resize contract failed: $($launch.resize)."
+            if ($desktopMode -and -not $window.EndsWith(' hidden-to-tray')) {
+                throw ('Desktop mode exposed the management canvas instead of keeping it hidden: ' +
+                    $window)
+            }
+            if ($desktopMode) {
+                # The management form starts hidden in card mode, so its
+                # before_show resize hook intentionally has not run yet.
+                $launch.resize = 'skipped:hidden-management'
+            } else {
+                $launch.resize = [PoyiWindowProbe]::ResizeContract(
+                    [uint32]$windowProcessId, $layout.AppName)
+                if (-not $launch.resize.StartsWith('passed:')) {
+                    throw "The frameless resize contract failed: $($launch.resize)."
+                }
             }
         } finally {
             if ($launch.mode -eq 'launched-and-stopped') {

@@ -47,7 +47,10 @@ Every shortcut targets `runtime\Scripts\PoyiControlCenter.exe`. Desktop and Star
 `--activate`: if the board is already running in the tray they restore the configured cards, and if
 all five cards were individually hidden they make all five visible again. The Startup shortcut uses
 `--background`, so signing in preserves intentional per-card visibility without forcing hidden cards
-back onto the desktop. The installer creates the launcher
+back onto the desktop. Activation is delivered to the running controller; it never directly reveals
+the hidden management window. While Desktop mode is active that window starts hidden and stays hidden
+even if an individual card fails to initialize, so the obsolete shared canvas cannot stack behind the
+independent cards. The installer creates the launcher
 from the real Windows GUI-subsystem interpreter instead of uv's virtual-environment trampoline, so
 starting from Desktop, Start Menu, or Startup neither opens nor depends on PowerShell or a console
 Python process.
@@ -82,6 +85,13 @@ All three states pass. Minimizing the board or sending it to the tray is how it 
 and neither says anything about whether the window renders. Sizing from the restored placement is
 what makes that work: a minimized window reports its on-screen rectangle as a small off-screen stub,
 which would otherwise be indistinguishable from the tray backend's message window.
+
+Desktop mode is stricter: the management window must be `hidden-to-tray`. A visible management
+window would recreate the obsolete shared canvas behind the independent cards, so verification
+rejects that state even when every individual card window is otherwise healthy.
+Because that form starts hidden, its ordinary-window resize hook has not run; the management resize
+probe is therefore skipped in Desktop mode and remains mandatory whenever the management window is
+the active view.
 
 An unreachable gateway is recorded as `gatewayReachable: false` and does not fail verification. The
 board is designed to render a "no link" state, so that is a thing it reports, not a thing that makes
