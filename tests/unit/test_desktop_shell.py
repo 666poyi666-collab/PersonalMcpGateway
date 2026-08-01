@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -44,7 +44,44 @@ def test_create_window_requests_a_transparent_webview2_surface(
     assert calls[0][1]["background_color"] == "#102030"
     assert calls[0][1]["frameless"] is True
     assert calls[0][1]["easy_drag"] is False
+    assert calls[0][1]["hidden"] is False
+    assert calls[0][1]["focus"] is True
+    assert calls[0][1]["shadow"] is True
     assert os.environ["WEBVIEW2_DEFAULT_BACKGROUND_COLOR"] == "00000000"
+
+
+def test_card_window_options_keep_each_surface_hidden_until_desktop_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def create_window(title: str, **options: object) -> object:
+        calls.append((title, options))
+        return object()
+
+    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(create_window=create_window))
+
+    shell.create_window(
+        page="<html></html>",
+        js_api=object(),
+        width=320,
+        height=240,
+        x=20,
+        y=30,
+        min_size=(220, 150),
+        on_top=False,
+        background="#080B12",
+        title="Poyi Card - FocusLink",
+        hidden=True,
+        focus=True,
+        easy_drag=False,
+        shadow=False,
+    )
+
+    assert calls[0][0] == "Poyi Card - FocusLink"
+    assert calls[0][1]["hidden"] is True
+    assert calls[0][1]["shadow"] is False
+    assert calls[0][1]["min_size"] == (220, 150)
 
 
 def test_create_window_retries_with_the_themed_background_on_old_pywebview(
@@ -146,3 +183,65 @@ def test_native_resize_enters_the_ui_thread_synchronously(
     assert shell.begin_native_resize(window, "se") is False
     assert len(callbacks) == 1
     assert calls == [(window, "se")]
+
+
+def test_tray_menu_can_restore_each_independently_hidden_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Menu:
+        SEPARATOR = object()
+
+        def __init__(self, *items: object) -> None:
+            self.items = list(items)
+
+    class MenuItem:
+        def __init__(self, text: str, action: object, **options: object) -> None:
+            self.text = text
+            self.action = action
+            self.options = options
+
+    class Icon:
+        def __init__(self, name: str, image: object, title: str, menu: Menu) -> None:
+            self.name = name
+            self.image = image
+            self.title = title
+            self.menu = menu
+
+    fake_pystray = SimpleNamespace(Menu=Menu, MenuItem=MenuItem, Icon=Icon)
+    monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
+    state = SimpleNamespace(desktop_mode=True, compact=False, on_top=False)
+
+    def is_visible(project_id: str) -> bool:
+        return project_id != "journal"
+
+    controller = SimpleNamespace(
+        state=state,
+        card_is_visible=is_visible,
+    )
+
+    def noop(*_args: object) -> None:
+        return None
+
+    actions = {
+        "show": noop,
+        "desktop": noop,
+        "compact": noop,
+        "on_top": noop,
+        "web": noop,
+        "refresh": noop,
+        "quit": noop,
+        "toggle_card": noop,
+        "show_all_cards": noop,
+        "reset_cards": noop,
+        "cards": {"foxlink": "FocusLink", "journal": "拾光日记"},
+    }
+
+    icon = shell.build_tray_icon(cast(Any, controller), actions)
+
+    card_item = next(item for item in icon.menu.items if getattr(item, "text", "") == "桌面磁贴")
+    labels = [getattr(item, "text", "") for item in card_item.action.items]
+    assert labels == ["FocusLink", "拾光日记", "", "显示全部磁贴", "恢复默认位置与大小"]
+    journal = next(
+        item for item in card_item.action.items if getattr(item, "text", "") == "拾光日记"
+    )
+    assert journal.options["checked"](object()) is False

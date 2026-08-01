@@ -15,7 +15,8 @@ Set-StrictMode -Version Latest
 $script:AppName = 'Poyi Control Center'
 $script:ShortcutFile = 'Poyi Control Center.lnk'
 $script:StartMenuFolder = 'Poyi'
-$script:LaunchArguments = '-m personal_mcp_gateway.desktop.app'
+$script:LaunchArguments = '-m personal_mcp_gateway.desktop.app --activate'
+$script:StartupArguments = '-m personal_mcp_gateway.desktop.app --background'
 # The evergreen WebView2 runtime registers itself under this fixed product GUID.
 $script:WebView2Guid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
 
@@ -33,6 +34,7 @@ function Get-DesktopLayout {
     [ordered]@{
         AppName       = $script:AppName
         Arguments     = $script:LaunchArguments
+        StartupArguments = $script:StartupArguments
         Root          = $root
         Runtime       = $runtime
         Python        = Join-Path $runtime 'Scripts\python.exe'
@@ -140,6 +142,7 @@ function New-DesktopShortcut {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Layout,
+        [string]$Arguments,
         [string]$Description = 'Poyi Control Center - Personal MCP Gateway desktop board'
     )
 
@@ -148,7 +151,11 @@ function New-DesktopShortcut {
     try {
         $link = $shell.CreateShortcut($Path)
         $link.TargetPath = $Layout.Launcher
-        $link.Arguments = $Layout.Arguments
+        $link.Arguments = if ([string]::IsNullOrWhiteSpace($Arguments)) {
+            $Layout.Arguments
+        } else {
+            $Arguments
+        }
         $link.WorkingDirectory = $Layout.Root
         $link.Description = $Description
         $link.WindowStyle = 7

@@ -19,9 +19,11 @@ from personal_mcp_gateway.desktop.native_window import (
     enable_transparent_background,
     install_frameless_resize,
     interpolate_window_rect,
+    normalize_window_regions,
     resize_hit_test,
     resize_smoothing_factor,
     resize_target_rect,
+    set_desktop_widget_mode,
     set_desktop_window_mode,
 )
 
@@ -195,11 +197,25 @@ def test_resize_hit_test_covers_every_edge_and_corner() -> None:
     assert resize_hit_test(rect, (300, 400), 10) is None
 
 
+def test_window_regions_are_bounded_and_scaled_for_gdi() -> None:
+    assert normalize_window_regions(
+        [{"x": 10.4, "y": 20.2, "width": 300.3, "height": 140.8, "radius": 12}],
+        1.5,
+    ) == [(16, 30, 466, 241, 36)]
+    assert normalize_window_regions(
+        [{"x": "bad", "y": 0, "width": 20, "height": 20}],
+    ) == []
+    assert normalize_window_regions(
+        [{"x": 0, "y": 0, "width": 0, "height": 20}],
+    ) == []
+
+
 def test_native_resize_requires_a_real_window_handle() -> None:
     assert install_frameless_resize(object()) is False
     assert begin_window_resize(object(), "se") is False
     assert begin_window_resize(object(), "not-an-edge") is False
     assert enable_transparent_background(object()) is False
+    assert set_desktop_widget_mode(object(), True) is False
     assert set_desktop_window_mode(object(), True) is False
 
 
@@ -281,6 +297,38 @@ def test_desktop_mode_adds_and_restores_native_window_styles(
     assert begin_window_resize(object(), "se") is False
 
     assert set_desktop_window_mode(object(), False) is True
+    assert user32.ex_style == native_window.WS_EX_APPWINDOW | 0x00000100
+    assert user32.position_after[-1] == native_window.HWND_NOTOPMOST
+
+
+def test_desktop_widget_mode_hides_one_card_from_the_taskbar_without_noactivate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = _DesktopUser32()
+
+    def fake_native_handle(_window: Any) -> int:
+        return 654
+
+    def fake_windll(_name: str, use_last_error: bool) -> _DesktopUser32:
+        assert use_last_error is True
+        return user32
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+
+    assert set_desktop_widget_mode(object(), True) is True
+    assert user32.ex_style & native_window.WS_EX_TOOLWINDOW
+    assert not user32.ex_style & native_window.WS_EX_APPWINDOW
+    assert not user32.ex_style & native_window.WS_EX_NOACTIVATE
+    assert user32.position_after == [native_window.HWND_BOTTOM]
+
+    assert set_desktop_widget_mode(object(), False) is True
     assert user32.ex_style == native_window.WS_EX_APPWINDOW | 0x00000100
     assert user32.position_after[-1] == native_window.HWND_NOTOPMOST
 

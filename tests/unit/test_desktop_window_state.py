@@ -5,11 +5,15 @@ from pathlib import Path
 import pytest
 
 from personal_mcp_gateway.desktop.window_state import (
+    CARD_LAYOUT_VERSION,
+    CARD_MIN_SIZE,
     FULL_SIZE,
     MIN_SIZE,
     PROJECT_LAYOUT_VERSION,
     WindowState,
     load_state,
+    normalize_card_layout,
+    normalize_hidden_cards,
     normalize_project_layout,
     save_state,
     state_dir,
@@ -43,6 +47,7 @@ def test_missing_file_falls_back_to_defaults(tmp_path: Path) -> None:
     assert loaded.compact is False
     assert loaded.desktop_mode is False
     assert loaded.project_layout_version == PROJECT_LAYOUT_VERSION
+    assert loaded.card_layout_version == CARD_LAYOUT_VERSION
     assert loaded.theme == "light"
 
 
@@ -142,3 +147,48 @@ def test_legacy_grid_layout_is_kept_for_renderer_migration() -> None:
     assert normalize_project_layout({"watch": {"cols": 99, "rows": 0, "order": 2}}) == {
         "watch": {"cols": 12, "rows": 1, "order": 2}
     }
+
+
+def test_card_layout_keeps_independent_absolute_window_geometry() -> None:
+    assert normalize_card_layout(
+        {
+            "foxlink": {"x": -320, "y": 48, "w": 640, "h": 280, "order": 2},
+            "watch": {"x": 400.8, "y": 90.4, "w": 12, "h": 20, "order": -1},
+            "bad": {"x": 1, "y": 2, "w": "wide", "h": 300},
+        }
+    ) == {
+        "foxlink": {"x": -320, "y": 48, "w": 640, "h": 280, "order": 2},
+        "watch": {
+            "x": 400,
+            "y": 90,
+            "w": CARD_MIN_SIZE[0],
+            "h": CARD_MIN_SIZE[1],
+            "order": 0,
+        },
+    }
+
+
+def test_card_layout_round_trips_separately_from_board_layout(tmp_path: Path) -> None:
+    target = tmp_path / "cards.json"
+    saved = WindowState(
+        project_layout={"watch": {"x": 0, "y": 0, "w": 500, "h": 500, "order": 0}},
+        card_layout={"watch": {"x": 960, "y": 44, "w": 420, "h": 300, "order": 1}},
+    )
+
+    assert save_state(saved, target) is True
+    loaded = load_state(target)
+
+    assert loaded.project_layout == saved.project_layout
+    assert loaded.card_layout == saved.card_layout
+
+
+def test_hidden_cards_are_known_deduplicated_and_persisted(tmp_path: Path) -> None:
+    assert normalize_hidden_cards(["journal", "bad", "journal", 4, "watch"]) == [
+        "journal",
+        "watch",
+    ]
+    target = tmp_path / "hidden-cards.json"
+    saved = WindowState(hidden_cards=["journal", "watch"])
+
+    assert save_state(saved, target) is True
+    assert load_state(target).hidden_cards == ["journal", "watch"]

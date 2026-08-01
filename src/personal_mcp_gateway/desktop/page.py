@@ -18,6 +18,8 @@ STATIC_ROOT = Path(__file__).with_name("static")
 
 _STYLE_LINK = '<link rel="stylesheet" href="desktop.css">'
 _SCRIPT_TAG = '<script src="desktop.js"></script>'
+_BODY_TAG = '<body class="booting desktop-mode" data-view="overview">'
+_CARD_IDS = frozenset({"foxlink", "watch", "journal", "personal", "bzsjk"})
 
 
 def _guard(asset: str, name: str) -> str:
@@ -39,3 +41,17 @@ def build_page(root: Path | None = None) -> str:
 
     markup = markup.replace(_STYLE_LINK, f"<style>\n{css}\n</style>")
     return markup.replace(_SCRIPT_TAG, f"<script>\n{script}\n</script>")
+
+
+def build_card_page(project_id: str, root: Path | None = None) -> str:
+    """Return the shared renderer scoped to one independent desktop card."""
+    if project_id not in _CARD_IDS:
+        raise ValueError(f"unknown desktop card: {project_id}")
+    page = build_page(root)
+    if _BODY_TAG not in page:
+        raise ValueError("desktop.html no longer matches the card page body tag")
+    body = (
+        '<body class="booting desktop-mode card-window" '
+        f'data-view="overview" data-card-id="{project_id}">'
+    )
+    return page.replace(_BODY_TAG, body, 1)

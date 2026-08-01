@@ -124,7 +124,8 @@ New-DesktopShortcut -Path $layout.DesktopLink -Layout $layout
 New-DesktopShortcut -Path $layout.StartMenuLink -Layout $layout
 Write-Host '  Created the Desktop and Start Menu shortcuts.'
 if ($Autostart) {
-    New-DesktopShortcut -Path $layout.StartupLink -Layout $layout
+    New-DesktopShortcut -Path $layout.StartupLink -Layout $layout `
+        -Arguments $layout.StartupArguments
     Write-Host '  Enabled autostart at sign-in.'
 } elseif (Test-Path -LiteralPath $layout.StartupLink) {
     Remove-Item -LiteralPath $layout.StartupLink -Force

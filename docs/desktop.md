@@ -1,7 +1,8 @@
 # Desktop Board
 
-Poyi Control Center is a native Windows window, not a browser tab: a frameless WebView2 surface
-plus a system tray icon that keeps reporting status after the window is hidden. It shows the same
+Poyi Control Center is a native Windows application, not a browser tab: one management WebView2
+window, five independent frameless desktop-card windows and a system tray icon that keeps reporting
+status after the windows are hidden. It shows the same
 data as the web dashboard — the independently deployed Personal Gateway, Watch MCP, Foxlink MCP and
 Journal MCP, each MCP readiness endpoint, each Secure MCP Tunnel, 24-hour activity, success rate and
 the state-change timeline.
@@ -42,7 +43,11 @@ Options for `install-desktop.ps1`:
 Re-running the installer is the upgrade path. It stops any instance running out of its own runtime
 first — matched on the executable path, so other Python processes are left alone.
 
-Every shortcut targets `runtime\Scripts\PoyiControlCenter.exe`. The installer creates that launcher
+Every shortcut targets `runtime\Scripts\PoyiControlCenter.exe`. Desktop and Start Menu launches use
+`--activate`: if the board is already running in the tray they restore the configured cards, and if
+all five cards were individually hidden they make all five visible again. The Startup shortcut uses
+`--background`, so signing in preserves intentional per-card visibility without forcing hidden cards
+back onto the desktop. The installer creates the launcher
 from the real Windows GUI-subsystem interpreter instead of uv's virtual-environment trampoline, so
 starting from Desktop, Start Menu, or Startup neither opens nor depends on PowerShell or a console
 Python process.
@@ -94,14 +99,15 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 | Window edges | Drag any edge or corner to resize the whole frameless window. A 120 Hz Win32 tracker applies pointer bounds directly, without low-pass lag or a post-release settle animation, even when Windows is configured to show only an outline while resizing. |
 | Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
 | Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
-| Desktop | Locks the board in place on a genuinely transparent host, hides application chrome, avoids activation, and keeps the tiles below normal application windows. This is independent from Pin and disables conflicting window controls until released. |
-| Widget controls | In Desktop mode, the small floating control at the top-right edits the tiles in place without leaving the transparent desktop. Drag a tile to move it, use the visible edge/corner handles for continuous resizing, or choose its Small/Medium/Large preset to snap it back inside the viewport. Use Restore default when needed, then choose Finish editing to persist the layout. The same control can hide the board to the tray or quit it completely. |
+| Desktop | Hides the management board and shows five independent taskbar-free native card windows. Each card can move, resize, overlap, cross monitors, hide and restore without reflowing any peer. There is no monitor-sized transparent host: pixels outside each card belong directly to the desktop or the application underneath. |
+| Desktop cards | Drag the card header or the faint `::` grip to move only that card. Hover the grip to reveal S/M/L size presets, per-card reset and per-card hide. Drag any native edge or the marked bottom-right corner for arbitrary continuous sizing. Position, size and hidden state persist per project; no shared grid, board padding or automatic peer movement is involved. |
 | Compact | Shrinks to a narrow status panel that fits beside other work. |
-| Close | Hides to the tray; the poll loop and the tray icon keep running. |
-| Tray menu | Show, desktop mode, compact, pin, open the web dashboard, refresh, quit. |
+| Close | Hides to the tray; double-click the Desktop shortcut to bring the cards back. The poll loop and tray icon keep running. |
+| Tray menu | Show, desktop mode, compact, pin, open the web dashboard, refresh and quit. The Desktop cards submenu has a checked visibility switch for every card, Show all cards and Restore default positions and sizes, so a hidden card is always recoverable. |
 
-Window size, position, theme, desktop mode, compact mode, pin state, free tile positions and dimensions persist across
-restarts. Brief probe failures keep the last valid board visible and show a restrained recovery
+Management-window size, position, theme, desktop mode, compact mode, pin state, board layout and
+each desktop card's independent screen geometry and visibility persist across restarts. Brief probe failures keep
+the last valid board visible and show a restrained recovery
 banner until the next successful poll instead of flashing a full-screen disconnect state.
 
 Status is encoded by shape as well as hue — circle for healthy, triangle for degraded, diamond for

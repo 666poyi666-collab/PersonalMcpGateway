@@ -13,6 +13,7 @@ const CIRCUMFERENCE = 2 * Math.PI * 52;
 
 const el = (id) => document.getElementById(id);
 const root = document.documentElement;
+const CARD_ID = document.body.dataset.cardId || "";
 
 const dom = {
   body: document.body,
@@ -180,6 +181,8 @@ let projectResizeObserver = null;
 let sectionsRendered = false;
 let windowResizeTimer = 0;
 let projectResizeFrame = 0;
+let desktopRegionFrame = 0;
+let desktopRegionTimer = 0;
 
 // Renderer-owned animations are deliberately short and compositor-only.  The
 // window host can dispatch dozens of resize observations per second, so motion
@@ -1331,6 +1334,7 @@ function buildProjectSection(target, index, widgets, data) {
   section.dataset.projectId = target.id;
 
   const head = make("header", "proj-head");
+  if (CARD_ID === target.id) head.classList.add("pywebview-drag-region");
   const naming = make("div", "proj-naming");
   if (style.eyebrow) naming.append(make("span", "proj-eyebrow", style.eyebrow));
   naming.append(make("h2", null, style.display));
@@ -1405,6 +1409,41 @@ function buildProjectSection(target, index, widgets, data) {
     handle.setAttribute("aria-label", label);
     section.append(handle);
   }
+  if (CARD_ID === target.id) {
+    const controls = renderKey(make("div", "card-window-controls"), "card-controls");
+    controls.setAttribute("aria-label", "磁贴窗口控制");
+    const move = renderKey(
+      make("span", "card-window-move pywebview-drag-region", "::"),
+      "card-control:move",
+    );
+    move.title = "拖动此磁贴";
+    move.setAttribute("role", "button");
+    move.setAttribute("aria-label", "拖动此磁贴");
+    controls.append(move);
+    for (const preset of ["small", "medium", "large"]) {
+      const label = { small: "S", medium: "M", large: "L" }[preset];
+      const button = renderKey(make("button", "card-window-size", label), `card-size:${preset}`);
+      button.type = "button";
+      button.dataset.cardSize = preset;
+      button.title = `${label} 尺寸`;
+      button.setAttribute("aria-label", `切换为${label}尺寸`);
+      controls.append(button);
+    }
+    const reset = renderKey(make("button", "card-window-reset", "\u21ba"), "card-control:reset");
+    reset.type = "button";
+    reset.dataset.cardAction = "reset";
+    reset.title = "恢复此磁贴的默认位置与大小";
+    reset.setAttribute("aria-label", reset.title);
+    const hide = renderKey(make("button", "card-window-hide", "\u00d7"), "card-control:hide");
+    hide.type = "button";
+    hide.dataset.cardAction = "hide";
+    hide.title = "隐藏此磁贴，可从托盘恢复";
+    hide.setAttribute("aria-label", hide.title);
+    controls.append(reset, hide);
+    const resizeCorner = renderKey(make("span", "card-window-resize-corner"), "card-resize-corner");
+    resizeCorner.setAttribute("aria-hidden", "true");
+    section.append(controls, resizeCorner);
+  }
   return section;
 }
 
@@ -1431,6 +1470,12 @@ function renderSections(data) {
   const widgets = Array.isArray(data.widgets) ? data.widgets : [];
   const bzsjk = bzsjkTargetFromWidgets(widgets);
   if (bzsjk && !targets.some((target) => target.id === "bzsjk")) targets.push(bzsjk);
+  if (CARD_ID) {
+    const selected = targets.find((target) => target.id === CARD_ID)
+      || OFFLINE_MATRIX_TARGETS.find((target) => target.id === CARD_ID);
+    targets.splice(0, targets.length);
+    if (selected) targets.push(selected);
+  }
   const byId = new Map(targets.map((t) => [t.id, t]));
   const ordered = [];
   for (const id of SECTION_ORDER) if (byId.has(id)) ordered.push(byId.get(id));
@@ -1444,22 +1489,24 @@ function renderSections(data) {
     return a - b;
   });
 
-  installLayoutChrome();
+  if (!CARD_ID) installLayoutChrome();
   const existing = new Map(projectTiles().map((section) => [section.dataset.projectId, section]));
   const nextSections = [];
   const added = [];
   let structureChanged = existing.size !== ordered.length;
   for (let index = 0; index < ordered.length; index += 1) {
     const target = ordered[index];
-    const signature = projectSectionSignature(target, index, widgets, data);
+    const cardOrder = SECTION_ORDER.indexOf(target.id);
+    const displayIndex = CARD_ID && cardOrder >= 0 ? cardOrder : index;
+    const signature = projectSectionSignature(target, displayIndex, widgets, data);
     let section = existing.get(target.id);
     if (!section) {
-      section = buildProjectSection(target, index, widgets, data);
+      section = buildProjectSection(target, displayIndex, widgets, data);
       section._renderSignature = signature;
       added.push(section);
       structureChanged = true;
     } else if (section._renderSignature !== signature) {
-      patchProjectSection(section, buildProjectSection(target, index, widgets, data));
+      patchProjectSection(section, buildProjectSection(target, displayIndex, widgets, data));
       section._renderSignature = signature;
     }
     existing.delete(target.id);
@@ -1711,7 +1758,7 @@ function applyView(view) {
       ? Math.max(1, incomingVersion)
       : Object.keys(projectLayout).length ? 1 : PROJECT_LAYOUT_VERSION;
   }
-  const desktopMode = Boolean(view.desktopMode);
+  const desktopMode = CARD_ID ? true : Boolean(view.desktopMode);
   if (desktopMode && dom.body.dataset.view !== "overview") selectView("overview");
   dom.body.classList.toggle("compact", Boolean(view.compact));
   dom.body.classList.toggle("desktop-mode", desktopMode);
@@ -1726,6 +1773,7 @@ function applyView(view) {
     dom.titlebarDrag.classList.toggle("pywebview-drag-region", !desktopMode);
   }
   dom.body.classList.remove("booting");
+  queueDesktopRegionSync();
 }
 
 function clamp(value, minimum, maximum) {
@@ -1943,6 +1991,16 @@ function workspaceViewportHeight() {
 }
 
 function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
+  if (CARD_ID) {
+    const width = Math.max(1, document.documentElement.clientWidth);
+    const height = Math.max(1, document.documentElement.clientHeight);
+    projectViewportWidth = width;
+    projectViewportHeight = height;
+    projectCanvasWidth = width;
+    dom.projectSections.style.width = `${width}px`;
+    dom.projectSections.style.height = `${height}px`;
+    return;
+  }
   const viewportWidth = workspaceViewportWidth();
   const viewportHeight = workspaceViewportHeight();
   projectViewportWidth = viewportWidth;
@@ -1970,7 +2028,78 @@ function updateProjectCanvasSize(extraRect = null, allowShrink = true) {
   dom.projectSections.style.height = `${allowShrink ? wantedHeight : Math.max(currentHeight, wantedHeight)}px`;
 }
 
+function desktopRegionList() {
+  const regions = [];
+  for (const tile of projectTiles()) {
+    const bounds = tile.getBoundingClientRect();
+    if (bounds.width < 1 || bounds.height < 1) continue;
+    const radius = Number.parseFloat(window.getComputedStyle(tile).borderTopLeftRadius) || 0;
+    regions.push({ x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height, radius });
+  }
+  const controls = dom.body.classList.contains("desktop-mode") ? document.querySelector(".widget-controls") : null;
+  if (controls) {
+    const bounds = controls.getBoundingClientRect();
+    if (bounds.width > 1 && bounds.height > 1) {
+      const radius = Number.parseFloat(window.getComputedStyle(controls).borderTopLeftRadius) || 0;
+      regions.push({ x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height, radius });
+    }
+  }
+  return regions;
+}
+
+function queueDesktopRegionSync(delay = 0) {
+  if (CARD_ID) return;
+  if (!dom.body.classList.contains("desktop-mode")) return;
+  if (desktopRegionTimer) window.clearTimeout(desktopRegionTimer);
+  if (delay > 0) {
+    desktopRegionTimer = window.setTimeout(() => {
+      desktopRegionTimer = 0;
+      queueDesktopRegionSync();
+    }, delay);
+    return;
+  }
+  if (desktopRegionFrame) return;
+  desktopRegionFrame = window.requestAnimationFrame(() => {
+    desktopRegionFrame = 0;
+    const bridge = api();
+    if (!bridge || !bridge.set_desktop_regions) return;
+    const editing = layoutMode;
+    const regions = editing ? [] : desktopRegionList();
+    Promise.resolve(bridge.set_desktop_regions(regions, editing)).catch(() => {});
+  });
+}
+
 function applyProjectLayout(animate = false) {
+  if (CARD_ID) {
+    const viewportWidth = Math.max(1, document.documentElement.clientWidth);
+    const viewportHeight = Math.max(1, document.documentElement.clientHeight);
+    projectViewportWidth = viewportWidth;
+    projectViewportHeight = viewportHeight;
+    projectCanvasWidth = viewportWidth;
+    dom.projectSections.style.width = `${viewportWidth}px`;
+    dom.projectSections.style.height = `${viewportHeight}px`;
+    dom.projectSections.classList.add("free-layout", "card-layout");
+    const tile = projectTiles().find((candidate) => candidate.dataset.projectId === CARD_ID);
+    if (!tile) return;
+    tile.style.zIndex = "1";
+    setTileRect(tile, {
+      left: 0,
+      top: 0,
+      width: viewportWidth,
+      height: viewportHeight,
+    });
+    if (animate) {
+      playRenderAnimation(
+        tile,
+        [
+          { opacity: 0, transform: "translateY(7px) scale(.985)" },
+          { opacity: 1, transform: "translateY(0) scale(1)" },
+        ],
+        { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" },
+      );
+    }
+    return;
+  }
   const viewportWidth = workspaceViewportWidth();
   const viewportHeight = workspaceViewportHeight();
   if (viewportWidth <= 0 || viewportHeight <= 0) return;
@@ -2009,6 +2138,8 @@ function applyProjectLayout(animate = false) {
     }
   });
   updateProjectCanvasSize();
+  queueDesktopRegionSync();
+  queueDesktopRegionSync(420);
   if (sourceVersion < PROJECT_LAYOUT_VERSION && Object.keys(projectLayout).length) {
     projectLayoutVersion = PROJECT_LAYOUT_VERSION;
     projectLayout = tileLayoutFromDom();
@@ -2058,6 +2189,11 @@ async function resetTileLayout() {
 }
 
 function configureTileEditing() {
+  if (CARD_ID) {
+    layoutMode = false;
+    dom.body.classList.remove("layout-mode");
+    return;
+  }
   const changed = dom.body.classList.contains("layout-mode") !== layoutMode;
   dom.body.classList.toggle("layout-mode", layoutMode);
   dom.btnLayout.setAttribute("aria-pressed", String(layoutMode));
@@ -2093,6 +2229,8 @@ function configureTileEditing() {
       );
     });
   }
+  queueDesktopRegionSync();
+  queueDesktopRegionSync(360);
 }
 
 function hideAlignmentChrome() {
@@ -2502,6 +2640,21 @@ function bindCanvasPanning() {
 
 function bindTileEditing() {
   dom.projectSections.addEventListener("click", (event) => {
+    const cardControl = event.target.closest("[data-card-size], [data-card-action]");
+    if (cardControl && CARD_ID) {
+      event.preventDefault();
+      event.stopPropagation();
+      const bridge = api();
+      if (!bridge) return;
+      if (cardControl.dataset.cardSize && bridge.set_size) {
+        bridge.set_size(cardControl.dataset.cardSize).catch(() => {});
+      } else if (cardControl.dataset.cardAction === "reset" && bridge.reset_geometry) {
+        bridge.reset_geometry().catch(() => {});
+      } else if (cardControl.dataset.cardAction === "hide" && bridge.hide_card) {
+        bridge.hide_card().catch(() => {});
+      }
+      return;
+    }
     const button = event.target.closest("[data-tile-preset]");
     if (!button) return;
     const tile = button.closest(".proj");

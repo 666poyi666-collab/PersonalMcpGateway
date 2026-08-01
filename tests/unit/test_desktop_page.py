@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_mcp_gateway.desktop.page import STATIC_ROOT, build_page
+from personal_mcp_gateway.desktop.page import STATIC_ROOT, build_card_page, build_page
 
 
 def _stub(root: Path, *, css: str = "body{color:red}", script: str = "var a=1;") -> Path:
@@ -44,6 +44,21 @@ def test_the_page_never_references_a_remote_origin() -> None:
     network_references = page.replace("http://www.w3.org/2000/svg", "")
     assert "http://" not in network_references
     assert "https://" not in network_references
+
+
+def test_card_page_scopes_the_shared_renderer_to_one_project() -> None:
+    page = build_card_page("journal")
+
+    assert 'class="booting desktop-mode card-window"' in page
+    assert 'data-card-id="journal"' in page
+    assert page.count('data-card-id="journal"') == 1
+    assert 'href="desktop.css"' not in page
+    assert 'src="desktop.js"' not in page
+
+
+def test_card_page_rejects_an_unknown_project() -> None:
+    with pytest.raises(ValueError, match="unknown desktop card"):
+        build_card_page("not-a-project")
 
 
 def test_assets_are_inlined_from_an_explicit_root(tmp_path: Path) -> None:

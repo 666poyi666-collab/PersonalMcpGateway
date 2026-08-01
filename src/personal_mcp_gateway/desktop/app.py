@@ -20,13 +20,17 @@ from personal_mcp_gateway.desktop.client import (
     tray_tooltip,
 )
 from personal_mcp_gateway.desktop.icons import build_tray_image
-from personal_mcp_gateway.desktop.page import build_page
+from personal_mcp_gateway.desktop.page import build_card_page, build_page
 from personal_mcp_gateway.desktop.window_state import (
+    CARD_LAYOUT_VERSION,
+    CARD_MIN_SIZE,
     COMPACT_SIZE,
+    DEFAULT_CARD_LAYOUT,
     MIN_SIZE,
     PROJECT_LAYOUT_VERSION,
     WindowState,
     load_state,
+    normalize_card_layout,
     normalize_project_layout,
     save_state,
     state_dir,
@@ -42,6 +46,16 @@ BACKGROUND_LIGHT = "#EEF0F6"
 # no SeCreateGlobalPrivilege, which an unelevated shortcut may not hold.
 _MUTEX_NAME = "Local\\PoyiPersonalMcpDesktop"
 _ERROR_ALREADY_EXISTS = 183
+
+CARD_PROJECT_IDS = ("foxlink", "watch", "journal", "personal", "bzsjk")
+CARD_TITLES = {
+    "foxlink": "FocusLink",
+    "watch": "步序",
+    "journal": "拾光日记",
+    "personal": "Personal Gateway",
+    "bzsjk": "不做手机控",
+}
+CARD_SIZE_SCALES = {"small": 0.72, "medium": 1.0, "large": 1.35}
 
 
 def acquire_single_instance() -> object | None:
@@ -65,11 +79,11 @@ def acquire_single_instance() -> object | None:
 
 
 def show_existing_instance() -> bool:
-    """Ask an already-running hidden instance to reveal its native window."""
+    """Ask an already-running instance to restore its configured desktop view."""
     try:
         from personal_mcp_gateway.desktop import shell
 
-        return shell.show_existing_window()
+        return shell.signal_activation_event() or shell.show_existing_window()
     except Exception:
         return False
 
@@ -81,11 +95,16 @@ class DesktopController:
         self.client = client or GatewayClient(cache_path=snapshot_cache_path())
         self.state: WindowState = load_state()
         self.window: Any | None = None
+        self.card_windows: dict[str, Any] = {}
         self.icon: Any | None = None
         self._snapshot = self.client.initial_snapshot()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._card_state_lock = threading.RLock()
+        self._card_save_timer: threading.Timer | None = None
+        self._activation_event: int | None = None
+        self._activation_thread: threading.Thread | None = None
 
     # ---- polling -----------------------------------------------------
     def apply(self, snapshot: DesktopSnapshot) -> None:
@@ -113,10 +132,192 @@ class DesktopController:
         with self._lock:
             return self._snapshot
 
+    def snapshot_payload(self, card_id: str | None = None) -> dict[str, Any]:
+        payload = self.current().to_payload()
+        payload["view"] = {
+            "compact": self.state.compact,
+            "onTop": self.state.on_top,
+            "desktopMode": self.state.desktop_mode,
+            "theme": self.state.theme,
+            "adminUrl": admin_base_url(),
+            "projectLayoutVersion": self.state.project_layout_version,
+            "projectLayout": self.state.project_layout or {},
+            "cardLayoutVersion": self.state.card_layout_version,
+            "cardLayout": self.state.card_layout or {},
+            "cardMode": card_id is not None,
+            "cardId": card_id,
+            "hiddenCards": self.state.hidden_cards or [],
+        }
+        return payload
+
+    def card_geometry(self, project_id: str) -> dict[str, int]:
+        fallback = DEFAULT_CARD_LAYOUT[project_id]
+        saved = (self.state.card_layout or {}).get(project_id, {})
+        geometry = normalize_card_layout({project_id: {**fallback, **saved}})
+        return geometry.get(project_id, dict(fallback))
+
+    def _flush_card_state(self) -> None:
+        with self._card_state_lock:
+            self._card_save_timer = None
+            save_state(self.state)
+
+    def _queue_card_state_save(self) -> None:
+        with self._card_state_lock:
+            if self._card_save_timer is not None:
+                self._card_save_timer.cancel()
+            timer = threading.Timer(0.18, self._flush_card_state)
+            timer.daemon = True
+            self._card_save_timer = timer
+            timer.start()
+
+    def update_card_geometry(self, project_id: str, **changes: int) -> None:
+        if project_id not in CARD_PROJECT_IDS:
+            return
+        with self._card_state_lock:
+            layout = dict(self.state.card_layout or {})
+            layout[project_id] = {**self.card_geometry(project_id), **changes}
+            self.state.card_layout = normalize_card_layout(layout)
+            self.state.card_layout_version = CARD_LAYOUT_VERSION
+        self._queue_card_state_save()
+
+    def register_card_window(self, project_id: str, window: Any) -> None:
+        self.card_windows[project_id] = window
+        events = getattr(window, "events", None)
+        if events is None:
+            return
+
+        def remember_move(x: int, y: int) -> None:
+            self.update_card_geometry(project_id, x=int(x), y=int(y))
+
+        def remember_size(width: int, height: int) -> None:
+            self.update_card_geometry(project_id, w=int(width), h=int(height))
+
+        events.moved += remember_move
+        events.resized += remember_size
+
+    def card_is_visible(self, project_id: str) -> bool:
+        return project_id in CARD_PROJECT_IDS and project_id not in (self.state.hidden_cards or [])
+
+    def set_card_visible(self, project_id: str, visible: bool) -> bool:
+        if project_id not in CARD_PROJECT_IDS:
+            return False
+        hidden = set(self.state.hidden_cards or [])
+        if visible:
+            hidden.discard(project_id)
+        else:
+            hidden.add(project_id)
+        self.state.hidden_cards = [item for item in CARD_PROJECT_IDS if item in hidden] or None
+        save_state(self.state)
+
+        window = self.card_windows.get(project_id)
+        if window is None or not self.state.desktop_mode:
+            return True
+        from personal_mcp_gateway.desktop import shell
+
+        try:
+            if visible:
+                window.show()
+                window.restore()
+                shell.set_native_desktop_widget_mode(window, True)
+            else:
+                shell.set_native_desktop_widget_mode(window, False)
+                window.hide()
+        except Exception:
+            return False
+        return True
+
+    def set_card_size(self, project_id: str, preset: str) -> bool:
+        scale = CARD_SIZE_SCALES.get(preset)
+        window = self.card_windows.get(project_id)
+        if scale is None or window is None:
+            return False
+        base = DEFAULT_CARD_LAYOUT[project_id]
+        width = max(CARD_MIN_SIZE[0], round(base["w"] * scale))
+        height = max(CARD_MIN_SIZE[1], round(base["h"] * scale))
+        self.update_card_geometry(project_id, w=width, h=height)
+        try:
+            window.resize(width, height)
+        except Exception:
+            return False
+        return True
+
+    def reset_card_geometry(self, project_id: str) -> bool:
+        window = self.card_windows.get(project_id)
+        if project_id not in CARD_PROJECT_IDS or window is None:
+            return False
+        geometry = dict(DEFAULT_CARD_LAYOUT[project_id])
+        layout = dict(self.state.card_layout or {})
+        layout.pop(project_id, None)
+        self.state.card_layout = normalize_card_layout(layout) or None
+        save_state(self.state)
+        try:
+            window.move(geometry["x"], geometry["y"])
+            window.resize(geometry["w"], geometry["h"])
+        except Exception:
+            return False
+        return True
+
+    def show_card_windows(self) -> bool:
+        if len(self.card_windows) != len(CARD_PROJECT_IDS):
+            return False
+        from personal_mcp_gateway.desktop import shell
+
+        succeeded = True
+        ordered = sorted(
+            self.card_windows.items(),
+            key=lambda item: self.card_geometry(item[0]).get("order", 0),
+        )
+        for project_id, window in ordered:
+            try:
+                if not self.card_is_visible(project_id):
+                    window.hide()
+                    continue
+                window.show()
+                window.restore()
+                shell.set_native_desktop_widget_mode(window, True)
+            except Exception:
+                succeeded = False
+        return succeeded
+
+    def hide_card_windows(self) -> None:
+        from personal_mcp_gateway.desktop import shell
+
+        for window in self.card_windows.values():
+            try:
+                shell.set_native_desktop_widget_mode(window, False)
+                window.hide()
+            except Exception:
+                pass
+
+    def activate_from_shortcut(self) -> None:
+        """Make an explicit Desktop/Start Menu launch produce a visible surface."""
+        if self.state.desktop_mode and self.card_windows:
+            if not any(self.card_is_visible(project_id) for project_id in CARD_PROJECT_IDS):
+                self.state.hidden_cards = None
+                save_state(self.state)
+        self.show_window()
+
+    def start_activation_listener(self, event_handle: int | None) -> None:
+        if event_handle is None or self._activation_thread is not None:
+            return
+        self._activation_event = event_handle
+
+        def listen() -> None:
+            from personal_mcp_gateway.desktop import shell
+
+            while shell.wait_for_activation_event(event_handle):
+                if self._stop.is_set():
+                    return
+                self.activate_from_shortcut()
+
+        thread = threading.Thread(target=listen, name="poyi-activate", daemon=True)
+        self._activation_thread = thread
+        thread.start()
+
     # ---- window ------------------------------------------------------
     def remember_geometry(self) -> None:
         window = self.window
-        if window is None:
+        if window is None or self.state.desktop_mode:
             return
         try:
             if not self.state.compact:
@@ -132,6 +333,13 @@ class DesktopController:
         window = self.window
         if window is None:
             return
+        if self.state.desktop_mode and self.card_windows:
+            if self.show_card_windows():
+                try:
+                    window.hide()
+                except Exception:
+                    pass
+            return
         try:
             window.show()
             window.restore()
@@ -145,7 +353,26 @@ class DesktopController:
     def shutdown(self) -> None:
         self._stop.set()
         self._wake.set()
+        activation_event = self._activation_event
+        activation_thread = self._activation_thread
+        self._activation_event = None
+        self._activation_thread = None
+        if activation_event is not None:
+            from personal_mcp_gateway.desktop import shell
+
+            shell.wake_activation_event(activation_event)
+            if (
+                activation_thread is not None
+                and activation_thread is not threading.current_thread()
+            ):
+                activation_thread.join(timeout=1.0)
+            shell.close_activation_event(activation_event)
         self.remember_geometry()
+        with self._card_state_lock:
+            if self._card_save_timer is not None:
+                self._card_save_timer.cancel()
+                self._card_save_timer = None
+            save_state(self.state)
         icon = self.icon
         if icon is not None:
             try:
@@ -153,6 +380,12 @@ class DesktopController:
             except Exception:
                 pass
         window = self.window
+        for card_window in self.card_windows.values():
+            try:
+                card_window.destroy()
+            except Exception:
+                pass
+        self.card_windows.clear()
         if window is not None:
             try:
                 window.destroy()
@@ -167,18 +400,7 @@ class DesktopApi:
         self._controller = controller
 
     def snapshot(self) -> dict[str, Any]:
-        controller = self._controller
-        payload = controller.current().to_payload()
-        payload["view"] = {
-            "compact": controller.state.compact,
-            "onTop": controller.state.on_top,
-            "desktopMode": controller.state.desktop_mode,
-            "theme": controller.state.theme,
-            "adminUrl": admin_base_url(),
-            "projectLayoutVersion": controller.state.project_layout_version,
-            "projectLayout": controller.state.project_layout or {},
-        }
-        return payload
+        return self._controller.snapshot_payload()
 
     def refresh(self) -> dict[str, Any]:
         self._controller.refresh_now()
@@ -230,7 +452,31 @@ class DesktopApi:
                     window.on_top = False
                 except Exception:
                     pass
-            if not shell.set_native_desktop_mode(window, enabled):
+            if controller.card_windows:
+                if enabled:
+                    controller.remember_geometry()
+                    if not controller.show_card_windows():
+                        if controller.state.compact:
+                            window.resize(*COMPACT_SIZE)
+                        if controller.state.on_top:
+                            try:
+                                window.on_top = True
+                            except Exception:
+                                pass
+                        return self.snapshot()
+                    try:
+                        window.hide()
+                    except Exception:
+                        controller.hide_card_windows()
+                        return self.snapshot()
+                else:
+                    controller.hide_card_windows()
+                    try:
+                        window.show()
+                        window.restore()
+                    except Exception:
+                        return self.snapshot()
+            elif not shell.set_native_desktop_mode(window, enabled):
                 if enabled and controller.state.compact:
                     window.resize(*COMPACT_SIZE)
                 if enabled and controller.state.on_top:
@@ -246,6 +492,24 @@ class DesktopApi:
         controller.state.desktop_mode = enabled
         save_state(controller.state)
         return self.snapshot()
+
+    def set_desktop_regions(
+        self,
+        regions: list[dict[str, Any]],
+        full_window: bool = False,
+    ) -> dict[str, bool]:
+        controller = self._controller
+        if not controller.state.desktop_mode or controller.window is None:
+            return {"ok": False}
+        from personal_mcp_gateway.desktop import shell
+
+        return {
+            "ok": shell.set_native_desktop_regions(
+                controller.window,
+                regions,
+                bool(full_window),
+            )
+        }
 
     def set_theme(self, theme: str) -> dict[str, Any]:
         controller = self._controller
@@ -265,6 +529,32 @@ class DesktopApi:
         controller.state.project_layout = {}
         controller.state.project_layout_version = PROJECT_LAYOUT_VERSION
         save_state(controller.state)
+        return self.snapshot()
+
+    def reset_card_layout(self) -> dict[str, Any]:
+        controller = self._controller
+        controller.state.card_layout = None
+        controller.state.card_layout_version = CARD_LAYOUT_VERSION
+        save_state(controller.state)
+        for project_id, window in controller.card_windows.items():
+            geometry = controller.card_geometry(project_id)
+            try:
+                window.move(geometry["x"], geometry["y"])
+                window.resize(geometry["w"], geometry["h"])
+            except Exception:
+                pass
+        return self.snapshot()
+
+    def set_card_visible(self, project_id: str, visible: bool) -> dict[str, Any]:
+        self._controller.set_card_visible(project_id, bool(visible))
+        return self.snapshot()
+
+    def show_all_cards(self) -> dict[str, Any]:
+        controller = self._controller
+        controller.state.hidden_cards = None
+        save_state(controller.state)
+        if controller.state.desktop_mode:
+            controller.show_card_windows()
         return self.snapshot()
 
     def capture(self) -> dict[str, Any]:
@@ -325,22 +615,60 @@ class DesktopApi:
         self._controller.shutdown()
 
 
+class CardApi:
+    """Small per-window bridge; the card identity never comes from page input."""
+
+    def __init__(self, controller: DesktopController, project_id: str) -> None:
+        self._controller = controller
+        self._project_id = project_id
+
+    def snapshot(self) -> dict[str, Any]:
+        return self._controller.snapshot_payload(self._project_id)
+
+    def refresh(self) -> dict[str, Any]:
+        self._controller.refresh_now()
+        return self.snapshot()
+
+    def hide_to_tray(self) -> None:
+        self._controller.hide_card_windows()
+
+    def hide_card(self) -> dict[str, bool]:
+        return {"ok": self._controller.set_card_visible(self._project_id, False)}
+
+    def set_size(self, preset: str) -> dict[str, bool]:
+        return {"ok": self._controller.set_card_size(self._project_id, preset)}
+
+    def reset_geometry(self) -> dict[str, bool]:
+        return {"ok": self._controller.reset_card_geometry(self._project_id)}
+
+    def quit(self) -> None:
+        self._controller.shutdown()
+
+
 def tray_actions(controller: DesktopController, api: DesktopApi) -> dict[str, Any]:
+    def toggle_card(project_id: str) -> dict[str, Any]:
+        return api.set_card_visible(project_id, not controller.card_is_visible(project_id))
+
     return {
-        "show": controller.show_window,
+        "show": controller.activate_from_shortcut,
         "compact": lambda: api.set_compact(not controller.state.compact),
         "desktop": lambda: api.set_desktop_mode(not controller.state.desktop_mode),
         "on_top": lambda: api.set_on_top(not controller.state.on_top),
         "web": api.open_web,
         "refresh": controller.refresh_now,
+        "cards": CARD_TITLES,
+        "toggle_card": toggle_card,
+        "show_all_cards": api.show_all_cards,
+        "reset_cards": api.reset_card_layout,
         "quit": controller.shutdown,
     }
 
 
 def main() -> int:
+    background_launch = "--background" in sys.argv[1:]
     guard = acquire_single_instance()
     if guard is None:
-        if not show_existing_instance():
+        if not background_launch and not show_existing_instance():
             print("Poyi Control Center 已在运行: 请查看系统托盘", file=sys.stderr)
         return 0
     try:
@@ -350,6 +678,7 @@ def main() -> int:
         return 2
 
     controller = DesktopController()
+    activation_event = shell.create_activation_event()
     api = DesktopApi(controller)
     state = controller.state
     width, height = COMPACT_SIZE if state.compact else state.size()
@@ -368,6 +697,8 @@ def main() -> int:
         background=BACKGROUND_DARK if state.theme == "dark" else BACKGROUND_LIGHT,
     )
     if window is None:
+        if activation_event is not None:
+            shell.close_activation_event(activation_event)
         print("无法创建桌面窗口: 请确认已安装 WebView2 运行时", file=sys.stderr)
         return 3
     controller.window = window
@@ -377,11 +708,48 @@ def main() -> int:
         shell.enable_native_resize(window)
 
     window.events.before_show += prepare_native_window
-    if state.desktop_mode:
-        window.events.shown += lambda: shell.set_native_desktop_mode(window, True)
+
+    for project_id in CARD_PROJECT_IDS:
+        geometry = controller.card_geometry(project_id)
+        card_window = shell.create_window(
+            page=build_card_page(project_id),
+            js_api=CardApi(controller, project_id),
+            width=geometry["w"],
+            height=geometry["h"],
+            x=geometry["x"],
+            y=geometry["y"],
+            min_size=CARD_MIN_SIZE,
+            on_top=False,
+            background=BACKGROUND_DARK,
+            title=f"Poyi Card - {CARD_TITLES[project_id]}",
+            hidden=True,
+            focus=True,
+            easy_drag=False,
+            shadow=False,
+        )
+        if card_window is None:
+            print(f"无法创建桌面磁贴窗口: {project_id}", file=sys.stderr)
+            continue
+        controller.register_card_window(project_id, card_window)
+
+        def prepare_card(target: Any = card_window) -> None:
+            shell.enable_native_transparency(target)
+            shell.enable_native_resize(target)
+
+        def prepare_card_mode(target: Any = card_window) -> None:
+            shell.set_native_desktop_widget_mode(target, controller.state.desktop_mode)
+
+        card_window.events.before_show += prepare_card
+        card_window.events.shown += prepare_card_mode
 
     def on_start() -> None:
+        controller.start_activation_listener(activation_event)
         threading.Thread(target=controller.poll_forever, name="poyi-poll", daemon=True).start()
+        if state.desktop_mode:
+            if background_launch:
+                controller.show_window()
+            else:
+                controller.activate_from_shortcut()
         try:
             icon = shell.build_tray_icon(controller, tray_actions(controller, api))
         except Exception:  # the window stays usable without a tray icon

@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from ctypes import wintypes
-from typing import Any
+from typing import Any, cast
 
 from personal_mcp_gateway.desktop.capture import native_handle
 from personal_mcp_gateway.desktop.window_state import MIN_SIZE
@@ -36,9 +36,11 @@ WS_EX_APPWINDOW = 0x00040000
 WS_EX_NOACTIVATE = 0x08000000
 HWND_BOTTOM = 1
 HWND_NOTOPMOST = -2
+RGN_OR = 2
 SWP_REFRESH_FRAME = 0x0037
 SWP_RESIZE_FRAME = 0x0014
 SWP_DESKTOP_MODE = 0x0033
+SWP_DESKTOP_FRAME = 0x0070  # frame changed + no activate + show
 _SUBCLASS_ID = 0x504F5949
 _VK_LBUTTON = 0x01
 _RESIZE_FRAME_SECONDS = 1 / 120
@@ -51,6 +53,15 @@ class _Rect(ctypes.Structure):
         ("top", wintypes.LONG),
         ("right", wintypes.LONG),
         ("bottom", wintypes.LONG),
+    ]
+
+
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", _Rect),
+        ("rcWork", _Rect),
+        ("dwFlags", wintypes.DWORD),
     ]
 
 
@@ -67,7 +78,10 @@ _resize_hooks: dict[int, tuple[Any, ...]] = {}
 _resize_sessions: dict[int, threading.Event] = {}
 _resize_session_lock = threading.Lock()
 _desktop_window_styles: dict[int, int] = {}
+_desktop_window_rects: dict[int, tuple[int, int, int, int]] = {}
 _desktop_window_handles: set[int] = set()
+_desktop_widget_styles: dict[int, int] = {}
+_desktop_widget_handles: set[int] = set()
 _edge_hits = {
     "n": HTTOP,
     "ne": HTTOPRIGHT,
@@ -160,6 +174,91 @@ def enable_transparent_background(window: Any) -> bool:
         return int(extend_frame(hwnd, ctypes.byref(margins))) == 0
     except (AttributeError, OSError):
         return False
+
+
+def normalize_window_regions(
+    value: object,
+    scale: float = 1.0,
+) -> list[tuple[int, int, int, int, int]]:
+    """Validate CSS-pixel tile bounds before passing them to Win32 GDI."""
+    if not isinstance(value, list):
+        return []
+    factor = max(0.25, min(8.0, float(scale)))
+    result: list[tuple[int, int, int, int, int]] = []
+    raw_regions = cast(list[object], value)
+    for raw_region in raw_regions[:128]:
+        if not isinstance(raw_region, dict):
+            continue
+        region = cast(dict[str, Any], raw_region)
+        try:
+            x = float(region.get("x", 0))
+            y = float(region.get("y", 0))
+            width = float(region.get("width", 0))
+            height = float(region.get("height", 0))
+            radius = float(region.get("radius", 0))
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(part) for part in (x, y, width, height, radius)):
+            continue
+        if width < 1 or height < 1:
+            continue
+        left = round(max(-100_000, min(100_000, x)) * factor)
+        top = round(max(-100_000, min(100_000, y)) * factor)
+        right = left + max(1, round(min(100_000, width) * factor))
+        bottom = top + max(1, round(min(100_000, height) * factor))
+        corner = max(0, round(min(128, radius) * factor * 2))
+        result.append((left, top, right, bottom, corner))
+    return result
+
+
+def set_desktop_window_regions(window: Any, regions: object, full_window: bool = False) -> bool:
+    """Clip the desktop host to its visible tiles so blank pixels are not a window."""
+    hwnd = native_handle(window)
+    if os.name != "nt" or hwnd <= 0 or hwnd not in _desktop_window_handles:
+        return False
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    user32.SetWindowRgn.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+    user32.SetWindowRgn.restype = ctypes.c_int
+    get_dpi = getattr(user32, "GetDpiForWindow", None)
+    if get_dpi is not None:
+        get_dpi.argtypes = [wintypes.HWND]
+        get_dpi.restype = wintypes.UINT
+    if full_window:
+        return bool(user32.SetWindowRgn(hwnd, 0, True))
+
+    gdi32.CreateRectRgn.argtypes = [ctypes.c_int] * 4
+    gdi32.CreateRectRgn.restype = wintypes.HRGN
+    gdi32.CreateRoundRectRgn.argtypes = [ctypes.c_int] * 6
+    gdi32.CreateRoundRectRgn.restype = wintypes.HRGN
+    gdi32.CombineRgn.argtypes = [wintypes.HRGN, wintypes.HRGN, wintypes.HRGN, ctypes.c_int]
+    gdi32.CombineRgn.restype = ctypes.c_int
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+
+    dpi = int(get_dpi(hwnd)) if get_dpi is not None else 96
+    normalized = normalize_window_regions(regions, max(96, dpi) / 96)
+    if not normalized:
+        return False
+    combined = gdi32.CreateRectRgn(0, 0, 0, 0)
+    if not combined:
+        return False
+    transferred = False
+    try:
+        for left, top, right, bottom, corner in normalized:
+            piece = gdi32.CreateRoundRectRgn(left, top, right, bottom, corner, corner)
+            if not piece:
+                continue
+            try:
+                gdi32.CombineRgn(combined, combined, piece, RGN_OR)
+            finally:
+                gdi32.DeleteObject(piece)
+        transferred = bool(user32.SetWindowRgn(hwnd, combined, True))
+        return transferred
+    finally:
+        # On success Windows owns the region handle. On failure it remains ours.
+        if not transferred:
+            gdi32.DeleteObject(combined)
 
 
 def resize_hit_test(
@@ -294,6 +393,9 @@ def install_frameless_resize(window: Any, border: int = 9) -> bool:
                     session.set()
                 _desktop_window_handles.discard(int(native_hwnd))
                 _desktop_window_styles.pop(int(native_hwnd), None)
+                _desktop_window_rects.pop(int(native_hwnd), None)
+                _desktop_widget_handles.discard(int(native_hwnd))
+                _desktop_widget_styles.pop(int(native_hwnd), None)
                 result = int(comctl32.DefSubclassProc(native_hwnd, message, wparam, lparam))
                 _resize_hooks.pop(int(native_hwnd), None)
                 return result
@@ -324,8 +426,12 @@ class _Point(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
 
-def set_desktop_window_mode(window: Any, enabled: bool) -> bool:
-    """Lock the transparent tile host below apps without taking focus or taskbar space."""
+def set_desktop_widget_mode(window: Any, enabled: bool) -> bool:
+    """Keep one card off the taskbar while preserving its independent bounds.
+
+    Unlike :func:`set_desktop_window_mode`, this never expands the window to a
+    monitor-sized host and never clips several cards into one region.
+    """
     hwnd = native_handle(window)
     if os.name != "nt" or hwnd <= 0:
         return False
@@ -350,9 +456,102 @@ def set_desktop_window_mode(window: Any, enabled: bool) -> bool:
 
     current_style = int(get_style(hwnd, GWL_EXSTYLE))
     if enabled:
+        if hwnd not in _desktop_widget_handles:
+            _desktop_widget_styles[hwnd] = current_style
+            ctypes.set_last_error(0)
+            previous = int(
+                set_style(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    (current_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW,
+                )
+            )
+            if previous == 0 and ctypes.get_last_error():
+                _desktop_widget_styles.pop(hwnd, None)
+                return False
+            _desktop_widget_handles.add(hwnd)
+        return bool(user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_DESKTOP_MODE))
+
+    original_style = _desktop_widget_styles.pop(
+        hwnd,
+        current_style & ~WS_EX_TOOLWINDOW,
+    )
+    _desktop_widget_handles.discard(hwnd)
+    ctypes.set_last_error(0)
+    previous = int(set_style(hwnd, GWL_EXSTYLE, original_style))
+    if previous == 0 and ctypes.get_last_error():
+        return False
+    return bool(user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_DESKTOP_MODE))
+
+
+def set_desktop_window_mode(window: Any, enabled: bool) -> bool:
+    """Lock the transparent tile host below apps without taking focus or taskbar space."""
+    hwnd = native_handle(window)
+    if os.name != "nt" or hwnd <= 0:
+        return False
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    result_type = ctypes.c_ssize_t
+    get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+    set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+    get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+    get_style.restype = result_type
+    set_style.argtypes = [wintypes.HWND, ctypes.c_int, result_type]
+    set_style.restype = result_type
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    user32.SetWindowPos.restype = wintypes.BOOL
+    clear_region: Any = getattr(user32, "SetWindowRgn", None)
+    if clear_region is not None:
+        clear_region.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+        clear_region.restype = ctypes.c_int
+
+    get_window_rect: Any = getattr(user32, "GetWindowRect", None)
+    monitor_from_window: Any = getattr(user32, "MonitorFromWindow", None)
+    get_monitor_info: Any = getattr(user32, "GetMonitorInfoW", None)
+    can_expand = all((get_window_rect, monitor_from_window, get_monitor_info))
+    if can_expand:
+        get_window_rect.argtypes = [wintypes.HWND, ctypes.POINTER(_Rect)]
+        get_window_rect.restype = wintypes.BOOL
+        monitor_from_window.argtypes = [wintypes.HWND, wintypes.DWORD]
+        monitor_from_window.restype = wintypes.HMONITOR
+        get_monitor_info.argtypes = [wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
+        get_monitor_info.restype = wintypes.BOOL
+
+    current_style = int(get_style(hwnd, GWL_EXSTYLE))
+    if enabled:
         if hwnd in _desktop_window_handles:
             return bool(user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_DESKTOP_MODE))
         _desktop_window_styles[hwnd] = current_style
+        work_rect: tuple[int, int, int, int] | None = None
+        if can_expand:
+            current_rect = _Rect()
+            monitor = monitor_from_window(hwnd, 2)
+            monitor_info = _MonitorInfo()
+            monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
+            if (
+                monitor
+                and get_window_rect(hwnd, ctypes.byref(current_rect))
+                and get_monitor_info(monitor, ctypes.byref(monitor_info))
+            ):
+                _desktop_window_rects[hwnd] = (
+                    int(current_rect.left),
+                    int(current_rect.top),
+                    int(current_rect.right),
+                    int(current_rect.bottom),
+                )
+                work_rect = (
+                    int(monitor_info.rcWork.left),
+                    int(monitor_info.rcWork.top),
+                    int(monitor_info.rcWork.right),
+                    int(monitor_info.rcWork.bottom),
+                )
         ctypes.set_last_error(0)
         previous = int(
             set_style(
@@ -364,9 +563,23 @@ def set_desktop_window_mode(window: Any, enabled: bool) -> bool:
         if previous == 0 and ctypes.get_last_error():
             _desktop_window_styles.pop(hwnd, None)
             return False
-        if not user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_DESKTOP_MODE):
+        if work_rect is None:
+            moved = user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_DESKTOP_MODE)
+        else:
+            left, top, right, bottom = work_rect
+            moved = user32.SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                left,
+                top,
+                right - left,
+                bottom - top,
+                SWP_DESKTOP_FRAME,
+            )
+        if not moved:
             set_style(hwnd, GWL_EXSTYLE, current_style)
             _desktop_window_styles.pop(hwnd, None)
+            _desktop_window_rects.pop(hwnd, None)
             return False
         with _resize_session_lock:
             session = _resize_sessions.pop(hwnd, None)
@@ -380,11 +593,27 @@ def set_desktop_window_mode(window: Any, enabled: bool) -> bool:
         current_style & ~(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW),
     )
     _desktop_window_handles.discard(hwnd)
+    if clear_region is not None:
+        clear_region(hwnd, 0, True)
     ctypes.set_last_error(0)
     previous = int(set_style(hwnd, GWL_EXSTYLE, original_style))
     if previous == 0 and ctypes.get_last_error():
         return False
-    return bool(user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_DESKTOP_MODE))
+    original_rect = _desktop_window_rects.pop(hwnd, None)
+    if original_rect is None:
+        return bool(user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_DESKTOP_MODE))
+    left, top, right, bottom = original_rect
+    return bool(
+        user32.SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            left,
+            top,
+            right - left,
+            bottom - top,
+            SWP_DESKTOP_FRAME,
+        )
+    )
 
 
 def _track_window_resize(

@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from personal_mcp_gateway.desktop import capture as capture_module
 from personal_mcp_gateway.desktop.app import (
+    CARD_PROJECT_IDS,
+    CardApi,
     DesktopApi,
     DesktopController,
     acquire_single_instance,
     main,
+    show_existing_instance,
     tray_actions,
 )
 from personal_mcp_gateway.desktop.client import (
@@ -21,9 +25,11 @@ from personal_mcp_gateway.desktop.client import (
     DesktopSnapshot,
 )
 from personal_mcp_gateway.desktop.window_state import (
+    CARD_LAYOUT_VERSION,
     COMPACT_SIZE,
     PROJECT_LAYOUT_VERSION,
     load_state,
+    save_state,
     state_path,
 )
 
@@ -88,6 +94,43 @@ class FakeIcon:
         self.stopped = True
 
 
+class FakeEvent:
+    def __init__(self) -> None:
+        self.handlers: list[Any] = []
+
+    def __iadd__(self, handler: Any) -> FakeEvent:
+        self.handlers.append(handler)
+        return self
+
+    def fire(self, *args: int) -> None:
+        for handler in self.handlers:
+            handler(*args)
+
+
+class FakeCardWindow:
+    def __init__(self) -> None:
+        self.actions: list[str] = []
+        self.events = SimpleNamespace(moved=FakeEvent(), resized=FakeEvent())
+
+    def show(self) -> None:
+        self.actions.append("show")
+
+    def restore(self) -> None:
+        self.actions.append("restore")
+
+    def hide(self) -> None:
+        self.actions.append("hide")
+
+    def destroy(self) -> None:
+        self.actions.append("destroy")
+
+    def move(self, x: int, y: int) -> None:
+        self.actions.append(f"move:{x}:{y}")
+
+    def resize(self, width: int, height: int) -> None:
+        self.actions.append(f"resize:{width}:{height}")
+
+
 @pytest.fixture(autouse=True)
 def _isolated_state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep every test off the real ``%LOCALAPPDATA%`` profile."""
@@ -96,6 +139,10 @@ def _isolated_state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 def _controller(client: FakeClient | None = None) -> DesktopController:
     return DesktopController(client=client or FakeClient())  # pyright: ignore[reportArgumentType]
+
+
+def _accept_native_mode(_window: Any, _enabled: bool) -> bool:
+    return True
 
 
 def test_controller_exposes_persisted_snapshot_before_the_first_poll(tmp_path: Path) -> None:
@@ -254,6 +301,11 @@ def test_snapshot_payload_carries_the_view_preferences() -> None:
         "adminUrl": "http://127.0.0.1:8761",
         "projectLayoutVersion": PROJECT_LAYOUT_VERSION,
         "projectLayout": {},
+        "cardLayoutVersion": CARD_LAYOUT_VERSION,
+        "cardLayout": {},
+        "cardMode": False,
+        "cardId": None,
+        "hiddenCards": [],
     }
     assert payload["stale"] is False
 
@@ -328,9 +380,32 @@ def test_desktop_mode_locks_out_conflicting_window_modes(
     api.set_on_top(True)
     assert controller.state.compact is False
     assert controller.state.on_top is False
-
     assert api.set_desktop_mode(False)["view"]["desktopMode"] is False
     assert calls == [True, False]
+
+
+def test_desktop_regions_forward_only_in_desktop_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    window = FakeWindow()
+    controller.window = window
+    calls: list[tuple[Any, object, bool]] = []
+
+    def set_regions(target: Any, regions: object, full_window: bool) -> bool:
+        calls.append((target, regions, full_window))
+        return True
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.set_native_desktop_regions",
+        set_regions,
+    )
+    api = DesktopApi(controller)
+    assert api.set_desktop_regions([], True) == {"ok": False}
+    controller.state.desktop_mode = True
+    regions = [{"x": 1, "y": 2, "width": 30, "height": 40, "radius": 8}]
+    assert api.set_desktop_regions(regions) == {"ok": True}
+    assert calls == [(window, regions, False)]
 
 
 def test_an_unknown_theme_falls_back_to_light() -> None:
@@ -360,6 +435,174 @@ def test_project_layout_is_validated_and_persisted() -> None:
     reset = api.reset_project_layout()["view"]
     assert reset["projectLayout"] == {}
     assert reset["projectLayoutVersion"] == PROJECT_LAYOUT_VERSION
+
+
+def test_card_api_binds_one_window_to_one_project_identity() -> None:
+    controller = _controller()
+
+    view = CardApi(controller, "journal").snapshot()["view"]
+
+    assert view["cardMode"] is True
+    assert view["cardId"] == "journal"
+
+
+def test_card_move_and_resize_persist_without_touching_board_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    controller.state.project_layout = {
+        "watch": {"x": 0, "y": 0, "w": 500, "h": 500, "order": 0}
+    }
+    card = FakeCardWindow()
+    monkeypatch.setattr(
+        controller,
+        "_queue_card_state_save",
+        lambda: save_state(controller.state),
+    )
+    controller.register_card_window("watch", card)
+
+    card.events.moved.fire(840, 56)
+    card.events.resized.fire(510, 330)
+
+    persisted = load_state(state_path())
+    assert persisted.card_layout is not None
+    assert persisted.card_layout["watch"] == {
+        "x": 840,
+        "y": 56,
+        "w": 510,
+        "h": 330,
+        "order": 1,
+    }
+    assert persisted.project_layout == controller.state.project_layout
+
+
+def test_desktop_mode_uses_five_independent_windows_instead_of_the_board_host() -> None:
+    controller = _controller()
+    management = FakeWindow()
+    controller.window = management
+    cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
+    controller.card_windows = cards
+    api = DesktopApi(controller)
+
+    enabled = api.set_desktop_mode(True)["view"]
+
+    assert enabled["desktopMode"] is True
+    assert management.events == ["hide"]
+    assert all(card.actions[:2] == ["show", "restore"] for card in cards.values())
+
+    disabled = api.set_desktop_mode(False)["view"]
+
+    assert disabled["desktopMode"] is False
+    assert management.events[-2:] == ["show", "restore"]
+    assert all(card.actions[-1] == "hide" for card in cards.values())
+
+
+def test_one_card_can_be_hidden_and_restored_without_touching_its_peers() -> None:
+    controller = _controller()
+    controller.state.desktop_mode = True
+    cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
+    controller.card_windows = cards
+
+    assert controller.set_card_visible("journal", False) is True
+
+    assert cards["journal"].actions == ["hide"]
+    assert all(not card.actions for key, card in cards.items() if key != "journal")
+    assert load_state(state_path()).hidden_cards == ["journal"]
+
+    assert controller.set_card_visible("journal", True) is True
+    assert cards["journal"].actions[-2:] == ["show", "restore"]
+    assert load_state(state_path()).hidden_cards is None
+
+
+def test_shortcut_activation_restores_all_when_every_card_is_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    controller.window = FakeWindow()
+    controller.state.desktop_mode = True
+    controller.state.hidden_cards = list(CARD_PROJECT_IDS)
+    cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
+    controller.card_windows = cards
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.set_native_desktop_widget_mode",
+        _accept_native_mode,
+    )
+
+    controller.activate_from_shortcut()
+
+    assert controller.state.hidden_cards is None
+    assert load_state(state_path()).hidden_cards is None
+    assert all(card.actions[:2] == ["show", "restore"] for card in cards.values())
+    assert controller.window.events == ["hide"]
+
+
+def test_shortcut_activation_preserves_an_individually_hidden_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    controller.window = FakeWindow()
+    controller.state.desktop_mode = True
+    controller.state.hidden_cards = ["journal"]
+    cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
+    controller.card_windows = cards
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.set_native_desktop_widget_mode",
+        _accept_native_mode,
+    )
+
+    controller.activate_from_shortcut()
+
+    assert controller.state.hidden_cards == ["journal"]
+    assert cards["journal"].actions == ["hide"]
+    assert all(
+        card.actions[:2] == ["show", "restore"]
+        for project_id, card in cards.items()
+        if project_id != "journal"
+    )
+
+
+def test_card_size_presets_and_reset_affect_only_the_selected_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
+    controller.card_windows = cards
+    monkeypatch.setattr(
+        controller,
+        "_queue_card_state_save",
+        lambda: save_state(controller.state),
+    )
+
+    assert controller.set_card_size("watch", "small") is True
+    assert cards["watch"].actions == ["resize:310:223"]
+    assert all(not card.actions for key, card in cards.items() if key != "watch")
+    assert controller.state.card_layout is not None
+    assert controller.state.card_layout["watch"]["w"] == 310
+    assert controller.state.card_layout["watch"]["h"] == 223
+
+    assert controller.reset_card_geometry("watch") is True
+    assert cards["watch"].actions[-2:] == ["move:370:48", "resize:430:310"]
+    assert controller.state.card_layout is None
+
+
+def test_card_bridge_exposes_hide_size_and_reset_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller()
+    card = FakeCardWindow()
+    controller.card_windows["foxlink"] = card
+    monkeypatch.setattr(
+        controller,
+        "_queue_card_state_save",
+        lambda: save_state(controller.state),
+    )
+    api = CardApi(controller, "foxlink")
+
+    assert api.set_size("large") == {"ok": True}
+    assert card.actions[-1] == "resize:432:364"
+    assert api.reset_geometry() == {"ok": True}
+    assert api.hide_card() == {"ok": True}
+    assert controller.state.hidden_cards == ["foxlink"]
 
 
 def test_capture_uses_the_native_window_without_activating_it(
@@ -455,6 +698,10 @@ def test_tray_actions_toggle_the_current_view_state(monkeypatch: pytest.MonkeyPa
         "on_top",
         "web",
         "refresh",
+        "cards",
+        "toggle_card",
+        "show_all_cards",
+        "reset_cards",
         "quit",
     }
 
@@ -475,6 +722,23 @@ def test_a_second_instance_is_refused() -> None:
     assert acquire_single_instance() is None
 
 
+def test_existing_instance_is_signalled_before_the_native_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native_fallback: list[bool] = []
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.signal_activation_event",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.shell.show_existing_window",
+        lambda: native_fallback.append(True) or True,
+    )
+
+    assert show_existing_instance() is True
+    assert native_fallback == []
+
+
 def test_a_second_launch_reveals_the_existing_window(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[bool] = []
 
@@ -489,3 +753,21 @@ def test_a_second_launch_reveals_the_existing_window(monkeypatch: pytest.MonkeyP
 
     assert main() == 0
     assert calls == [True]
+
+
+def test_a_background_second_launch_does_not_reveal_the_existing_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+    monkeypatch.setattr("personal_mcp_gateway.desktop.app.sys.argv", ["app", "--background"])
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.app.acquire_single_instance",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.app.show_existing_instance",
+        lambda: calls.append(True) or True,
+    )
+
+    assert main() == 0
+    assert calls == []

@@ -20,6 +20,22 @@ PROJECT_LAYOUT_VERSION = 3
 MAX_PROJECT_POSITION = 100_000
 MAX_PROJECT_TILE_SIZE = 20_000
 
+# Desktop cards are native top-level windows. Their geometry is deliberately
+# separate from the normalized layout used by the management board so moving a
+# desktop card can never reflow or resize another card.
+CARD_LAYOUT_VERSION = 1
+CARD_MIN_SIZE = (220, 150)
+MAX_CARD_POSITION = 100_000
+MAX_CARD_SIZE = 20_000
+DEFAULT_CARD_LAYOUT: dict[str, dict[str, int]] = {
+    "foxlink": {"x": 28, "y": 48, "w": 320, "h": 270, "order": 0},
+    "watch": {"x": 370, "y": 48, "w": 430, "h": 310, "order": 1},
+    "journal": {"x": 822, "y": 48, "w": 360, "h": 310, "order": 2},
+    "personal": {"x": 28, "y": 382, "w": 650, "h": 410, "order": 3},
+    "bzsjk": {"x": 700, "y": 382, "w": 360, "h": 330, "order": 4},
+}
+CARD_IDS = frozenset(DEFAULT_CARD_LAYOUT)
+
 
 def state_dir() -> Path:
     root = os.environ.get("PERSONAL_MCP_DESKTOP_HOME")
@@ -46,6 +62,9 @@ class WindowState:
     project_layout_version: int = PROJECT_LAYOUT_VERSION
     desktop_mode: bool = False
     project_layout: dict[str, dict[str, int]] | None = None
+    card_layout_version: int = CARD_LAYOUT_VERSION
+    card_layout: dict[str, dict[str, int]] | None = None
+    hidden_cards: list[str] | None = None
 
     def size(self) -> tuple[int, int]:
         return (self.width, self.height)
@@ -120,6 +139,48 @@ def normalize_project_layout(value: object) -> dict[str, dict[str, int]]:
     return result
 
 
+def normalize_card_layout(value: object) -> dict[str, dict[str, int]]:
+    """Validate absolute screen geometry for independent desktop cards."""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, int]] = {}
+    entries = cast(dict[object, object], value)
+    for raw_id, raw_card in entries.items():
+        if not isinstance(raw_id, str) or not raw_id or len(raw_id) > 64:
+            continue
+        if not isinstance(raw_card, dict):
+            continue
+        card = cast(dict[str, Any], raw_card)
+        if not all(key in card for key in ("x", "y", "w", "h")):
+            continue
+        x = _coerce_int(card.get("x"), None)
+        y = _coerce_int(card.get("y"), None)
+        width = _coerce_int(card.get("w"), None)
+        height = _coerce_int(card.get("h"), None)
+        if None in (x, y, width, height):
+            continue
+        order = _coerce_int(card.get("order"), len(result)) or 0
+        result[raw_id] = {
+            "x": max(-MAX_CARD_POSITION, min(MAX_CARD_POSITION, cast(int, x))),
+            "y": max(-MAX_CARD_POSITION, min(MAX_CARD_POSITION, cast(int, y))),
+            "w": max(CARD_MIN_SIZE[0], min(MAX_CARD_SIZE, cast(int, width))),
+            "h": max(CARD_MIN_SIZE[1], min(MAX_CARD_SIZE, cast(int, height))),
+            "order": max(0, min(999, order)),
+        }
+    return result
+
+
+def normalize_hidden_cards(value: object) -> list[str]:
+    """Keep a stable, deduplicated list of known cards hidden by the user."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in cast(list[object], value):
+        if isinstance(item, str) and item in CARD_IDS and item not in result:
+            result.append(item)
+    return result
+
+
 def load_state(path: Path | None = None) -> WindowState:
     """Read persisted state, falling back to defaults on any corruption."""
     target = path or state_path()
@@ -134,6 +195,7 @@ def load_state(path: Path | None = None) -> WindowState:
     height = _coerce_int(data.get("height"), FULL_SIZE[1]) or FULL_SIZE[1]
     theme = data.get("theme")
     layout = normalize_project_layout(data.get("project_layout"))
+    card_layout = normalize_card_layout(data.get("card_layout"))
     raw_layout_version = _coerce_int(data.get("project_layout_version"), None)
     layout_version = (
         PROJECT_LAYOUT_VERSION
@@ -152,6 +214,9 @@ def load_state(path: Path | None = None) -> WindowState:
         project_layout_version=layout_version,
         desktop_mode=desktop_mode,
         project_layout=layout,
+        card_layout_version=CARD_LAYOUT_VERSION,
+        card_layout=card_layout or None,
+        hidden_cards=normalize_hidden_cards(data.get("hidden_cards")) or None,
     )
 
 

@@ -28,6 +28,97 @@ class WindowFactory(Protocol):
     def __call__(self, **kwargs: Any) -> Any: ...
 
 
+_ACTIVATION_EVENT_NAME = "Local\\PoyiPersonalMcpDesktopActivate"
+
+
+def create_activation_event() -> int | None:
+    """Create the auto-reset event used to wake the running desktop instance."""
+    if sys.platform != "win32":
+        return None
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateEventW.argtypes = [
+        wintypes.LPVOID,
+        wintypes.BOOL,
+        wintypes.BOOL,
+        wintypes.LPCWSTR,
+    ]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    handle = kernel32.CreateEventW(None, False, False, _ACTIVATION_EVENT_NAME)
+    return int(handle) if handle else None
+
+
+def signal_activation_event() -> bool:
+    """Notify the existing instance that an interactive shortcut was opened."""
+    if sys.platform != "win32":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    event_modify_state = 0x0002
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.SetEvent.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenEventW(event_modify_state, False, _ACTIVATION_EVENT_NAME)
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.SetEvent(handle))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def wait_for_activation_event(handle: int) -> bool:
+    """Block until a shortcut wakes ``handle``; false means the wait failed."""
+    if sys.platform != "win32":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    infinite = 0xFFFFFFFF
+    wait_object_0 = 0
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    return kernel32.WaitForSingleObject(handle, infinite) == wait_object_0
+
+
+def wake_activation_event(handle: int) -> bool:
+    """Wake the listener during shutdown."""
+    if sys.platform != "win32":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.SetEvent.restype = wintypes.BOOL
+    return bool(kernel32.SetEvent(handle))
+
+
+def close_activation_event(handle: int) -> None:
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle(handle)
+
+
 def show_existing_window(title: str = "Poyi Control Center") -> bool:
     """Reveal this launcher's existing top-level window, if it is hidden."""
     if sys.platform != "win32":
@@ -127,6 +218,27 @@ def build_tray_icon(controller: DesktopController, actions: dict[str, Any]) -> A
     def wrap(key: str):
         return lambda *_args: actions[key]()
 
+    def wrap_card(project_id: str):
+        return lambda *_args: actions["toggle_card"](project_id)
+
+    def card_checked(project_id: str):
+        return lambda _item: controller.card_is_visible(project_id)
+
+    card_labels = cast(dict[str, str], actions.get("cards", {}))
+    card_menu = pystray.Menu(
+        *(
+            pystray.MenuItem(
+                label,
+                wrap_card(project_id),
+                checked=card_checked(project_id),
+            )
+            for project_id, label in card_labels.items()
+        ),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("显示全部磁贴", wrap("show_all_cards")),
+        pystray.MenuItem("恢复默认位置与大小", wrap("reset_cards")),
+    )
+
     menu = pystray.Menu(
         pystray.MenuItem("显示看板", wrap("show"), default=True),
         pystray.MenuItem(
@@ -146,6 +258,7 @@ def build_tray_icon(controller: DesktopController, actions: dict[str, Any]) -> A
             checked=lambda _i: controller.state.on_top,
             enabled=cast(Any, lambda _i: not controller.state.desktop_mode),
         ),
+        pystray.MenuItem("桌面磁贴", card_menu),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("打开网页版", wrap("web")),
         pystray.MenuItem("立即刷新", wrap("refresh")),
@@ -176,6 +289,11 @@ def create_window(
     on_top: bool,
     background: str,
     transparent: bool = True,
+    title: str = "Poyi Control Center",
+    hidden: bool = False,
+    focus: bool = True,
+    easy_drag: bool = False,
+    shadow: bool = True,
 ) -> Any:
     """``page`` is the fully inlined document, not a path -- see :mod:`.page`."""
     if transparent:
@@ -195,21 +313,24 @@ def create_window(
         "min_size": min_size,
         "resizable": True,
         "frameless": True,
-        "easy_drag": False,
+        "easy_drag": easy_drag,
+        "hidden": hidden,
+        "focus": focus,
+        "shadow": shadow,
         "background_color": background,
         "on_top": on_top,
         "transparent": transparent,
     }
     create_webview_window = cast(Any, webview.create_window)
     try:
-        return create_webview_window("Poyi Control Center", **options)
+        return create_webview_window(title, **options)
     except TypeError as error:
         # The locked pywebview version supports transparency, but retain a solid
         # themed fallback for an older system package instead of aborting startup.
         if "transparent" not in str(error):
             raise
         options.pop("transparent")
-        return create_webview_window("Poyi Control Center", **options)
+        return create_webview_window(title, **options)
 
 
 def enable_native_resize(window: Any) -> bool:
@@ -272,6 +393,43 @@ def set_native_desktop_mode(window: Any, enabled: bool) -> bool:
         native.Invoke(action_type(lambda: result.append(set_desktop_window_mode(window, enabled))))
         return bool(result and result[0])
     return set_desktop_window_mode(window, enabled)
+
+
+def set_native_desktop_widget_mode(window: Any, enabled: bool) -> bool:
+    """Apply taskbar-free desktop-widget styles without resizing the card."""
+    from personal_mcp_gateway.desktop.native_window import set_desktop_widget_mode
+
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    action_type = __import__("System").Action
+    if native.InvokeRequired:
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(set_desktop_widget_mode(window, enabled))))
+        return bool(result and result[0])
+    return set_desktop_widget_mode(window, enabled)
+
+
+def set_native_desktop_regions(
+    window: Any,
+    regions: object,
+    full_window: bool = False,
+) -> bool:
+    from personal_mcp_gateway.desktop.native_window import set_desktop_window_regions
+
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    action_type = __import__("System").Action
+    if native.InvokeRequired:
+        result: list[bool] = []
+
+        def apply_regions() -> None:
+            result.append(set_desktop_window_regions(window, regions, full_window))
+
+        native.Invoke(action_type(apply_regions))
+        return bool(result and result[0])
+    return set_desktop_window_regions(window, regions, full_window)
 
 
 def run_window(on_start: Any, storage: Path) -> None:

@@ -290,15 +290,19 @@ $resultPath = Join-Path $EvidenceDir 'desktop-verification-result.json'
 New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
 
 function Test-Shortcut {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Label)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$Arguments
+    )
 
     $link = Read-DesktopShortcut -Path $Path
     if ($null -eq $link) { throw "The $Label shortcut is missing: $Path" }
     if ($link.target -ne $layout.Launcher) {
         throw "The $Label shortcut points at $($link.target) instead of $($layout.Launcher)."
     }
-    if ($link.arguments -ne $layout.Arguments) {
-        throw "The $Label shortcut passes '$($link.arguments)' instead of '$($layout.Arguments)'."
+    if ($link.arguments -ne $Arguments) {
+        throw "The $Label shortcut passes '$($link.arguments)' instead of '$Arguments'."
     }
     [ordered]@{ name = $Label; path = $Path; target = $link.target }
 }
@@ -326,11 +330,14 @@ try {
     if (($iconHeader -join ',') -ne '0,0,1,0') { throw 'The shortcut icon is not a valid .ico.' }
 
     $shortcuts = @(
-        (Test-Shortcut -Path $layout.DesktopLink -Label 'Desktop'),
-        (Test-Shortcut -Path $layout.StartMenuLink -Label 'StartMenu')
+        (Test-Shortcut -Path $layout.DesktopLink -Label 'Desktop' -Arguments $layout.Arguments),
+        (Test-Shortcut -Path $layout.StartMenuLink -Label 'StartMenu' -Arguments $layout.Arguments)
     )
     $autostart = Test-Path -LiteralPath $layout.StartupLink
-    if ($autostart) { $shortcuts += (Test-Shortcut -Path $layout.StartupLink -Label 'Startup') }
+    if ($autostart) {
+        $shortcuts += (Test-Shortcut -Path $layout.StartupLink -Label 'Startup' `
+                -Arguments $layout.StartupArguments)
+    }
 
     $webview2 = Get-WebView2Version
     if ($null -eq $webview2 -and -not $SkipLaunchCheck) {

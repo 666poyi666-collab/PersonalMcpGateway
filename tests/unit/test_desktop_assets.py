@@ -303,6 +303,49 @@ def test_tile_editor_offers_responsive_size_presets_without_losing_manual_handle
     assert "tile-handle-se" in style
 
 
+def test_desktop_mode_syncs_native_tile_regions_and_keeps_editing_full_window() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+
+    assert "function desktopRegionList()" in script
+    assert "function queueDesktopRegionSync(delay = 0)" in script
+    assert "bridge.set_desktop_regions(regions, editing)" in script
+    assert "const regions = editing ? [] : desktopRegionList();" in script
+
+
+def test_independent_card_pages_fill_their_own_window_without_board_padding() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert 'const CARD_ID = document.body.dataset.cardId || "";' in script
+    assert "targets.find((target) => target.id === CARD_ID)" in script
+    assert 'head.classList.add("pywebview-drag-region")' in script
+    assert 'dom.projectSections.classList.add("free-layout", "card-layout")' in script
+    assert "width: viewportWidth" in script and "height: viewportHeight" in script
+    assert "body.card-window .board" in style
+    assert "body.card-window .proj" in style
+    assert "padding: 0;" in style
+    assert "width: 100% !important;" in style
+    assert "height: 100% !important;" in style
+
+
+def test_card_hover_controls_expose_move_size_reset_hide_and_resize_affordances() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert 'make("div", "card-window-controls")' in script
+    assert '"card-window-move pywebview-drag-region"' in script
+    assert 'button.dataset.cardSize = preset;' in script
+    assert 'reset.dataset.cardAction = "reset";' in script
+    assert 'hide.dataset.cardAction = "hide";' in script
+    assert 'bridge.set_size(cardControl.dataset.cardSize)' in script
+    assert "bridge.reset_geometry()" in script
+    assert "bridge.hide_card()" in script
+    assert "body.card-window .proj > .card-window-controls" in style
+    assert "body.card-window .proj > .card-window-resize-corner" in style
+    assert "max-width: 31px;" in style and "max-width: 190px;" in style
+    assert "queueDesktopRegionSync(420);" in script
+
+
 def test_watch_tile_has_a_responsive_training_and_recovery_instrument() -> None:
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
