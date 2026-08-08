@@ -1,13 +1,64 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from personal_mcp_gateway.admin import fleet
 from personal_mcp_gateway.admin.dashboard import DashboardMonitor, DashboardTarget
+
+POWERSHELL = shutil.which("powershell.exe") or shutil.which("powershell")
+WATCHDOG = Path(__file__).parents[2] / "fleet" / "watchdog.ps1"
+
+
+def _powershell_literal(path: Path) -> str:
+    return str(path).replace("'", "''")
+
+
+def _run_watchdog_contract(trigger_dir: Path, body: str) -> dict[str, object]:
+    if POWERSHELL is None:
+        pytest.skip("PowerShell is required for watchdog contract tests")
+    script = f"""
+. '{_powershell_literal(WATCHDOG)}'
+$script:TriggerDir = '{_powershell_literal(trigger_dir)}'
+$script:DataDir = '{_powershell_literal(trigger_dir.parent)}'
+$script:LogPath = Join-Path $script:DataDir 'watchdog-test.log'
+$script:MaintenanceFlag = Join-Path $script:DataDir 'maintenance.flag'
+$script:LastForcedPass = [DateTime]::MinValue
+function Write-Log([string]$Level, [string]$Message) {{ }}
+function Write-FleetEvent([int]$EventId, [string]$Type, [string]$Message) {{ }}
+function Repair-DataDirAcls($Config) {{ }}
+function Repair-InstallDirAcls($Config, [string]$ServiceName = '') {{ return $true }}
+function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {{ }}
+{body}
+"""
+    completed = subprocess.run(
+        [
+            POWERSHELL,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8-sig",
+        timeout=20,
+    )
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    assert lines, completed.stderr
+    result: object = json.loads(lines[-1])
+    assert isinstance(result, dict)
+    return cast(dict[str, object], result)
 
 
 def test_request_repair_writes_trigger_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -96,6 +147,109 @@ def test_request_repair_fails_without_trigger_dir(tmp_path: Path, monkeypatch: p
     assert fleet.repair_supported() is False
     with pytest.raises(OSError):
         fleet.request_repair("test")
+
+
+def test_watchdog_consumes_python_repair_request_via_powershell(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_dir = tmp_path / "triggers"
+    trigger_dir.mkdir()
+    monkeypatch.setenv("POYI_FLEET_TRIGGER_DIR", str(trigger_dir))
+    trigger = fleet.request_repair("desktop")
+    lease = trigger_dir / ".repair-desktop.lease.json"
+
+    result = _run_watchdog_contract(
+        trigger_dir,
+        """
+$validBefore = @(Get-ValidRepairRequests).Count
+$triggered = Test-RepairTrigger ([pscustomobject]@{})
+[ordered]@{
+    validBefore = $validBefore
+    triggered = [bool]$triggered
+    triggerExists = Test-Path -LiteralPath (Join-Path $script:TriggerDir 'repair-desktop.json')
+    leaseExists = Test-Path -LiteralPath (Join-Path $script:TriggerDir '.repair-desktop.lease.json')
+    wakePending = Test-RepairWakePending
+} | ConvertTo-Json -Compress
+""",
+    )
+
+    assert result == {
+        "validBefore": 1,
+        "triggered": True,
+        "triggerExists": False,
+        "leaseExists": True,
+        "wakePending": False,
+    }
+    assert trigger.exists() is False
+    assert lease.exists() is True
+
+
+def test_watchdog_wake_ignores_invalid_expired_and_sidecar_files(
+    tmp_path: Path,
+) -> None:
+    trigger_dir = tmp_path / "triggers"
+    trigger_dir.mkdir()
+    now = datetime.now(UTC)
+    expired = {
+        "schemaVersion": 1,
+        "requestId": "7b7a67b3-97f5-4e2a-ac07-5cef46ec1f49",
+        "requestedAt": (now - timedelta(minutes=11)).isoformat(),
+        "source": "expired",
+    }
+    (trigger_dir / "repair-invalid.json").write_text("not-json", encoding="utf-8")
+    (trigger_dir / "repair-expired.json").write_text(json.dumps(expired), encoding="utf-8")
+    (trigger_dir / ".repair-desktop.lease.json").write_text("{}", encoding="utf-8")
+    (trigger_dir / "repair-desktop.json.processing").write_text("{}", encoding="utf-8")
+
+    result = _run_watchdog_contract(
+        trigger_dir,
+        """
+[ordered]@{
+    valid = @(Get-ValidRepairRequests).Count
+    wakePending = Test-RepairWakePending
+} | ConvertTo-Json -Compress
+""",
+    )
+
+    assert result == {"valid": 0, "wakePending": False}
+
+
+def test_watchdog_wake_respects_cooldown_and_maintenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_dir = tmp_path / "triggers"
+    trigger_dir.mkdir()
+    monkeypatch.setenv("POYI_FLEET_TRIGGER_DIR", str(trigger_dir))
+    fleet.request_repair("desktop")
+
+    result = _run_watchdog_contract(
+        trigger_dir,
+        """
+$valid = @(Get-ValidRepairRequests).Count
+$script:LastForcedPass = Get-Date
+$duringCooldown = Test-RepairWakePending
+$script:LastForcedPass = [DateTime]::MinValue
+New-Item -ItemType File -Path $script:MaintenanceFlag -Force | Out-Null
+$duringMaintenance = Test-RepairWakePending
+Remove-Item -LiteralPath $script:MaintenanceFlag -Force
+$ready = Test-RepairWakePending
+[ordered]@{
+    valid = $valid
+    duringCooldown = $duringCooldown
+    duringMaintenance = $duringMaintenance
+    ready = $ready
+} | ConvertTo-Json -Compress
+""",
+    )
+
+    assert result == {
+        "valid": 1,
+        "duringCooldown": False,
+        "duringMaintenance": False,
+        "ready": True,
+    }
 
 
 def _target(**overrides: object) -> DashboardTarget:

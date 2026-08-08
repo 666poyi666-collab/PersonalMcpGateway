@@ -357,6 +357,30 @@ widgets:
 
 def test_mcp_presenters_shape_the_real_payloads() -> None:
     kind, data = _present_mcp_payload(
+        "foxlink_get_current_session",
+        {
+            "ok": True,
+            "data": {
+                "state": "running",
+                "sessionId": "secret-session-id",
+                "currentSegmentId": "secret-segment-id",
+                "currentTaskId": "secret-task-id",
+                "currentTaskTitle": "复习立体几何",
+                "currentTaskSource": "ticktick",
+                "activeElapsedMs": 3_900_000,
+                "lastTick": int(datetime.now().timestamp() * 1000),
+            },
+        },
+    )
+    assert kind == "stat"
+    assert data["value"] == "复习立体几何"
+    assert data["label"] == "正在专注"
+    assert "1 小时 05 分" in data["note"]
+    assert "secret-session-id" not in str(data)
+    assert "secret-segment-id" not in str(data)
+    assert "secret-task-id" not in str(data)
+
+    kind, data = _present_mcp_payload(
         "foxlink_get_today_summary",
         {
             "ok": True,
@@ -371,6 +395,50 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     assert kind == "stat"
     assert data["value"] == "2 小时 52 分"
     assert "3 次会话" in data["note"]
+    assert data["isToday"] is False
+
+    kind, data = _present_mcp_payload(
+        "watch_get_current_plan",
+        {
+            "name": "day1",
+            "group": "减肥",
+            "stages": [{"kind": "RUN"}, {"kind": "WALK"}],
+            "deviceId": "must-not-leak",
+        },
+    )
+    assert kind == "keyvalue"
+    pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
+    assert pairs == {"当前计划": "减肥 · day1", "阶段数": "2"}
+    assert "must-not-leak" not in str(data)
+
+    kind, data = _present_mcp_payload(
+        "watch_get_status",
+        {
+            "phone": {
+                "phoneDeviceId": "must-not-leak",
+                "watchConnection": {
+                    "connectionState": "DISCONNECTED",
+                    "bulkTransport": "lan",
+                    "lanAvailable": True,
+                    "lastDisconnectReason": "gatt_147",
+                },
+            },
+            "connection": {
+                "phone": "online",
+                "watch": "online",
+                "watchStatus": {"deviceId": "also-secret", "transport": "multi"},
+            },
+        },
+    )
+    assert kind == "keyvalue"
+    pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
+    assert pairs["手表"] == "在线"
+    assert pairs["BLE"] == "DISCONNECTED"
+    assert pairs["BLE 原因"] == "gatt_147"
+    assert pairs["LAN 回退"] == "可用"
+    assert data["watchOnline"] is True
+    assert "must-not-leak" not in str(data)
+    assert "also-secret" not in str(data)
 
     kind, data = _present_mcp_payload(
         "watch_summarize_workouts",
@@ -406,6 +474,7 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
 
 
 def test_journal_presenter_never_leaks_diary_body_text() -> None:
+    today = datetime.now().date().isoformat()
     kind, data = _present_mcp_payload(
         "journal_list_recent",
         {
@@ -413,7 +482,7 @@ def test_journal_presenter_never_leaks_diary_body_text() -> None:
             "data": {
                 "items": [
                     {
-                        "date": "2026-07-22",
+                        "date": today,
                         "title": "复盘",
                         "mood": 3,
                         "tags": ["生活"],
@@ -426,8 +495,10 @@ def test_journal_presenter_never_leaks_diary_body_text() -> None:
     assert kind == "list"
     item = data["items"][0]
     assert item["title"] == "复盘"
-    assert item["value"] == "2026-07-22"
+    assert item["value"] == today
     assert item["subtitle"] == "平稳 · 生活"
+    assert data["todayWritten"] is True
+    assert data["latestEntryDate"] == today
     assert "私密正文" not in str(data)
 
 

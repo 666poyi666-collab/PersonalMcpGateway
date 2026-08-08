@@ -56,20 +56,14 @@ const dom = {
   sbSync: el("sbSync"),
   sbProbe: el("sbProbe"),
   sbGuard: el("sbGuard"),
-  btnTop: el("btnTop"),
   btnDesktop: el("btnDesktop"),
-  btnCompact: el("btnCompact"),
   btnRefresh: el("btnRefresh"),
-  btnRepair: el("btnRepair"),
   btnRepairOffline: el("btnRepairOffline"),
+  cardManagerSummary: el("cardManagerSummary"),
+  cardSwitches: el("cardSwitches"),
+  btnShowAllCards: el("btnShowAllCards"),
+  btnHideAllCards: el("btnHideAllCards"),
   viewClock: el("viewClock"),
-  btnCapture: el("btnCapture"),
-  btnLayout: el("btnLayout"),
-  btnLayoutReset: el("btnLayoutReset"),
-  btnWidgetEdit: el("btnWidgetEdit"),
-  btnWidgetReset: el("btnWidgetReset"),
-  btnWidgetHide: el("btnWidgetHide"),
-  btnWidgetQuit: el("btnWidgetQuit"),
   overviewRail: el("overviewRail"),
   matrixHeading: el("matrixHeading"),
   matrixFitState: el("matrixFitState"),
@@ -90,7 +84,7 @@ const PROJECT_STYLE = {
     flavor: "sport",
     accent: "#B6FF39",
     display: "步序",
-    eyebrow: "INTERVAL ENGINE / OWW221",
+    eyebrow: "训练与恢复",
     tagline: "间歇训练 · 睡眠恢复",
     groups: ["步序 · 间歇跑"],
   },
@@ -105,20 +99,36 @@ const PROJECT_STYLE = {
     flavor: "discipline",
     accent: "#FF5C4D",
     display: "不做手机控",
-    eyebrow: "LOCAL DISCIPLINE / FOCUSLINK",
+    eyebrow: "本地专注监督",
     tagline: "监督锁机 · 本地维护",
     groups: [],
   },
   personal: {
     flavor: "gateway",
     accent: "#63D8FF",
-    display: "Personal Gateway",
-    eyebrow: "MCP ROUTING FABRIC",
-    tagline: "本机能力路由 · 连接与自愈",
+    display: "服务中心",
+    eyebrow: "本机连接与自动恢复",
+    tagline: "连接状态 · 自动恢复",
     groups: [],
   },
 };
 const SECTION_ORDER = ["foxlink", "watch", "journal", "personal", "bzsjk"];
+const CARD_WIDGET_IDS = {
+  foxlink: new Set(["focus_current", "focus_today"]),
+  watch: new Set(["watch_workouts", "watch_sleep", "watch_current_plan", "watch_status"]),
+  journal: new Set(["journal_recent", "journal_count"]),
+  bzsjk: new Set(["projects", "focus_today"]),
+};
+const VOLATILE_RENDER_FIELDS = new Set([
+  "generatedAt",
+  "fetchedAt",
+  "sampledAt",
+  "checkedAt",
+  "latencyMs",
+  "uptimeSeconds",
+  "probeDurationMs",
+  "lastSuccessfulPushAt",
+]);
 const LAYOUT_SCALE = 1000;
 const PROJECT_LAYOUT_VERSION = 3;
 const MIN_TILE_WIDTH = 120;
@@ -220,16 +230,39 @@ function briefDuration(seconds) {
   const days = Math.floor(s / 86400);
   const hours = Math.floor((s % 86400) / 3600);
   const minutes = Math.floor((s % 3600) / 60);
-  if (days) return `${days}d ${hours}h`;
-  if (hours) return `${hours}h ${minutes}m`;
-  if (minutes) return `${minutes}m`;
-  return `${s}s`;
+  if (days) return `${days}天${hours}小时`;
+  if (hours) return `${hours}小时${minutes}分`;
+  if (minutes) return `${minutes}分钟`;
+  return `${s}秒`;
 }
 
 function clockOf(value) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return "—";
   return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function dateTimeOf(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "时间未知";
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function plainState(value) {
+  return ({
+    online: "正常",
+    degraded: "需注意",
+    offline: "离线",
+    disconnected: "未连接",
+    local: "仅本机",
+    unknown: "未知",
+  })[String(value || "unknown")] || String(value || "未知");
 }
 
 function hourOf(bucket) {
@@ -546,25 +579,125 @@ function setRenderText(node, value) {
 
 let bridgeReady = false;
 let timer = null;
+let clockTimer = null;
+let pollGeneration = 0;
+let pullInFlight = null;
+let forcePullQueued = false;
 
 function api() {
   return window.pywebview && window.pywebview.api ? window.pywebview.api : null;
 }
 
-async function pull(force) {
+function pull(force = false) {
   const bridge = api();
-  if (!bridge) return;
-  try {
-    const payload = force ? await bridge.refresh() : await bridge.snapshot();
-    if (payload) render(payload);
-  } catch (error) {
-    console.warn("snapshot failed", error);
+  if (!bridge) return Promise.resolve();
+  if (force) {
+    forcePullQueued = true;
+    if (dom.btnRefresh) {
+      dom.btnRefresh.disabled = true;
+      dom.btnRefresh.classList.add("spinning");
+      dom.btnRefresh.textContent = "刷新中";
+    }
   }
+  if (pullInFlight) return pullInFlight;
+
+  pullInFlight = (async () => {
+    try {
+      do {
+        const shouldForce = forcePullQueued;
+        forcePullQueued = false;
+        try {
+          const payload = shouldForce ? await bridge.refresh() : await bridge.snapshot();
+          if (payload) render(payload);
+        } catch (error) {
+          console.warn("snapshot failed", error);
+        }
+      } while (forcePullQueued);
+    } finally {
+      pullInFlight = null;
+      if (dom.btnRefresh) {
+        dom.btnRefresh.disabled = false;
+        dom.btnRefresh.classList.remove("spinning");
+        dom.btnRefresh.textContent = "刷新";
+      }
+    }
+  })();
+  return pullInFlight;
 }
 
 /* ---------- rendering ---------- */
 
 let lastDataKey = "";
+let cardFreshness = { stale: false, label: "" };
+
+function syncCardFreshness(payload, data) {
+  const stale = Boolean(payload && payload.stale);
+  const sampledAt = data && data.generatedAt ? data.generatedAt : payload && payload.fetchedAt;
+  cardFreshness = {
+    stale,
+    label: stale ? `旧数据 · 更新于 ${dateTimeOf(sampledAt)}` : "",
+  };
+  dom.body.classList.toggle("stale-data", stale);
+  for (const note of document.querySelectorAll(".card-stale-note")) {
+    note.hidden = !stale;
+    setRenderText(note, cardFreshness.label);
+  }
+}
+
+function structuralRenderValue(value) {
+  if (Array.isArray(value)) return value.map(structuralRenderValue);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (VOLATILE_RENDER_FIELDS.has(key)) continue;
+    result[key] = structuralRenderValue(child);
+  }
+  return result;
+}
+
+function cardRenderProjection(data, cardId) {
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const widgets = Array.isArray(data.widgets) ? data.widgets : [];
+  const target = targets.find((item) => item.id === cardId) || null;
+  if (cardId === "personal") {
+    const gateway = data.gateway || {};
+    return {
+      target,
+      targets,
+      summary: data.summary,
+      gateway: { state: gateway.state, version: gateway.version },
+      fleet: data.fleet,
+      activity: data.activity,
+      events: data.events,
+      errors: data.errors,
+    };
+  }
+  const ids = CARD_WIDGET_IDS[cardId] || new Set();
+  return {
+    target,
+    widgets: widgets.filter((widget) => ids.has(widget.id)),
+  };
+}
+
+function renderDataKey(payload, data) {
+  const projection = CARD_ID
+    ? cardRenderProjection(data, CARD_ID)
+    : {
+      targets: data.targets,
+      widgets: data.widgets,
+      summary: data.summary,
+      gateway: data.gateway ? { state: data.gateway.state, version: data.gateway.version } : null,
+      events: data.events,
+      errors: data.errors,
+      activity: data.activity,
+      fleet: data.fleet,
+    };
+  return JSON.stringify(structuralRenderValue({
+    status: payload.status,
+    stale: payload.stale,
+    projection,
+  }));
+}
 
 function render(payload) {
   const view = payload.view || {};
@@ -581,7 +714,7 @@ function render(payload) {
       ? `已连续重试 ${failureText} 次 · ${clockOf(payload.fetchedAt)}`
       : "");
     setStatusChrome("disconnected", "—", "网关未连接");
-    setRenderText(dom.sbSync, clockOf(payload.fetchedAt));
+    setRenderText(dom.sbSync, `上次尝试 ${clockOf(payload.fetchedAt)}`);
     setRenderText(dom.sbProbe, "—");
     renderGuard(null);
     if (!sectionsRendered) {
@@ -610,49 +743,52 @@ function render(payload) {
   dom.body.classList.toggle("recovering", recoveryVisible);
   dom.offlineScreen.hidden = !recoveryVisible;
   if (recoveryVisible) {
-    setRenderText(dom.offlineTitle, "实时连接中断，矩阵仍可查看");
+    setRenderText(dom.offlineTitle, "暂时无法获取新数据");
     const failures = Math.min(FAILURE_DISPLAY_CAP, Math.max(0, num(payload.consecutiveFailures)));
     const failureText = failures >= FAILURE_DISPLAY_CAP ? `${FAILURE_DISPLAY_CAP}+` : failures;
-    setRenderText(dom.offlineHint, `显示上次有效数据 · 后台重试 ${failureText} 次`);
+    setRenderText(dom.offlineHint, `正在显示上次的数据 · 已自动重试 ${failureText} 次`);
   }
 
   const data = payload.data;
+  syncCardFreshness(payload, data);
   const summary = data.summary || {};
   const gateway = data.gateway || {};
   const online = num(summary.online);
   const total = num(summary.total);
+  const widgets = Array.isArray(data.widgets) ? data.widgets : [];
+  const watchTarget = Array.isArray(data.targets)
+    ? data.targets.find((target) => target.id === "watch")
+    : null;
+  const watchNeedsAttention = Boolean(
+    payload.status === "online"
+    && watchTarget
+    && projectDisplayState(watchTarget, widgets) === "offline",
+  );
+  const visibleStatus = watchNeedsAttention ? "degraded" : payload.status;
 
   setStatusChrome(
-    payload.status,
+    visibleStatus,
     `${online}/${total}`,
-    recoveryVisible ? "同步恢复中" : (payload.statusLabel || ""),
+    recoveryVisible
+      ? "正在恢复连接"
+      : watchNeedsAttention ? "步序设备未连接" : (payload.statusLabel || ""),
   );
-  if (recoveryVisible) setRenderText(dom.sbState, "RECOVERING");
-  setRenderText(dom.sbSync, `同步 ${clockOf(data.generatedAt || payload.fetchedAt)}`);
-  setRenderText(dom.sbProbe, `探测 ${num(data.probeDurationMs)}ms`);
+  if (recoveryVisible) setRenderText(dom.sbState, "正在恢复连接");
+  setRenderText(dom.sbSync, `更新于 ${clockOf(data.generatedAt || payload.fetchedAt)}`);
+  setRenderText(dom.sbProbe, `检查耗时 ${num(data.probeDurationMs)} 毫秒`);
   renderGuard(data.fleet || null);
 
   // Skip the DOM rebuild when nothing but timestamps changed — the board polls
   // every 4s and most passes carry identical data.
-  const key = JSON.stringify([
-    payload.status,
-    data.targets,
-    data.widgets,
-    data.summary,
-    data.events,
-    data.errors,
-    data.activity,
-    data.fleet,
-  ]);
+  const key = renderDataKey(payload, data);
   if (key === lastDataKey) return;
   lastDataKey = key;
 
-  renderStrip(payload, online, total, gateway, summary, data);
   if (!layoutMode) renderSections(data);
+  if (CARD_ID) return;
+  renderStrip(payload, online, total, gateway, summary, data, watchNeedsAttention);
   renderChart(data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : []);
   renderEvents(data);
-  renderExtensionWidgets(Array.isArray(data.widgets) ? data.widgets : []);
-  renderCompact(data, payload);
 }
 
 function setStatusChrome(status, count, label) {
@@ -661,31 +797,39 @@ function setStatusChrome(status, count, label) {
   if (dom.fsDot) dom.fsDot.dataset.status = status;
   setRenderText(dom.tbCount, count);
   setRenderText(dom.tbLabel, label);
-  setRenderText(dom.sbState, status === "disconnected" ? "DISCONNECTED" : "CONNECTED");
+  const stateLabel = status === "disconnected"
+    ? "连接已断开"
+    : status === "online" ? "连接正常" : "部分卡片需注意";
+  setRenderText(dom.sbState, stateLabel);
 }
 
 function renderGuard(fleet) {
   const state = fleet && fleet.watchdog ? fleet.watchdog.state : null;
   if (state === "running") {
-    setRenderText(dom.sbGuard, "看护在线");
+    setRenderText(dom.sbGuard, "自动修复正常");
     dom.sbGuard.dataset.state = "ok";
   } else if (state) {
-    setRenderText(dom.sbGuard, state === "missing" ? "看护未安装" : "看护离线");
+    setRenderText(dom.sbGuard, state === "missing" ? "自动修复未安装" : "自动修复不可用");
     dom.sbGuard.dataset.state = "bad";
   } else {
-    setRenderText(dom.sbGuard, "看护 —");
+    setRenderText(dom.sbGuard, "自动修复 —");
     dom.sbGuard.dataset.state = "";
   }
 }
 
-function renderStrip(payload, online, total, gateway, summary, data) {
+function renderStrip(payload, online, total, gateway, summary, data, watchNeedsAttention) {
   setRenderText(dom.heroValue, `${online}/${total}`);
   const titles = {
     online: "所有系统正常运行",
     degraded: "部分链路已降级",
     offline: "存在离线项目",
   };
-  setRenderText(dom.heroTitle, titles[payload.status] || "状态未知");
+  setRenderText(
+    dom.heroTitle,
+    watchNeedsAttention
+      ? "本机服务正常，步序设备未连接"
+      : (titles[payload.status] || "状态未知"),
+  );
   setRenderText(dom.tileCalls, compact(summary.calls24h));
   setRenderText(dom.tileRate, `${num(summary.successRate, 100).toFixed(1)}%`);
   setRenderText(dom.tileUptime, duration(gateway.uptimeSeconds));
@@ -782,22 +926,22 @@ function gatewayLatestSignal(data) {
   const error = errors[0];
   const event = events[0];
   let status = "online";
-  let label = "NO ACTIVE INCIDENTS";
+  let label = "当前没有异常";
   let title = "当前链路稳定";
   let detail = "看护服务持续巡检，无待处理异常";
   let time = clockOf(data.generatedAt);
 
   if (error) {
     status = "offline";
-    label = "LATEST ERROR";
+    label = "最近异常";
     title = String(error.code || error.error || "网关异常");
     detail = String(error.message || error.summary || error.module || "等待下一轮诊断");
     time = clockOf(error.createdAt || error.created_at);
   } else if (event) {
     status = event.toState === "online" ? "online" : event.toState === "degraded" ? "degraded" : "offline";
-    label = status === "online" ? "LATEST RECOVERY" : "LATEST TRANSITION";
+    label = status === "online" ? "最近已恢复" : "最近状态变化";
     title = `${event.name || event.target || "链路"} ${status === "online" ? "已恢复" : "状态变化"}`;
-    detail = `${event.fromState || "?"} -> ${event.toState || "?"}`;
+    detail = `${plainState(event.fromState)} → ${plainState(event.toState)}`;
     time = clockOf(event.occurredAt);
   }
 
@@ -826,7 +970,7 @@ function gatewayLatestSignal(data) {
       key: `event:${item.id || item.occurredAt || `${item.target || item.name}:${item.toState || "?"}`}`,
       status: item.toState === "online" ? "online" : item.toState === "degraded" ? "degraded" : "offline",
       title: String(item.name || item.target || "链路状态"),
-      detail: `${item.fromState || "?"} -> ${item.toState || "?"}`,
+      detail: `${plainState(item.fromState)} → ${plainState(item.toState)}`,
       time: clockOf(item.occurredAt),
     });
   }
@@ -838,8 +982,8 @@ function gatewayLatestSignal(data) {
         key: `target:${target.id}`,
         status: target.state || "offline",
         title: String(style.display || target.name || target.id),
-        detail: `MCP ${target.mcp && target.mcp.ok ? `${num(target.mcp.latencyMs)}ms` : "--"} / LINK ${target.tunnel && target.tunnel.ok ? `${num(target.tunnel.latencyMs)}ms` : "--"}`,
-        time: "LIVE",
+        detail: `本机服务 ${target.mcp && target.mcp.ok ? `${num(target.mcp.latencyMs)} 毫秒` : "不可用"} / 安全连接 ${target.tunnel && target.tunnel.ok ? `${num(target.tunnel.latencyMs)} 毫秒` : "不可用"}`,
+        time: "当前",
       });
     }
   }
@@ -875,21 +1019,21 @@ function gatewayConsole(target, data) {
   const console = make("div", "gateway-console");
   const route = make("div", "gw-route");
   route.append(
-    gatewayRouteNode("01", "FLEET", `${onlineRoutes}/${totalRoutes}`, "项目路由", fleetState),
+    gatewayRouteNode("01", "项目连接", `${onlineRoutes}/${totalRoutes}`, "正常连接", fleetState),
     gatewayRouteLink(fleetState),
-    gatewayRouteNode("02", "MCP CORE", coreState === "online" ? "READY" : "FAULT", `${num(target.mcp && target.mcp.latencyMs)}ms`, coreState),
+    gatewayRouteNode("02", "本机服务", coreState === "online" ? "正常" : "异常", `${num(target.mcp && target.mcp.latencyMs)} 毫秒`, coreState),
     gatewayRouteLink(coreState === "online" && relayState === "online" ? "online" : "offline"),
-    gatewayRouteNode("03", "SECURE LINK", relayState === "online" ? "OPEN" : "CLOSED", `${num(target.tunnel && target.tunnel.latencyMs)}ms`, relayState),
+    gatewayRouteNode("03", "安全连接", relayState === "online" ? "已连接" : "未连接", `${num(target.tunnel && target.tunnel.latencyMs)} 毫秒`, relayState),
     gatewayRouteLink(relayState === "online" && guardState === "online" ? "online" : "offline"),
-    gatewayRouteNode("04", "WATCHDOG", guardState === "online" ? "ARMED" : "CHECK", fleet.repairSupported ? "可自愈" : "仅监控", guardState),
+    gatewayRouteNode("04", "自动修复", guardState === "online" ? "正常" : "需检查", fleet.repairSupported ? "可自动处理" : "仅查看状态", guardState),
   );
 
   const metrics = make("div", "gw-metrics");
   const metricData = [
-    ["24H CALLS", compact(summary.calls24h), `${compact(summary.failures24h)} 失败`, compact(summary.calls24h)],
-    ["SUCCESS", `${num(summary.successRate, 100).toFixed(1)}%`, "过去 24 小时", `${Math.round(num(summary.successRate, 100))}%`],
-    ["PROBE", `${num(data.probeDurationMs)}ms`, "全链路巡检", `${num(data.probeDurationMs)}ms`],
-    ["UPTIME", duration(gateway.uptimeSeconds), `v${gateway.version || "?"}`, briefDuration(gateway.uptimeSeconds)],
+    ["24 小时调用", compact(summary.calls24h), `${compact(summary.failures24h)} 次失败`, compact(summary.calls24h)],
+    ["成功率", `${num(summary.successRate, 100).toFixed(1)}%`, "过去 24 小时", `${Math.round(num(summary.successRate, 100))}%`],
+    ["检查耗时", `${num(data.probeDurationMs)} 毫秒`, "全部连接", `${num(data.probeDurationMs)} 毫秒`],
+    ["已运行", duration(gateway.uptimeSeconds), `版本 ${gateway.version || "未知"}`, briefDuration(gateway.uptimeSeconds)],
   ];
   for (const [label, value, note, compactValue] of metricData) {
     const metric = make("div", "gw-metric");
@@ -903,8 +1047,8 @@ function gatewayConsole(target, data) {
   const serviceMatrix = make("section", "gw-service-matrix");
   const matrixHead = make("header");
   matrixHead.append(
-    make("span", null, "SERVICE FABRIC"),
-    make("b", null, `${runningServices}/${totalServices} RUNNING`),
+    make("span", null, "服务状态"),
+    make("b", null, `${runningServices}/${totalServices} 个正常`),
   );
   const rows = make("div", "gw-service-rows");
   targets.forEach((item, index) => {
@@ -918,8 +1062,8 @@ function gatewayConsole(target, data) {
       make("span", "gw-service-code", String(index + 1).padStart(2, "0")),
       dot,
       make("strong", null, style.display || item.name || item.id),
-      make("span", null, `MCP ${item.mcp && item.mcp.ok ? `${num(item.mcp.latencyMs)}ms` : "--"}`),
-      make("span", null, `LINK ${item.tunnel && item.tunnel.ok ? `${num(item.tunnel.latencyMs)}ms` : "--"}`),
+      make("span", null, `本机 ${item.mcp && item.mcp.ok ? `${num(item.mcp.latencyMs)} 毫秒` : "不可用"}`),
+      make("span", null, `连接 ${item.tunnel && item.tunnel.ok ? `${num(item.tunnel.latencyMs)} 毫秒` : "不可用"}`),
     );
     rows.append(row);
   });
@@ -928,7 +1072,7 @@ function gatewayConsole(target, data) {
   const telemetry = make("section", "gw-telemetry");
   const traffic = make("div", "gw-traffic");
   const trafficHead = make("header");
-  trafficHead.append(make("span", null, "24H TRAFFIC"), make("b", null, `${compact(summary.calls24h)} REQUESTS`));
+  trafficHead.append(make("span", null, "24 小时调用"), make("b", null, `${compact(summary.calls24h)} 次`));
   const bars = make("div", "gw-traffic-bars");
   const hourly = data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : [];
   const peak = Math.max(1, ...hourly.map((bucket) => num(bucket.calls)));
@@ -998,7 +1142,7 @@ function watchScoreDial(rawScore) {
   svg.append(track, value);
 
   const reading = make("div", "wi-score-reading");
-  reading.append(make("strong", null, hasScore ? String(Math.round(score)) : "—"), make("span", null, "SLEEP SCORE"));
+  reading.append(make("strong", null, hasScore ? String(Math.round(score)) : "—"), make("span", null, "睡眠评分"));
   dial.append(svg, reading);
   return dial;
 }
@@ -1006,13 +1150,29 @@ function watchScoreDial(rawScore) {
 function watchConsole(target, widgets) {
   const workouts = widgets.find((widget) => widget.id === "watch_workouts");
   const sleep = widgets.find((widget) => widget.id === "watch_sleep");
+  const currentPlan = widgets.find((widget) => widget.id === "watch_current_plan");
+  const status = widgets.find((widget) => widget.id === "watch_status");
   const workoutPairs = widgetPairs(workouts);
   const sleepPairs = widgetPairs(sleep);
-  const workoutReady = Boolean(workouts && workouts.ok);
-  const sleepReady = Boolean(sleep && sleep.ok);
+  const planPairs = widgetPairs(currentPlan);
+  const statusPairs = widgetPairs(status);
+  const workoutReady = Boolean(workouts && workouts.ok && workoutPairs.size);
+  const sleepReady = Boolean(sleep && sleep.ok && sleepPairs.size);
+  const planReady = Boolean(currentPlan && currentPlan.ok && planPairs.size);
+  const statusReady = Boolean(status && status.ok && statusPairs.size);
+  const statusUnavailable = Boolean(status && (
+    status.ok === false
+    || status.availability === "unavailable"
+    || (status.data && status.data.availability === "unavailable")
+  ));
+  const watchOnline = statusUnavailable
+    ? false
+    : statusReady
+    ? Boolean(status.data && status.data.watchOnline)
+    : target.state === "online";
   const readyCount = Number(workoutReady) + Number(sleepReady);
-  const dataState = readyCount === 2 ? "online" : readyCount === 1 ? "degraded" : "offline";
-  const stateLabel = dataState === "online" ? "DATA LOCKED" : dataState === "degraded" ? "PARTIAL SYNC" : "SYNC WAIT";
+  const dataState = !watchOnline ? "offline" : readyCount === 2 ? "online" : "degraded";
+  const stateLabel = !watchOnline ? "手机或手表未连接" : dataState === "online" ? "数据已更新" : "部分数据待更新";
 
   const console = make("div", "watch-console");
   console.dataset.dataState = dataState;
@@ -1021,44 +1181,65 @@ function watchConsole(target, widgets) {
   const head = make("header", "wi-console-head");
   const live = make("div", "wi-live-mark");
   const dot = make("i", "dot mini");
-  dot.dataset.status = target.state || "offline";
-  live.append(dot, make("span", null, "RUN / RECOVER"));
+  dot.dataset.status = dataState;
+  live.append(dot, make("span", null, "训练与恢复"));
   head.append(live, make("b", null, stateLabel));
 
   const run = make("section", "wi-run");
   const runPrimary = make("div", "wi-run-primary");
   runPrimary.append(
-    make("span", null, "TOTAL DISTANCE"),
+    make("span", null, "累计距离"),
     make("strong", null, workoutPairs.get("总距离") || "—"),
-    make("small", null, `${workoutPairs.get("训练次数") || "—"} SESSIONS`),
+    make("small", null, `${workoutPairs.get("训练次数") || "—"} 次训练`),
   );
   const runMetrics = make("div", "wi-run-metrics");
   runMetrics.append(
-    watchMetric("ACTIVE", workoutPairs.get("累计活动")),
-    watchMetric("AVG HEART", workoutPairs.get("平均心率")),
+    watchMetric("活动时长", workoutPairs.get("累计活动")),
+    watchMetric("平均心率", workoutPairs.get("平均心率")),
   );
   const plan = make("div", "wi-plan");
   plan.append(
-    make("span", null, "LATEST PLAN"),
-    make("strong", null, workoutPairs.get("最近计划") || (workoutReady ? "暂无最近计划" : "等待训练汇总")),
+    make("span", null, "当前计划"),
+    make("strong", null, planPairs.get("当前计划") || (planReady ? "暂无当前计划" : "等待当前计划")),
   );
   run.append(runPrimary, runMetrics, plan);
 
   const recovery = make("section", "wi-recovery");
   const recoveryHead = make("div", "wi-recovery-head");
-  recoveryHead.append(make("span", null, "RECOVERY"), make("b", null, sleepReady ? "SLEEP READY" : "DEVICE WAIT"));
+  recoveryHead.append(make("span", null, "恢复情况"), make("b", null, sleepReady ? "睡眠数据已更新" : "等待设备数据"));
   recovery.append(
     recoveryHead,
     watchScoreDial(sleepPairs.get("睡眠评分") || "—"),
-    watchMetric("DURATION", sleepPairs.get("睡眠时长"), "wi-sleep-duration"),
-    watchMetric("HEART RANGE", sleepPairs.get("心率区间"), "wi-heart-range"),
+    watchMetric("睡眠时长", sleepPairs.get("睡眠时长"), "wi-sleep-duration"),
+    watchMetric("心率区间", sleepPairs.get("心率区间"), "wi-heart-range"),
   );
 
-  if (dataState !== "online") {
+  const issues = [workouts, sleep, currentPlan, status]
+    .map((widget) => widget && widget.data && widget.data.body ? String(widget.data.body) : widget && widget.error ? String(widget.error) : "")
+    .filter(Boolean);
+  const bleState = statusPairs.get("BLE");
+  const bleReason = statusPairs.get("BLE 原因");
+  const lanFallback = statusPairs.get("LAN 回退");
+  let statusNote = issues[0] || "";
+  if (!statusNote && statusReady && bleState && bleState !== "CONNECTED") {
+    const bleLabel = ({
+      DISCONNECTED: "未连接",
+      CONNECTING: "正在连接",
+      TIMEOUT: "连接超时",
+      ERROR: "连接异常",
+    })[bleState] || bleState;
+    statusNote = `蓝牙${bleLabel}${bleReason ? `（${bleReason}）` : ""}${lanFallback ? ` · 局域网备用连接${lanFallback}` : ""}${watchOnline ? " · 手表整体在线" : ""}`;
+  }
+  if (!statusNote && dataState !== "online") {
     const pending = [];
     if (!workoutReady) pending.push("训练");
     if (!sleepReady) pending.push("睡眠");
-    const note = make("p", "wi-sync-note", `${pending.join(" / ")}数据等待手机或手表恢复`);
+    if (!planReady) pending.push("计划");
+    statusNote = `${pending.join(" / ")}数据等待恢复`;
+  }
+  if (statusNote) {
+    const note = make("p", "wi-sync-note", statusNote);
+    note.dataset.level = watchOnline ? "neutral" : "alert";
     recovery.append(note);
   }
 
@@ -1067,16 +1248,20 @@ function watchConsole(target, widgets) {
 }
 
 function focusConsole(widgets) {
-  const widget = widgets.find((item) => item.id === "focus_today");
-  const ready = Boolean(widget && widget.ok && widget.data);
-  const value = ready && widget.data.value ? String(widget.data.value) : "—";
-  const label = ready && widget.data.label ? String(widget.data.label) : "等待今日专注数据";
-  const note = ready && widget.data.note ? String(widget.data.note) : "本机恢复后自动刷新";
+  const current = widgets.find((item) => item.id === "focus_current");
+  const today = widgets.find((item) => item.id === "focus_today");
+  const ready = Boolean(current && current.ok && current.data && current.availability !== "unavailable");
+  const todayReady = Boolean(today && today.ok && today.data);
+  const value = ready && current.data.value ? String(current.data.value) : "当前专注待读取";
+  const label = ready && current.data.label ? String(current.data.label) : "等待当前任务";
+  const note = ready && current.data.note ? String(current.data.note) : "本机恢复后自动刷新";
+  const state = ready ? String(current.data.sessionState || "unknown") : "offline";
   const console = make("div", "focus-console");
   console.dataset.dataState = ready ? "online" : "offline";
 
   const head = make("header", "fl-head");
-  head.append(make("span", null, "TEMPORAL FIELD / TODAY"), make("b", null, ready ? "TODAY VERIFIED" : "DATA WAIT"));
+  const stateLabel = { running: "正在专注", paused: "专注已暂停", idle: "当前空闲", stopped: "当前空闲" }[state] || "等待数据";
+  head.append(make("span", null, "当前专注"), make("b", null, stateLabel));
   const reading = make("div", "fl-reading");
   reading.append(make("strong", null, value), make("span", null, label), make("small", null, note));
   const ribbon = make("div", "fl-ribbon");
@@ -1087,7 +1272,9 @@ function focusConsole(widgets) {
     ribbon.append(segment);
   }
   const foot = make("footer", "fl-foot");
-  foot.append(make("span", null, "TODAY WINDOW"), make("b", null, ready ? "MCP READ" : "NO SAMPLE"));
+  const todayValue = todayReady && today.data.value ? String(today.data.value) : "—";
+  const todayLabel = todayReady && today.data.isToday === false ? `旧数据 ${today.data.sourceDate || ""}`.trim() : "今日累计";
+  foot.append(make("span", null, todayLabel), make("b", null, todayValue));
   console.append(head, reading, ribbon, foot);
   return console;
 }
@@ -1102,14 +1289,15 @@ function journalConsole(widgets) {
   const total = count && count.ok && count.data && count.data.value != null
     ? String(count.data.value)
     : "—";
+  const todayWritten = Boolean(recentReady && recent.data.todayWritten);
   const console = make("div", "journal-console");
   console.dataset.dataState = recentReady ? "online" : "offline";
 
   const head = make("header", "jr-head");
   const headCopy = make("div");
-  headCopy.append(make("span", null, "REVIEW LEDGER"), make("strong", null, "最近记录"));
+  headCopy.append(make("span", null, "今日记录"), make("strong", null, todayWritten ? "今天已写" : "今天还没写"));
   const countBlock = make("div", "jr-count");
-  countBlock.append(make("b", null, total), make("small", null, "TOTAL ENTRIES"));
+  countBlock.append(make("b", null, total), make("small", null, "日记总数"));
   head.append(headCopy, countBlock);
 
   const ledger = make("div", "jr-ledger");
@@ -1128,8 +1316,11 @@ function journalConsole(widgets) {
     ledger.append(row);
   });
   const foot = make("footer", "jr-foot");
-  const note = count && count.ok && count.data && count.data.note ? String(count.data.note) : "等待同步状态";
-  foot.append(make("span", null, "LAST REVISION"), make("b", null, note));
+  const latestDate = recentReady && recent.data.latestEntryDate ? String(recent.data.latestEntryDate) : "";
+  const note = count && count.ok && count.data && count.data.note
+    ? String(count.data.note)
+    : latestDate ? `最近一篇 ${latestDate}` : "等待同步状态";
+  foot.append(make("span", null, "最近更新"), make("b", null, note));
   console.append(head, ledger, foot);
   return console;
 }
@@ -1140,7 +1331,6 @@ function bzsjkTargetFromWidgets(widgets) {
     ? projects.data.items
     : [];
   const projectItem = items.find((item) => String(item.title || "").trim() === "不做手机控");
-  if (!projectItem) return null;
   return {
     id: "bzsjk",
     name: "不做手机控",
@@ -1149,7 +1339,7 @@ function bzsjkTargetFromWidgets(widgets) {
     version: null,
     mcp: null,
     tunnel: null,
-    projectItem,
+    projectItem: projectItem || null,
     sync: {
       compliance: "exempt",
       dataPlane: "local_only",
@@ -1164,19 +1354,20 @@ function bzsjkConsole(target, widgets) {
   const item = target.projectItem || {};
   const focus = widgets.find((widget) => widget.id === "focus_today");
   const focusReady = Boolean(focus && focus.ok);
-  const status = String(item.value || "状态待读取");
-  const subtitle = String(item.subtitle || "本地源码 · 未声明云端运行时");
-  const branch = subtitle.split("·")[0].trim() || "LOCAL";
+  const rawStatus = String(item.value || "仅本机，数据待接入");
+  const status = rawStatus === "工作区干净"
+    ? "状态正常"
+    : rawStatus.includes("未提交") ? "有待整理的更新" : rawStatus;
   const console = make("div", "bz-console");
   const head = make("header", "bz-head");
-  head.append(make("span", null, "DISCIPLINE CORE / LOCAL"), make("b", null, "NO CLOUD CLAIM"));
+  head.append(make("span", null, "本地专注监督"), make("b", null, "仅在这台电脑运行"));
   const main = make("section", "bz-main");
-  main.append(make("span", null, "RUNTIME POLICY"), make("strong", null, "LOCAL"), make("small", null, "关机后无云同步"));
+  main.append(make("span", null, "当前状态"), make("strong", null, status), make("small", null, "电脑关机后暂停更新"));
   const metrics = make("div", "bz-metrics");
   const rows = [
-    ["REPOSITORY", status],
-    ["BRANCH", branch],
-    ["FOCUSLINK", focusReady ? "数据可读" : "等待恢复"],
+    ["运行位置", "这台电脑"],
+    ["数据更新", "电脑开机时"],
+    ["专注数据", focusReady ? "可读取" : "等待恢复"],
   ];
   for (const [label, value] of rows) {
     const metric = make("div", "bz-metric");
@@ -1184,40 +1375,60 @@ function bzsjkConsole(target, widgets) {
     metrics.append(metric);
   }
   const foot = make("footer", "bz-foot");
-  foot.append(make("span", null, "NETWORK BOUNDARY"), make("b", null, "仅本机 / 用户指定链路"));
+  foot.append(make("span", null, "数据范围"), make("b", null, "只读取本机数据"));
   console.append(head, main, metrics, foot);
   return console;
 }
 
 function projectCore(target, widgets, data) {
   const core = make("div", "proj-core");
-  let label = "LIVE STATE";
-  let value = target.state === "online" ? "READY" : target.state === "degraded" ? "CHECK" : "OFFLINE";
+  let label = "当前状态";
+  let value = target.state === "online" ? "正常" : target.state === "degraded" ? "需注意" : "离线";
 
   if (target.id === "personal") {
     const summary = data.summary || {};
-    label = "ROUTES ONLINE";
+    label = "正常连接";
     value = `${num(summary.online)}/${num(summary.total)}`;
   } else if (target.id === "foxlink") {
-    const focus = widgets.find((widget) => widget.id === "focus_today");
-    label = "TODAY FOCUS";
+    const focus = widgets.find((widget) => widget.id === "focus_current");
+    label = "当前专注";
     if (focus && focus.ok && focus.data && focus.data.value) value = String(focus.data.value);
   } else if (target.id === "watch") {
-    const workouts = widgets.find((widget) => widget.id === "watch_workouts");
-    const pairs = widgetPairs(workouts);
-    label = "TOTAL DISTANCE";
-    value = pairs.get("总距离") || value;
+    const watchStatus = widgets.find((widget) => widget.id === "watch_status");
+    const watchUnavailable = Boolean(watchStatus && (
+      watchStatus.ok === false
+      || watchStatus.availability === "unavailable"
+      || (watchStatus.data && watchStatus.data.availability === "unavailable")
+    ));
+    const plan = widgets.find((widget) => widget.id === "watch_current_plan");
+    const pairs = widgetPairs(plan);
+    label = watchUnavailable ? "连接状态" : "当前计划";
+    value = watchUnavailable ? "手机未连接" : (pairs.get("当前计划") || value);
   } else if (target.id === "journal") {
-    const count = widgets.find((widget) => widget.id === "journal_count");
-    label = "TOTAL ENTRIES";
-    if (count && count.ok && count.data && count.data.value != null) value = String(count.data.value);
+    const recent = widgets.find((widget) => widget.id === "journal_recent");
+    label = "今日日记";
+    if (recent && recent.ok && recent.data) value = recent.data.todayWritten ? "已写" : "未写";
   } else if (target.id === "bzsjk") {
-    label = "LOCAL PROJECT";
-    value = target.projectItem && target.projectItem.value ? String(target.projectItem.value) : "LOCAL";
+    label = "本地项目";
+    value = target.projectItem && target.projectItem.value ? String(target.projectItem.value) : "仅本机";
   }
 
   core.append(make("span", null, label), make("strong", null, value));
   return core;
+}
+
+function projectDisplayState(target, widgets) {
+  if (target.id !== "watch") return target.state || "offline";
+  const status = widgets.find((widget) => widget.id === "watch_status");
+  const unavailable = Boolean(status && (
+    status.ok === false
+    || status.availability === "unavailable"
+    || (status.data && status.data.availability === "unavailable")
+  ));
+  if (unavailable || (status && status.ok && status.data && status.data.watchOnline === false)) {
+    return "offline";
+  }
+  return target.state || "offline";
 }
 
 function sectionDataCards(target, widgets, data) {
@@ -1264,7 +1475,7 @@ function sectionTail(target, data) {
     dot.dataset.status = event.toState === "online" ? "online" : event.toState === "degraded" ? "degraded" : "offline";
     row.append(
       dot,
-      make("span", null, event.toState === "online" ? "已恢复" : `${event.fromState} → ${event.toState}`),
+      make("span", null, event.toState === "online" ? "已恢复" : `${plainState(event.fromState)} → ${plainState(event.toState)}`),
       make("time", null, clockOf(event.occurredAt))
     );
     rows.push(row);
@@ -1288,8 +1499,8 @@ function sectionTail(target, data) {
 function projectSectionSignature(target, index, widgets, data) {
   const style = PROJECT_STYLE[target.id] || { groups: [] };
   const widgetIds = {
-    foxlink: new Set(["focus_today"]),
-    watch: new Set(["watch_workouts", "watch_sleep"]),
+    foxlink: new Set(["focus_current", "focus_today"]),
+    watch: new Set(["watch_workouts", "watch_sleep", "watch_current_plan", "watch_status"]),
     journal: new Set(["journal_recent", "journal_count"]),
     bzsjk: new Set(["projects", "focus_today"]),
   };
@@ -1313,7 +1524,14 @@ function projectSectionSignature(target, index, widgets, data) {
     errors: data.errors,
     refreshIntervalSeconds: data.refreshIntervalSeconds,
   } : null;
-  return JSON.stringify([index, target, relevantWidgets, targetEvents, targetActivity, gatewayData]);
+  return JSON.stringify(structuralRenderValue([
+    index,
+    target,
+    relevantWidgets,
+    targetEvents,
+    targetActivity,
+    gatewayData,
+  ]));
 }
 
 function buildProjectSection(target, index, widgets, data) {
@@ -1330,7 +1548,8 @@ function buildProjectSection(target, index, widgets, data) {
   );
   section.style.setProperty("--p-accent", style.accent);
   section.style.setProperty("--tile-index", String(index));
-  section.dataset.state = target.state || "offline";
+  const displayState = projectDisplayState(target, widgets);
+  section.dataset.state = displayState;
   section.dataset.projectId = target.id;
 
   const head = make("header", "proj-head");
@@ -1343,8 +1562,10 @@ function buildProjectSection(target, index, widgets, data) {
   naming.append(sub);
   const state = make("div", "proj-state");
   const dot = make("i", "dot");
-  dot.dataset.status = target.state || "offline";
-  const stateText = { online: "正常", degraded: "降级", offline: "离线", local: "本机" }[target.state] || "未知";
+  dot.dataset.status = displayState;
+  const stateText = target.id === "watch" && displayState === "offline"
+    ? "未连接"
+    : ({ online: "正常", degraded: "需注意", offline: "离线", local: "仅本机" }[displayState] || "未知");
   state.append(dot, make("b", null, stateText));
   const grip = make("span", "tile-grip");
   grip.setAttribute("aria-hidden", "true");
@@ -1352,17 +1573,17 @@ function buildProjectSection(target, index, widgets, data) {
   if (target.id === "personal") {
     const identity = make("div", "gw-identity");
     identity.append(
-      make("span", null, "CORE  /  LOCAL :8761"),
-      make("span", null, `POLL  /  ${num(data.refreshIntervalSeconds, 4)} SEC`),
-      make("span", null, "MODE  /  AUTO RECOVERY"),
+      make("span", null, "本机服务  /  端口 8761"),
+      make("span", null, `自动更新  /  ${num(data.refreshIntervalSeconds, 4)} 秒`),
+      make("span", null, "异常时尝试自动恢复"),
     );
     head.append(identity);
   }
   head.append(make("span", "proj-index", String(index + 1).padStart(2, "0")), grip);
 
   const vitals = make("div", "proj-vitals");
-  if (target.mcp) vitals.append(probeChip("MCP", target.mcp));
-  if (target.tunnel) vitals.append(probeChip("隧道", target.tunnel));
+  if (target.mcp) vitals.append(probeChip("本机服务", target.mcp));
+  if (target.tunnel) vitals.append(probeChip("安全连接", target.tunnel));
   if (target.id !== "personal") vitals.append(syncChip(target.sync));
 
   const dataZone = make("div", "proj-data");
@@ -1381,7 +1602,7 @@ function buildProjectSection(target, index, widgets, data) {
   const sizeBadge = renderKey(make("span", "tile-size-badge"), "size");
   sizeBadge.setAttribute("aria-hidden", "true");
   const editToolbar = renderKey(make("div", "tile-edit-toolbar"), "edit-toolbar");
-  editToolbar.setAttribute("aria-label", "磁贴快捷尺寸");
+  editToolbar.setAttribute("aria-label", "卡片快捷尺寸");
   for (const [preset, label] of [["small", "小"], ["medium", "中"], ["large", "大"]]) {
     const button = renderKey(make("button", null, label), `preset:${preset}`);
     button.type = "button";
@@ -1392,14 +1613,14 @@ function buildProjectSection(target, index, widgets, data) {
   }
   section.append(head, vitals, dataZone, tail, sizeBadge, editToolbar);
   const handleLabels = {
-    n: "调整磁贴上边缘",
-    ne: "调整磁贴右上角",
-    e: "调整磁贴右边缘",
-    se: "调整磁贴右下角",
-    s: "调整磁贴下边缘",
-    sw: "调整磁贴左下角",
-    w: "调整磁贴左边缘",
-    nw: "调整磁贴左上角",
+    n: "调整卡片上边缘",
+    ne: "调整卡片右上角",
+    e: "调整卡片右边缘",
+    se: "调整卡片右下角",
+    s: "调整卡片下边缘",
+    sw: "调整卡片左下角",
+    w: "调整卡片左边缘",
+    nw: "调整卡片左上角",
   };
   for (const [edge, label] of Object.entries(handleLabels)) {
     const handle = renderKey(make("button", `tile-handle tile-handle-${edge}`), `handle:${edge}`);
@@ -1410,34 +1631,43 @@ function buildProjectSection(target, index, widgets, data) {
     section.append(handle);
   }
   if (CARD_ID === target.id) {
+    const staleNote = renderKey(make("div", "card-stale-note", cardFreshness.label), "card-stale-note");
+    staleNote.hidden = !cardFreshness.stale;
+    section.append(staleNote);
     const controls = renderKey(make("div", "card-window-controls"), "card-controls");
-    controls.setAttribute("aria-label", "磁贴窗口控制");
+    controls.setAttribute("aria-label", "卡片窗口控制");
     const move = renderKey(
       make("span", "card-window-move pywebview-drag-region", "::"),
       "card-control:move",
     );
-    move.title = "拖动此磁贴";
+    move.title = "拖动这张卡片";
     move.setAttribute("role", "button");
-    move.setAttribute("aria-label", "拖动此磁贴");
+    move.setAttribute("aria-label", "拖动这张卡片");
     controls.append(move);
+    const manage = renderKey(make("button", "card-window-manage", "管理"), "card-control:manage");
+    manage.type = "button";
+    manage.dataset.cardAction = "manage";
+    manage.title = "打开卡片管理面板";
+    manage.setAttribute("aria-label", manage.title);
+    controls.append(manage);
     for (const preset of ["small", "medium", "large"]) {
-      const label = { small: "S", medium: "M", large: "L" }[preset];
+      const label = { small: "小", medium: "中", large: "大" }[preset];
       const button = renderKey(make("button", "card-window-size", label), `card-size:${preset}`);
       button.type = "button";
       button.dataset.cardSize = preset;
-      button.title = `${label} 尺寸`;
+      button.title = `${label}尺寸`;
       button.setAttribute("aria-label", `切换为${label}尺寸`);
       controls.append(button);
     }
     const reset = renderKey(make("button", "card-window-reset", "\u21ba"), "card-control:reset");
     reset.type = "button";
     reset.dataset.cardAction = "reset";
-    reset.title = "恢复此磁贴的默认位置与大小";
+    reset.title = "恢复这张卡片的默认位置与大小";
     reset.setAttribute("aria-label", reset.title);
-    const hide = renderKey(make("button", "card-window-hide", "\u00d7"), "card-control:hide");
+    const hide = renderKey(make("button", "card-window-hide", "关闭"), "card-control:hide");
     hide.type = "button";
     hide.dataset.cardAction = "hide";
-    hide.title = "隐藏此磁贴，可从托盘恢复";
+    hide.title = "只隐藏这张卡片，可从管理面板或托盘恢复";
     hide.setAttribute("aria-label", hide.title);
     controls.append(reset, hide);
     const resizeCorner = renderKey(make("span", "card-window-resize-corner"), "card-resize-corner");
@@ -1628,7 +1858,7 @@ function renderEvents(data) {
     dot.dataset.status = recovered ? "online" : event.toState === "degraded" ? "degraded" : "offline";
     const copy = make("div", "event-copy");
     copy.append(make("strong", null, `${event.name || event.target} ${recovered ? "已恢复" : "状态变化"}`));
-    copy.append(make("p", null, `${event.fromState || "?"} → ${event.toState || "?"}`));
+    copy.append(make("p", null, `${plainState(event.fromState)} → ${plainState(event.toState)}`));
     row.append(dot, copy, make("time", null, clockOf(event.occurredAt)));
     rows.push(row);
   }
@@ -1749,6 +1979,27 @@ function renderExtensionWidgets(widgets) {
 
 /* ---------- view state ---------- */
 
+function renderCardVisibility(visibility, visibleCardCount) {
+  const total = SECTION_ORDER.length;
+  const visible = Math.max(0, Math.min(total, visibleCardCount));
+  if (dom.cardManagerSummary) {
+    setRenderText(
+      dom.cardManagerSummary,
+      visible === 0 ? "5 张卡片当前全部隐藏" : `5 张卡片中已显示 ${visible} 张`,
+    );
+  }
+  if (dom.cardSwitches) {
+    for (const button of dom.cardSwitches.querySelectorAll("[data-card-toggle]")) {
+      const isVisible = visibility[button.dataset.cardToggle] === true;
+      button.setAttribute("aria-pressed", String(isVisible));
+      const state = button.querySelector("b");
+      if (state) setRenderText(state, isVisible ? "显示中" : "已隐藏");
+    }
+  }
+  if (dom.btnShowAllCards) dom.btnShowAllCards.disabled = visible === total;
+  if (dom.btnHideAllCards) dom.btnHideAllCards.disabled = visible === 0;
+}
+
 function applyView(view) {
   if (view.theme) root.dataset.theme = view.theme;
   if (!layoutMode && view.projectLayout && typeof view.projectLayout === "object") {
@@ -1758,22 +2009,34 @@ function applyView(view) {
       ? Math.max(1, incomingVersion)
       : Object.keys(projectLayout).length ? 1 : PROJECT_LAYOUT_VERSION;
   }
-  const desktopMode = CARD_ID ? true : Boolean(view.desktopMode);
-  if (desktopMode && dom.body.dataset.view !== "overview") selectView("overview");
-  dom.body.classList.toggle("compact", Boolean(view.compact));
-  dom.body.classList.toggle("desktop-mode", desktopMode);
-  dom.btnCompact.setAttribute("aria-pressed", String(Boolean(view.compact)));
-  dom.btnTop.setAttribute("aria-pressed", String(Boolean(view.onTop)));
-  dom.btnDesktop.setAttribute("aria-pressed", String(desktopMode));
-  dom.btnDesktop.title = desktopMode ? "退出桌面模式" : "固定到桌面";
-  dom.btnDesktop.setAttribute("aria-label", dom.btnDesktop.title);
-  dom.btnCompact.disabled = desktopMode;
-  dom.btnTop.disabled = desktopMode;
+  const cardMode = CARD_ID ? true : Boolean(view.cardMode);
+  const hiddenCards = Array.isArray(view.hiddenCards) ? view.hiddenCards : [];
+  const visibility = view.cardVisibility && typeof view.cardVisibility === "object"
+    ? view.cardVisibility
+    : Object.fromEntries(SECTION_ORDER.map((id) => [id, !hiddenCards.includes(id)]));
+  const declaredVisibleCount = Number(view.visibleCardCount);
+  const visibleCardCount = Number.isFinite(declaredVisibleCount)
+    ? Math.max(0, declaredVisibleCount)
+    : Object.values(visibility).filter(Boolean).length;
+  renderCardVisibility(visibility, visibleCardCount);
+  if (cardMode && dom.body.dataset.view !== "overview") selectView("overview");
+  dom.body.classList.remove("compact");
+  dom.body.classList.toggle("desktop-mode", cardMode);
+  if (dom.btnDesktop) {
+    const anyVisible = visibleCardCount > 0;
+    const actionLabel = anyVisible ? "隐藏桌面卡片" : "显示桌面卡片";
+    dom.btnDesktop.dataset.visibleCardCount = String(visibleCardCount);
+    dom.btnDesktop.textContent = actionLabel;
+    dom.btnDesktop.title = anyVisible
+      ? `当前显示 ${visibleCardCount} 张，点击全部隐藏`
+      : "点击显示全部桌面卡片";
+    dom.btnDesktop.setAttribute("aria-label", actionLabel);
+    dom.btnDesktop.setAttribute("aria-pressed", String(anyVisible));
+  }
   if (dom.titlebarDrag) {
-    dom.titlebarDrag.classList.toggle("pywebview-drag-region", !desktopMode);
+    dom.titlebarDrag.classList.toggle("pywebview-drag-region", !cardMode);
   }
   dom.body.classList.remove("booting");
-  queueDesktopRegionSync();
 }
 
 function clamp(value, minimum, maximum) {
@@ -2196,14 +2459,20 @@ function configureTileEditing() {
   }
   const changed = dom.body.classList.contains("layout-mode") !== layoutMode;
   dom.body.classList.toggle("layout-mode", layoutMode);
-  dom.btnLayout.setAttribute("aria-pressed", String(layoutMode));
-  dom.btnLayout.title = layoutMode ? "完成并保存磁贴布局" : "编辑磁贴布局";
-  dom.btnLayout.setAttribute("aria-label", dom.btnLayout.title);
-  dom.btnWidgetEdit.textContent = layoutMode ? "完成编辑" : "编辑磁贴";
-  dom.btnWidgetEdit.title = layoutMode ? "完成并保存磁贴布局" : "进入自由布局，移动或缩放磁贴";
-  dom.btnWidgetEdit.setAttribute("aria-pressed", String(layoutMode));
+  const layoutButton = el("btnLayout");
+  if (layoutButton) {
+    layoutButton.setAttribute("aria-pressed", String(layoutMode));
+    layoutButton.title = layoutMode ? "完成并保存卡片布局" : "编辑卡片布局";
+    layoutButton.setAttribute("aria-label", layoutButton.title);
+  }
+  const widgetEditButton = el("btnWidgetEdit");
+  if (widgetEditButton) {
+    widgetEditButton.textContent = layoutMode ? "完成编辑" : "编辑卡片";
+    widgetEditButton.title = layoutMode ? "完成并保存卡片布局" : "移动或缩放卡片";
+    widgetEditButton.setAttribute("aria-pressed", String(layoutMode));
+  }
   if (dom.matrixFitState) {
-    dom.matrixFitState.textContent = layoutMode ? "拖动卡片 · 边角缩放 · 自动保存" : "AUTO FIT";
+    dom.matrixFitState.textContent = layoutMode ? "拖动卡片 · 边角缩放 · 自动保存" : "自动排列";
   }
   if (!layoutMode) hideAlignmentChrome();
   if (changed) {
@@ -2648,6 +2917,8 @@ function bindTileEditing() {
       if (!bridge) return;
       if (cardControl.dataset.cardSize && bridge.set_size) {
         bridge.set_size(cardControl.dataset.cardSize).catch(() => {});
+      } else if (cardControl.dataset.cardAction === "manage" && bridge.open_management) {
+        bridge.open_management().catch(() => {});
       } else if (cardControl.dataset.cardAction === "reset" && bridge.reset_geometry) {
         bridge.reset_geometry().catch(() => {});
       } else if (cardControl.dataset.cardAction === "hide" && bridge.hide_card) {
@@ -2718,19 +2989,17 @@ let repairInFlight = false;
 
 function disarmRepair() {
   repairInFlight = false;
-  dom.btnRepair.disabled = false;
-  dom.btnRepair.title = "一键修复全部服务";
-  dom.btnRepairOffline.disabled = false;
-  dom.btnRepairOffline.textContent = "一键修复全部服务";
+  if (dom.btnRepairOffline) {
+    dom.btnRepairOffline.disabled = false;
+    dom.btnRepairOffline.textContent = "尝试自动修复";
+  }
 }
 
 async function requestRepair(button) {
   const bridge = api();
   if (!bridge || !bridge.repair_fleet || repairInFlight) return;
   repairInFlight = true;
-  dom.btnRepair.disabled = true;
-  dom.btnRepairOffline.disabled = true;
-  dom.btnRepair.title = "修复请求处理中";
+  if (dom.btnRepairOffline) dom.btnRepairOffline.disabled = true;
   if (button === dom.btnRepairOffline) button.textContent = "正在提交修复";
   let result = null;
   try {
@@ -2791,6 +3060,21 @@ function requestWindowResize(event) {
   bridge.begin_window_resize(edge).catch(() => {});
 }
 
+async function setAllCardsVisible(visible, control) {
+  const bridge = api();
+  if (!bridge || !bridge.set_all_cards_visible) return;
+  if (control) control.disabled = true;
+  let payload = null;
+  try {
+    payload = await bridge.set_all_cards_visible(Boolean(visible));
+  } catch (error) {
+    setRenderText(dom.sbState, "卡片开关失败，请重试");
+  } finally {
+    if (control) control.disabled = false;
+  }
+  if (payload) render(payload);
+}
+
 function bindControls() {
   bindTileEditing();
   bindCanvasPanning();
@@ -2798,73 +3082,57 @@ function bindControls() {
   for (const button of document.querySelectorAll(".view-tab")) {
     button.addEventListener("click", () => selectView(button.dataset.view));
   }
-  el("btnRefresh").addEventListener("click", async () => {
-    dom.btnRefresh.classList.add("spinning");
-    await pull(true);
-    dom.btnRefresh.classList.remove("spinning");
-  });
-  el("btnRetry").addEventListener("click", () => pull(true));
-  dom.btnCapture.addEventListener("click", async () => {
-    const bridge = api();
-    if (!bridge || !bridge.capture) return;
-    const result = await bridge.capture();
-    dom.sbState.textContent = result && result.message ? result.message : "截图失败";
-  });
-  dom.btnLayout.addEventListener("click", async () => {
-    layoutMode = !layoutMode;
-    configureTileEditing();
-    if (!layoutMode) {
-      await persistTileLayout();
-      lastDataKey = "";
-      await pull(false);
-    }
-  });
-  dom.btnLayoutReset.addEventListener("click", () => resetTileLayout());
-  dom.btnWidgetReset.addEventListener("click", () => resetTileLayout());
-  dom.btnRepair.addEventListener("click", () => requestRepair(dom.btnRepair));
-  dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
+  if (dom.btnRefresh) dom.btnRefresh.addEventListener("click", () => { void pull(true); });
+  el("btnRetry").addEventListener("click", () => { void pull(true); });
+  if (dom.btnRepairOffline) {
+    dom.btnRepairOffline.addEventListener("click", () => requestRepair(dom.btnRepairOffline));
+  }
+  if (dom.cardSwitches) {
+    dom.cardSwitches.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-card-toggle]");
+      if (!button) return;
+      const bridge = api();
+      if (!bridge || !bridge.set_card_visible) return;
+      const next = button.getAttribute("aria-pressed") !== "true";
+      button.disabled = true;
+      try {
+        const payload = await bridge.set_card_visible(button.dataset.cardToggle, next);
+        if (payload) render(payload);
+      } catch (error) {
+        setRenderText(dom.sbState, "这张卡片开关失败，请重试");
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+  if (dom.btnShowAllCards) {
+    dom.btnShowAllCards.addEventListener("click", () => {
+      void setAllCardsVisible(true, dom.btnShowAllCards);
+    });
+  }
+  if (dom.btnHideAllCards) {
+    dom.btnHideAllCards.addEventListener("click", () => {
+      void setAllCardsVisible(false, dom.btnHideAllCards);
+    });
+  }
   el("btnMin").addEventListener("click", () => api() && api().minimize());
   el("btnClose").addEventListener("click", () => api() && api().hide_to_tray());
-  dom.btnWidgetEdit.addEventListener("click", async () => {
-    layoutMode = !layoutMode;
-    configureTileEditing();
-    if (!layoutMode) {
-      await persistTileLayout();
-      lastDataKey = "";
-      await pull(false);
-    }
+  dom.btnDesktop.addEventListener("click", () => {
+    const anyVisible = num(dom.btnDesktop.dataset.visibleCardCount) > 0;
+    void setAllCardsVisible(!anyVisible, dom.btnDesktop);
   });
-  dom.btnWidgetHide.addEventListener("click", () => api() && api().hide_to_tray());
-  dom.btnWidgetQuit.addEventListener("click", () => api() && api().quit());
-  dom.btnDesktop.addEventListener("click", async () => {
-    const next = dom.btnDesktop.getAttribute("aria-pressed") !== "true";
-    const bridge = api();
-    if (!bridge || !bridge.set_desktop_mode) return;
-    if (next && layoutMode) {
-      layoutMode = false;
-      configureTileEditing();
-      await persistTileLayout();
-    }
-    render(await bridge.set_desktop_mode(next));
-  });
-  el("btnTop").addEventListener("click", async () => {
-    const next = dom.btnTop.getAttribute("aria-pressed") !== "true";
-    const bridge = api();
-    if (bridge) render(await bridge.set_on_top(next));
-  });
-  el("btnCompact").addEventListener("click", async () => {
-    const next = !dom.body.classList.contains("compact");
-    const bridge = api();
-    if (bridge) render(await bridge.set_compact(next));
-  });
-  el("btnTheme").addEventListener("click", async () => {
-    const next = root.dataset.theme === "dark" ? "light" : "dark";
-    const bridge = api();
-    if (bridge) {
-      lastDataKey = "";
-      render(await bridge.set_theme(next));
-    }
-  });
+}
+
+function schedulePoll(delay = POLL_MS) {
+  const generation = ++pollGeneration;
+  if (timer) window.clearTimeout(timer);
+  timer = null;
+  if (document.hidden) return;
+  timer = window.setTimeout(async () => {
+    timer = null;
+    await pull(false);
+    if (generation === pollGeneration && !document.hidden) schedulePoll(POLL_MS);
+  }, delay);
 }
 
 function start() {
@@ -2872,16 +3140,18 @@ function start() {
   bridgeReady = true;
   bindControls();
   updateClock();
-  pull(false);
-  timer = window.setInterval(() => pull(false), POLL_MS);
-  window.setInterval(updateClock, 30000);
+  schedulePoll(0);
+  clockTimer = window.setInterval(updateClock, 30000);
 }
 
 window.addEventListener("pywebviewready", start);
 if (api()) start();
 window.addEventListener("resize", markWindowResizing);
+document.addEventListener("visibilitychange", () => schedulePoll(0));
 window.addEventListener("beforeunload", () => {
-  if (timer) window.clearInterval(timer);
+  pollGeneration += 1;
+  if (timer) window.clearTimeout(timer);
+  if (clockTimer) window.clearInterval(clockTimer);
   if (windowResizeTimer) window.clearTimeout(windowResizeTimer);
   if (projectResizeFrame) window.cancelAnimationFrame(projectResizeFrame);
   if (interactionScrollFrame) window.cancelAnimationFrame(interactionScrollFrame);

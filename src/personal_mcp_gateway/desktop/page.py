@@ -18,7 +18,7 @@ STATIC_ROOT = Path(__file__).with_name("static")
 
 _STYLE_LINK = '<link rel="stylesheet" href="desktop.css">'
 _SCRIPT_TAG = '<script src="desktop.js"></script>'
-_BODY_TAG = '<body class="booting desktop-mode" data-view="overview">'
+_BODY_TAG = '<body class="booting" data-view="overview">'
 _CARD_IDS = frozenset({"foxlink", "watch", "journal", "personal", "bzsjk"})
 
 

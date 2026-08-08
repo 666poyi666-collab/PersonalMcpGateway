@@ -36,9 +36,12 @@ WS_EX_APPWINDOW = 0x00040000
 WS_EX_NOACTIVATE = 0x08000000
 HWND_BOTTOM = 1
 HWND_NOTOPMOST = -2
+SW_SHOWNOACTIVATE = 4
 RGN_OR = 2
+SWP_SHOWWINDOW = 0x0040
 SWP_REFRESH_FRAME = 0x0037
 SWP_RESIZE_FRAME = 0x0014
+SWP_PROGRAMMATIC_GEOMETRY = 0x0014  # no z-order, no activation, never show
 SWP_DESKTOP_MODE = 0x0033
 SWP_DESKTOP_FRAME = 0x0070  # frame changed + no activate + show
 _SUBCLASS_ID = 0x504F5949
@@ -176,6 +179,100 @@ def enable_transparent_background(window: Any) -> bool:
         return False
 
 
+def show_window_without_activation(window: Any) -> bool:
+    """Show an already-realized native window without stealing foreground focus."""
+    hwnd = native_handle(window)
+    if os.name != "nt" or hwnd <= 0:
+        return False
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+        # ShowWindow reports the previous visibility state, not success. Reaching
+        # this call with a valid HWND is therefore the useful success condition.
+        user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+    except (AttributeError, OSError):
+        return False
+    return True
+
+
+def set_window_geometry(
+    window: Any,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> bool:
+    """Apply programmatic bounds without activating or implicitly showing a window."""
+    hwnd = native_handle(window)
+    if os.name != "nt" or hwnd <= 0:
+        return False
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        flags = SWP_PROGRAMMATIC_GEOMETRY
+        if flags & SWP_SHOWWINDOW:  # defensive invariant for future flag edits
+            return False
+        return bool(
+            user32.SetWindowPos(
+                hwnd,
+                0,
+                int(x),
+                int(y),
+                max(1, int(width)),
+                max(1, int(height)),
+                flags,
+            )
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def set_window_activation(window: Any, enabled: bool) -> bool:
+    """Toggle whether a realized window may become the foreground window."""
+    hwnd = native_handle(window)
+    if os.name != "nt" or hwnd <= 0:
+        return False
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        result_type = ctypes.c_ssize_t
+        get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = result_type
+        set_style.argtypes = [wintypes.HWND, ctypes.c_int, result_type]
+        set_style.restype = result_type
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        current = int(get_style(hwnd, GWL_EXSTYLE))
+        desired = current & ~WS_EX_NOACTIVATE if enabled else current | WS_EX_NOACTIVATE
+        if desired != current:
+            ctypes.set_last_error(0)
+            previous = int(set_style(hwnd, GWL_EXSTYLE, desired))
+            if previous == 0 and ctypes.get_last_error():
+                return False
+        return bool(user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_REFRESH_FRAME))
+    except (AttributeError, OSError):
+        return False
+
+
 def normalize_window_regions(
     value: object,
     scale: float = 1.0,
@@ -290,13 +387,59 @@ def resize_hit_test(
     return None
 
 
+def _ensure_resize_style(hwnd: int, *, force_refresh: bool = False) -> bool:
+    """Restore the native resize frame if WinForms rebuilt a frameless style.
+
+    ``FormBorderStyle.None`` can rewrite ``GWL_STYLE`` when a hidden form is
+    shown or restored.  The window subclass survives that rewrite, so merely
+    finding an existing hook is not proof that the required ``WS_THICKFRAME``
+    bit still exists.
+    """
+
+    if os.name != "nt" or hwnd <= 0:
+        return False
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    result_type = ctypes.c_ssize_t
+    get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+    set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+    get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+    get_style.restype = result_type
+    set_style.argtypes = [wintypes.HWND, ctypes.c_int, result_type]
+    set_style.restype = result_type
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    user32.SetWindowPos.restype = wintypes.BOOL
+
+    style = int(get_style(hwnd, GWL_STYLE))
+    if style & WS_THICKFRAME:
+        if not force_refresh:
+            return True
+    else:
+        ctypes.set_last_error(0)
+        previous = int(set_style(hwnd, GWL_STYLE, style | WS_THICKFRAME))
+        if previous == 0 and ctypes.get_last_error():
+            return False
+    if user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_REFRESH_FRAME):
+        return True
+    if style & WS_THICKFRAME == 0:
+        set_style(hwnd, GWL_STYLE, style)
+    return False
+
+
 def install_frameless_resize(window: Any, border: int = 9) -> bool:
     """Give a frameless pywebview window native edge and corner resizing."""
     hwnd = native_handle(window)
     if os.name != "nt" or hwnd <= 0:
         return False
     if hwnd in _resize_hooks:
-        return True
+        return _ensure_resize_style(hwnd)
 
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     comctl32 = ctypes.WinDLL("comctl32", use_last_error=True)
@@ -329,13 +472,6 @@ def install_frameless_resize(window: Any, border: int = 9) -> bool:
     if get_dpi is not None:
         get_dpi.argtypes = [wintypes.HWND]
         get_dpi.restype = wintypes.UINT
-
-    get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-    set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-    get_style.argtypes = [wintypes.HWND, ctypes.c_int]
-    get_style.restype = result_type
-    set_style.argtypes = [wintypes.HWND, ctypes.c_int, result_type]
-    set_style.restype = result_type
 
     comctl32.SetWindowSubclass.argtypes = [
         wintypes.HWND,
@@ -406,16 +542,7 @@ def install_frameless_resize(window: Any, border: int = 9) -> bool:
     if not comctl32.SetWindowSubclass(hwnd, window_proc, _SUBCLASS_ID, 0):
         return False
     _resize_hooks[hwnd] = (window_proc, user32, comctl32)
-
-    style = int(get_style(hwnd, GWL_STYLE))
-    ctypes.set_last_error(0)
-    previous = int(set_style(hwnd, GWL_STYLE, style | WS_THICKFRAME))
-    if previous == 0 and ctypes.get_last_error():
-        comctl32.RemoveWindowSubclass(hwnd, window_proc, _SUBCLASS_ID)
-        _resize_hooks.pop(hwnd, None)
-        return False
-    if not user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_REFRESH_FRAME):
-        set_style(hwnd, GWL_STYLE, style)
+    if not _ensure_resize_style(hwnd, force_refresh=True):
         comctl32.RemoveWindowSubclass(hwnd, window_proc, _SUBCLASS_ID)
         _resize_hooks.pop(hwnd, None)
         return False

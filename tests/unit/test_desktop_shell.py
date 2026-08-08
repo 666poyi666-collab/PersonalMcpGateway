@@ -50,7 +50,7 @@ def test_create_window_requests_a_transparent_webview2_surface(
     assert os.environ["WEBVIEW2_DEFAULT_BACKGROUND_COLOR"] == "00000000"
 
 
-def test_card_window_options_keep_each_surface_hidden_until_desktop_mode(
+def test_card_window_options_keep_each_surface_hidden_until_visibility_is_restored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
@@ -72,14 +72,17 @@ def test_card_window_options_keep_each_surface_hidden_until_desktop_mode(
         on_top=False,
         background="#080B12",
         title="Poyi Card - FocusLink",
+        transparent=False,
         hidden=True,
-        focus=True,
+        focus=False,
         easy_drag=False,
         shadow=False,
     )
 
     assert calls[0][0] == "Poyi Card - FocusLink"
     assert calls[0][1]["hidden"] is True
+    assert calls[0][1]["transparent"] is False
+    assert calls[0][1]["focus"] is False
     assert calls[0][1]["shadow"] is False
     assert calls[0][1]["min_size"] == (220, 150)
 
@@ -185,6 +188,99 @@ def test_native_resize_enters_the_ui_thread_synchronously(
     assert calls == [(window, "se")]
 
 
+def test_installing_native_resize_enters_the_ui_thread_synchronously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[Any] = []
+
+    def invoke(callback: Any) -> None:
+        callbacks.append(callback)
+        callback()
+
+    window = SimpleNamespace(
+        native=SimpleNamespace(InvokeRequired=True, Invoke=invoke),
+    )
+    calls: list[Any] = []
+    system = ModuleType("System")
+    system.Action = lambda callback: callback  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "System", system)
+
+    def install(target: Any) -> bool:
+        calls.append(target)
+        return True
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.native_window.install_frameless_resize",
+        install,
+    )
+
+    assert shell.enable_native_resize(window) is True
+    assert len(callbacks) == 1
+    assert calls == [window]
+
+
+def test_native_card_lifecycle_wrappers_enter_the_ui_thread_synchronously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[Any] = []
+
+    def invoke(callback: Any) -> None:
+        callbacks.append(callback)
+        callback()
+
+    window = SimpleNamespace(
+        native=SimpleNamespace(
+            InvokeRequired=True,
+            Invoke=invoke,
+        )
+    )
+    calls: list[tuple[object, ...]] = []
+    system = ModuleType("System")
+    system.Action = lambda callback: callback  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "System", system)
+
+    def show_without_activation(target: Any) -> bool:
+        calls.append(("show", target))
+        return True
+
+    def set_geometry(
+        target: Any,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> bool:
+        calls.append(("geometry", target, x, y, width, height))
+        return True
+
+    def set_activation(target: Any, enabled: bool) -> bool:
+        calls.append(("activation", target, enabled))
+        return True
+
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.native_window.show_window_without_activation",
+        show_without_activation,
+    )
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.native_window.set_window_geometry",
+        set_geometry,
+    )
+    monkeypatch.setattr(
+        "personal_mcp_gateway.desktop.native_window.set_window_activation",
+        set_activation,
+    )
+
+    assert shell.show_native_window_without_activation(window) is True
+    assert shell.set_native_window_geometry(window, 20, 30, 400, 260) is True
+    assert shell.set_native_window_activation(window, True) is True
+    assert len(callbacks) == 3
+    assert calls == [
+        ("show", window),
+        ("geometry", window, 20, 30, 400, 260),
+        ("activation", window, True),
+    ]
+
+
 def test_tray_menu_can_restore_each_independently_hidden_card(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -209,38 +305,54 @@ def test_tray_menu_can_restore_each_independently_hidden_card(
 
     fake_pystray = SimpleNamespace(Menu=Menu, MenuItem=MenuItem, Icon=Icon)
     monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
-    state = SimpleNamespace(desktop_mode=True, compact=False, on_top=False)
-
     def is_visible(project_id: str) -> bool:
         return project_id != "journal"
 
-    controller = SimpleNamespace(
-        state=state,
-        card_is_visible=is_visible,
-    )
+    controller = SimpleNamespace(card_is_visible=is_visible)
 
     def noop(*_args: object) -> None:
         return None
 
     actions = {
-        "show": noop,
-        "desktop": noop,
-        "compact": noop,
-        "on_top": noop,
-        "web": noop,
+        "show_management": noop,
         "refresh": noop,
         "quit": noop,
         "toggle_card": noop,
         "show_all_cards": noop,
+        "hide_all_cards": noop,
         "reset_cards": noop,
         "cards": {"foxlink": "FocusLink", "journal": "拾光日记"},
     }
 
     icon = shell.build_tray_icon(cast(Any, controller), actions)
 
-    card_item = next(item for item in icon.menu.items if getattr(item, "text", "") == "桌面磁贴")
+    top_labels = [getattr(item, "text", "") for item in icon.menu.items]
+    assert top_labels == [
+        "打开管理面板",
+        "显示全部桌面卡片",
+        "隐藏全部桌面卡片",
+        "单独开关卡片",
+        "",
+        "刷新状态",
+        "",
+        "退出",
+    ]
+    management_item = next(
+        item for item in icon.menu.items if getattr(item, "text", "") == "打开管理面板"
+    )
+    assert management_item.options["default"] is True
+    card_item = next(
+        item for item in icon.menu.items if getattr(item, "text", "") == "单独开关卡片"
+    )
     labels = [getattr(item, "text", "") for item in card_item.action.items]
-    assert labels == ["FocusLink", "拾光日记", "", "显示全部磁贴", "恢复默认位置与大小"]
+    assert labels == [
+        "FocusLink",
+        "拾光日记",
+        "",
+        "显示全部卡片",
+        "隐藏全部卡片",
+        "恢复卡片默认位置与大小",
+    ]
     journal = next(
         item for item in card_item.action.items if getattr(item, "text", "") == "拾光日记"
     )

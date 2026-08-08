@@ -160,6 +160,10 @@ targets:
     }
     & $watchdogExe install
     if ($LASTEXITCODE -ne 0) { throw 'Watchdog service installation failed.' }
+    & sc.exe config PoyiFleetWatchdog start= delayed-auto | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to enable watchdog delayed auto-start.'
+    }
     & sc.exe failure PoyiFleetWatchdog reset= 86400 `
         actions= restart/5000/restart/15000/restart/60000/none/0 | Out-Null
     & sc.exe failureflag PoyiFleetWatchdog 1 | Out-Null

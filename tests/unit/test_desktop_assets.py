@@ -75,7 +75,7 @@ def test_unified_shell_keeps_live_status_with_the_board() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert '<body class="booting desktop-mode" data-view="overview">' in markup
+    assert '<body class="booting" data-view="overview">' in markup
     assert '<span class="view-live">' in markup
     status_nodes = ("sbDot", "sbState", "sbGuard", "sbSync", "sbProbe")
     assert all(f'id="{node}"' in markup for node in status_nodes)
@@ -90,12 +90,12 @@ def test_unified_shell_keeps_live_status_with_the_board() -> None:
 def test_dashboard_navigation_explains_each_view_in_plain_language() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
 
-    assert "项目磁贴" in markup
-    assert "状态 · 关键数据" in markup
-    assert "调用记录" in markup
-    assert "24H · 异常" in markup
-    assert "数据卡片" in markup
-    assert "备忘 · 日程" in markup
+    assert "卡片概览" in markup
+    assert "状态与关键数据" in markup
+    assert "运行记录" in markup
+    assert "最近 24 小时" in markup
+    assert 'data-view="extensions"' not in markup
+    assert "数据卡片" not in markup
     assert "异常与状态变化" in markup
     assert "扩展面板" not in markup
 
@@ -166,11 +166,11 @@ def test_every_project_has_a_dedicated_console_and_responsive_contract() -> None
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
     contracts = (
-        ("personal", "gatewayConsole", "gateway-console", "MCP ROUTING FABRIC"),
-        ("watch", "watchConsole", "watch-console", "TOTAL DISTANCE"),
-        ("foxlink", "focusConsole", "focus-console", "TEMPORAL FIELD / TODAY"),
-        ("journal", "journalConsole", "journal-console", "REVIEW LEDGER"),
-        ("bzsjk", "bzsjkConsole", "bz-console", "DISCIPLINE CORE / LOCAL"),
+        ("personal", "gatewayConsole", "gateway-console", "本机连接与自动恢复"),
+        ("watch", "watchConsole", "watch-console", "累计距离"),
+        ("foxlink", "focusConsole", "focus-console", "当前专注"),
+        ("journal", "journalConsole", "journal-console", "今日记录"),
+        ("bzsjk", "bzsjkConsole", "bz-console", "本地专注监督"),
     )
     for project_id, function_name, class_name, identity in contracts:
         assert f"function {function_name}(" in script
@@ -182,8 +182,9 @@ def test_every_project_has_a_dedicated_console_and_responsive_contract() -> None
     assert 'display: "不做手机控"' in script
     assert 'String(item.title || "").trim() === "不做手机控"' in script
     assert 'dataPlane: "local_only"' in script
-    assert 'make("small", null, "关机后无云同步")' in script
-    assert '"NO CLOUD CLAIM"' in script
+    assert '"仅本机' in script and '数据待接入"' in script
+    assert 'make("span", null, "数据范围")' in script
+    assert 'make("b", null, "只读取本机数据")' in script
     assert '.project-personal[data-height-class="short"]' in style
     assert '.project-watch[data-height-class="short"]' in style
     assert '.project-foxlink[data-height-class="short"]' in style
@@ -195,43 +196,39 @@ def test_every_project_has_a_dedicated_console_and_responsive_contract() -> None
     assert ".proj.tile-summary" in style
 
 
-def test_capture_and_freeform_tile_controls_ship_together() -> None:
+def test_management_titlebar_keeps_only_clear_everyday_actions() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert 'id="btnCapture"' in markup
-    assert 'id="btnDesktop"' in markup
-    assert 'id="btnLayout"' in markup
-    assert 'id="btnLayoutReset"' in markup
-    assert "bridge.capture()" in script
-    assert "bridge.set_project_layout(projectLayout)" in script
-    assert "bridge.reset_project_layout()" in script
-    assert "bridge.set_desktop_mode(next)" in script
-    assert "projectLayoutVersion" in script
+    for button_id, label in (
+        ("btnDesktop", "显示桌面卡片"),
+        ("btnRefresh", "刷新"),
+        ("btnMin", "最小化"),
+        ("btnClose", "关闭"),
+    ):
+        assert f'id="{button_id}"' in markup
+        assert f">{label}</button>" in markup
+    for removed in (
+        "btnRepair",
+        "btnCapture",
+        "btnLayout",
+        "btnLayoutReset",
+        "btnTheme",
+        "btnTop",
+        "btnCompact",
+    ):
+        assert f'id="{removed}"' not in markup
+    assert "bridge.set_all_cards_visible" in script
+    assert ".tb-action" in style
     assert "RECOVERY_BANNER_FAILURES = 3" in script
     assert "function gatewayConsole(target, data)" in script
-    assert '"MCP ROUTING FABRIC"' in script
-    assert '"SERVICE FABRIC"' in script and '"24H TRAFFIC"' in script
+    assert '"服务状态"' in script and '"24 小时调用"' in script
     assert "gateway-data" in script and ".gateway-console" in style
-    assert ".gw-route-node" in style and ".gw-service-matrix" in style
-    assert "startScrollLeft" in script and "updateProjectCanvasSize" in script
-    assert "width: min(1460px, 100%)" not in style
-    assert "body.desktop-mode .window-resize-zone" in style
-    assert "pointerdown" in script and "requestAnimationFrame" in script
-    assert "ResizeObserver" in script and "snapTileRect" in script
-    assert 'window.addEventListener("resize", markWindowResizing)' in script
-    assert "body.window-resizing" in style
     assert markup.count('data-window-edge="') == 8
     assert "windowResizeEdgeAt" in script
     assert 'document.addEventListener("pointerdown", requestWindowResize, true)' in script
     assert "bridge.begin_window_resize(edge)" in script
-    assert "window-resize-se::after" in style
-    assert "background: rgb(0 0 0 / 1%);" in style
-    assert "tile-handle-nw" in style and "layout-guide.visible" in style
-    assert "body.layout-mode .tb-btn.layout-only { display: grid; }" in style
-    assert "拖动卡片 · 边角缩放 · 自动保存" in script
-    assert "dragstart" not in script and "tile-resizer" not in style
 
 
 def test_widget_mode_is_transparent_from_first_paint_and_keeps_only_tiles() -> None:
@@ -239,52 +236,54 @@ def test_widget_mode_is_transparent_from_first_paint_and_keeps_only_tiles() -> N
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert '<body class="booting desktop-mode" data-view="overview">' in markup
-    assert (
-        'if (desktopMode && dom.body.dataset.view !== "overview") selectView("overview");' in script
-    )
+    assert '<body class="booting" data-view="overview">' in markup
+    assert 'const cardMode = CARD_ID ? true : Boolean(view.cardMode);' in script
+    assert 'dom.body.classList.toggle("desktop-mode", cardMode);' in script
     assert "html,\nbody,\n#stage,\n.board,\n.view-panel,\n.overview-deck,\n.project-grid" in style
     assert "body.desktop-mode #stage { background: transparent; }" in style
     assert "body.desktop-mode .connection-banner { display: none !important; }" in style
 
 
-def test_widget_mode_keeps_edit_hide_and_quit_escape_controls() -> None:
+def test_management_panel_can_switch_each_desktop_card_directly() -> None:
     markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert 'class="widget-controls"' in markup
-    assert 'id="btnWidgetEdit"' in markup
-    assert 'id="btnWidgetReset"' in markup
-    assert 'id="btnWidgetHide"' in markup
-    assert 'id="btnWidgetQuit"' in markup
-    assert "body.desktop-mode .widget-controls { display: flex; }" in style
-    assert 'dom.btnWidgetEdit.addEventListener("click", async () =>' in script
-    assert "layoutMode = !layoutMode;" in script
-    assert 'dom.btnWidgetEdit.textContent = layoutMode ? "完成编辑" : "编辑磁贴";' in script
-    assert 'dom.btnWidgetReset.addEventListener("click"' in script
-    assert "await persistTileLayout();" in script
-    assert "set_desktop_mode(false)" not in script
-    assert 'dom.btnWidgetHide.addEventListener("click"' in script
-    assert 'dom.btnWidgetQuit.addEventListener("click"' in script
-    assert "api().hide_to_tray()" in script
-    assert "api().quit()" in script
+    assert 'id="cardManager"' in markup
+    assert 'id="btnShowAllCards"' in markup
+    assert 'id="btnHideAllCards"' in markup
+    for card_id in ("foxlink", "watch", "journal", "personal", "bzsjk"):
+        assert f'data-card-toggle="{card_id}"' in markup
+    assert "view.cardVisibility" in script
+    assert "view.visibleCardCount" in script
+    assert 'bridge.set_card_visible(button.dataset.cardToggle, next)' in script
+    assert "bridge.set_all_cards_visible(Boolean(visible))" in script
+    assert ".card-switch[aria-pressed=\"true\"]" in style
+    assert "body.card-window .card-manager" in style
 
 
-def test_widget_controls_are_quiet_until_discovered_and_density_changes_settle() -> None:
+def test_polling_is_single_flight_and_volatile_diagnostics_do_not_rebuild_cards() -> None:
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
-    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert "opacity: .7;" in style
-    assert "backdrop-filter: blur(16px)" in style
-    assert ".widget-controls:hover, .widget-controls:focus-within" in style
-    assert '#btnWidgetEdit::before { content: "\\2726"; }' in style
-    assert ".proj.density-changing::after { animation: density-surface-settle" in style
-    assert "@keyframes density-surface-settle" in style
-    assert ".proj.density-changing::after { animation: none; }" in style
-    assert "const densityFrames = new WeakMap();" in script
-    assert "window.requestAnimationFrame(() =>" in script
-    assert "void tile.offsetWidth" not in script
+    assert "let pullInFlight = null;" in script
+    assert "let forcePullQueued = false;" in script
+    assert "if (pullInFlight) return pullInFlight;" in script
+    assert "pullInFlight = null;" in script
+    assert "void pull(true);" in script
+    volatile_block = script.split("const VOLATILE_RENDER_FIELDS", 1)[1].split("]);", 1)[0]
+    for field in ("generatedAt", "latencyMs", "checkedAt", "sampledAt", "uptimeSeconds"):
+        assert f'"{field}"' in volatile_block
+    key_function = script.split("function renderDataKey", 1)[1].split("\n}", 1)[0]
+    assert "structuralRenderValue" in key_function
+    assert "generatedAt" not in key_function
+    assert "latencyMs" not in key_function
+    assert "function cardRenderProjection" in script
+    assert "if (CARD_ID) return;" in script
+    assert "function schedulePoll(" in script
+    assert 'document.addEventListener("visibilitychange"' in script
+    assert "setInterval(() => pull" not in script
+    signature = script.split("function projectSectionSignature", 1)[1].split("\n}", 1)[0]
+    assert "structuralRenderValue" in signature
 
 
 def test_tile_editor_offers_responsive_size_presets_without_losing_manual_handles() -> None:
@@ -328,21 +327,24 @@ def test_independent_card_pages_fill_their_own_window_without_board_padding() ->
     assert "height: 100% !important;" in style
 
 
-def test_card_hover_controls_expose_move_size_reset_hide_and_resize_affordances() -> None:
+def test_card_controls_expose_management_size_reset_and_current_card_close() -> None:
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
     assert 'make("div", "card-window-controls")' in script
     assert '"card-window-move pywebview-drag-region"' in script
     assert 'button.dataset.cardSize = preset;' in script
+    assert 'manage.dataset.cardAction = "manage";' in script
     assert 'reset.dataset.cardAction = "reset";' in script
     assert 'hide.dataset.cardAction = "hide";' in script
+    assert "bridge.open_management()" in script
     assert 'bridge.set_size(cardControl.dataset.cardSize)' in script
     assert "bridge.reset_geometry()" in script
     assert "bridge.hide_card()" in script
+    assert 'make("button", "card-window-hide", "关闭")' in script
     assert "body.card-window .proj > .card-window-controls" in style
     assert "body.card-window .proj > .card-window-resize-corner" in style
-    assert "max-width: 31px;" in style and "max-width: 190px;" in style
+    assert "max-width: 72px;" in style and "max-width: 270px;" in style
     assert "queueDesktopRegionSync(420);" in script
 
 
@@ -350,17 +352,43 @@ def test_watch_tile_has_a_responsive_training_and_recovery_instrument() -> None:
     script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
-    assert 'eyebrow: "INTERVAL ENGINE / OWW221"' in script
+    assert 'eyebrow: "训练与恢复"' in script
     assert "function watchConsole(target, widgets)" in script
     assert 'widget.id === "watch_workouts"' in script
     assert 'widget.id === "watch_sleep"' in script
-    assert 'make("span", null, "TOTAL DISTANCE")' in script
-    assert 'make("span", null, "SLEEP SCORE")' in script
+    assert 'widget.id === "watch_current_plan"' in script
+    assert 'widget.id === "watch_status"' in script
+    assert 'make("span", null, "当前计划")' in script
+    assert 'make("span", null, "累计距离")' in script
+    assert 'make("span", null, "睡眠评分")' in script
+    assert 'status.availability === "unavailable"' in script
+    assert "status.ok === false" in script
+    assert "dot.dataset.status = dataState;" in script
+    assert 'watchUnavailable ? "手机未连接"' in script
+    assert "function projectDisplayState(target, widgets)" in script
+    assert 'target.id === "watch" && displayState === "offline"' in script
     assert 'target.id === "watch"' in script and 'classList.add("watch-data")' in script
     assert ".project-watch" in style and ".watch-console" in style
     assert ".wi-score-value" in style and "stroke-dashoffset" in style
     assert ".project-watch.tile-narrow" in style
     assert '.project-watch[data-height-class="short"]' in style
+    assert '.project-watch[data-height-class="medium"] .wi-plan' not in style
+
+
+def test_project_cards_prioritize_live_state_and_mark_stale_snapshots() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    assert 'widget.id === "focus_current"' in script
+    assert 'label = "当前专注";' in script
+    assert 'label = watchUnavailable ? "连接状态" : "当前计划";' in script
+    assert 'label = "今日日记";' in script
+    assert 'recent.data.todayWritten ? "已写" : "未写"' in script
+    assert "function syncCardFreshness(payload, data)" in script
+    assert "payload.stale" in script
+    assert "旧数据 · 更新于" in script
+    assert 'make("div", "card-stale-note"' in script
+    assert "body.card-window .proj > .card-stale-note" in style
 
 
 def test_every_status_maps_to_a_distinct_tray_colour() -> None:

@@ -20,8 +20,6 @@ $script:LastForcedPass = [DateTime]::MinValue
 $script:RestartStatePath = Join-Path $script:DataDir 'restart-state.json'
 $script:PersistedRestartAttempts = @{}
 
-New-Item -ItemType Directory -Path $script:DataDir, $script:TriggerDir -Force | Out-Null
-
 function Write-Log([string]$Level, [string]$Message) {
     $line = '{0} {1} {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level.PadRight(5), $Message
     try {
@@ -435,35 +433,60 @@ function Invoke-FleetPass($Config, [bool]$InBootGrace, [bool]$Forced = $false) {
     }
 }
 
-function Test-RepairTrigger($Config) {
+function Get-ValidRepairRequests {
     $candidates = @(Get-ChildItem -LiteralPath $script:TriggerDir -Filter 'repair-*.json' `
             -File -ErrorAction SilentlyContinue)
     $requests = @()
     foreach ($request in $candidates) {
-        if ($request.Name -notmatch '^repair-([A-Za-z0-9_-]{1,32})\.json$' -or
+        $nameMatch = [regex]::Match(
+            $request.Name,
+            '^repair-([A-Za-z0-9_-]{1,32})\.json$',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        if (-not $nameMatch.Success -or
             $request.Length -gt 4096 -or
             ($request.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             continue
         }
         try {
             $payload = Get-Content -Raw -LiteralPath $request.FullName | ConvertFrom-Json
-            $names = @($payload.PSObject.Properties.Name | Sort-Object)
+            $names = @($payload.PSObject.Properties.Name)
+            $requiredNames = @('schemaVersion', 'requestId', 'requestedAt', 'source')
             $requestId = [Guid]::Empty
-            if (($names -join ',') -ne 'requestId,requestedAt,schemaVersion,source' -or
+            if ($names.Count -ne $requiredNames.Count -or
+                @($requiredNames | Where-Object { $_ -notin $names }).Count -ne 0 -or
                 $payload.schemaVersion -ne 1 -or
-                [string]$payload.source -ne $Matches[1] -or
+                [string]$payload.source -ne $nameMatch.Groups[1].Value -or
                 -not [Guid]::TryParse([string]$payload.requestId, [ref]$requestId)) {
                 continue
             }
-            $requestedAt = [DateTime]::Parse(
+            $requestedAt = [DateTimeOffset]::MinValue
+            if (-not [DateTimeOffset]::TryParse(
                 [string]$payload.requestedAt,
                 [Globalization.CultureInfo]::InvariantCulture,
-                [Globalization.DateTimeStyles]::RoundtripKind)
-            $age = ((Get-Date) - $requestedAt).TotalSeconds
+                [Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$requestedAt)) {
+                continue
+            }
+            $age = ([DateTimeOffset]::UtcNow - $requestedAt.ToUniversalTime()).TotalSeconds
             if ($age -lt -60 -or $age -gt 600) { continue }
             $requests += $request
         } catch { }
     }
+    return @($requests)
+}
+
+function Test-RepairWakePending {
+    # Sidecars (.repair-*.lease.json), claimed requests (*.processing), malformed
+    # files and expired requests must not turn the 30-second fleet loop into a
+    # permanent 3-second busy loop. A valid request wakes the loop only when a
+    # forced pass can actually consume it.
+    if (Test-Path -LiteralPath $script:MaintenanceFlag) { return $false }
+    if (((Get-Date) - $script:LastForcedPass).TotalSeconds -lt 60) { return $false }
+    return @(Get-ValidRepairRequests).Count -gt 0
+}
+
+function Test-RepairTrigger($Config) {
+    $requests = @(Get-ValidRepairRequests)
     if ($requests.Count -eq 0) { return $false }
     if (Test-Path -LiteralPath $script:MaintenanceFlag) {
         Write-Log 'WARN' 'Repair request ignored: maintenance.flag is present.'
@@ -530,7 +553,12 @@ function Invoke-CloudSync($Config) {
     }
 }
 
+# Dot-sourcing loads the real parser/consumer functions for contract tests without
+# starting services, touching ProgramData, or entering the infinite watchdog loop.
+if ($MyInvocation.InvocationName -eq '.') { return }
+
 # --- main ---
+New-Item -ItemType Directory -Path $script:DataDir, $script:TriggerDir -Force | Out-Null
 $config = Get-Config
 Write-Log 'INFO' ("Fleet watchdog starting; monitoring {0} projects." -f @($config.projects).Count)
 Write-FleetEvent 9001 'Information' 'Fleet watchdog started.'
@@ -564,7 +592,7 @@ while ($true) {
     while ($slept -lt $config.loopSeconds) {
         Start-Sleep -Seconds 3
         $slept += 3
-        if (@(Get-ChildItem -LiteralPath $script:TriggerDir -File -ErrorAction SilentlyContinue).Count -gt 0) {
+        if (Test-RepairWakePending) {
             break
         }
     }

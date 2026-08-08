@@ -767,6 +767,7 @@ class DashboardMonitor:
         self._cache: dict[str, Any] | None = None
         self._cached_at = 0.0
         self._cache_lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task[None] | None = None
         self._last_states: dict[str, str] = {}
         self._status_events: deque[dict[str, Any]] = deque(maxlen=40)
         self._verified_authorities: dict[str, VerifiedAuthorityStatus] = {}
@@ -784,6 +785,12 @@ class DashboardMonitor:
         if not force and self._cache_is_current():
             assert self._cache is not None
             return self._cache
+        # Once one complete snapshot exists, never put an HTTP request behind a
+        # slow phone/MCP provider again.  All callers share one background
+        # refresh and immediately receive the last complete view.
+        if self._cache is not None:
+            self._start_background_refresh()
+            return self._cache
         async with self._cache_lock:
             if not force and self._cache_is_current():
                 assert self._cache is not None
@@ -791,6 +798,26 @@ class DashboardMonitor:
             self._cache = await self._build_snapshot()
             self._cached_at = time.monotonic()
             return self._cache
+
+    def _start_background_refresh(self) -> None:
+        task = self._refresh_task
+        if task is not None and not task.done():
+            return
+        self._refresh_task = asyncio.create_task(
+            self._refresh_cache(),
+            name="poyi-dashboard-refresh",
+        )
+
+    async def _refresh_cache(self) -> None:
+        async with self._cache_lock:
+            try:
+                snapshot = await self._build_snapshot()
+            except Exception:
+                # A single optional provider must not poison the last complete
+                # dashboard or leave the single-flight task failed/unobserved.
+                return
+            self._cache = snapshot
+            self._cached_at = time.monotonic()
 
     async def cloud_mcp_summary(self) -> dict[str, Any]:
         """Build an authority-only projection without local diagnostic dependencies."""
@@ -827,18 +854,29 @@ class DashboardMonitor:
             }
             | {fleet.WATCHDOG_SERVICE}
         )
-        service_states, probed, local_sync_observations, authority_sync = await asyncio.gather(
-            asyncio.to_thread(fleet.query_service_states, service_names),
-            self._probe_all(targets),
+        service_states_task = asyncio.create_task(
+            asyncio.to_thread(fleet.query_service_states, service_names)
+        )
+        probed_task = asyncio.create_task(self._probe_all(targets))
+        local_sync_task = asyncio.create_task(
             asyncio.to_thread(
                 load_cloud_sync_observations, self.runtime.settings.cloud_sync_status_path
-            ),
-            self._fetch_authority_truths(targets),
+            )
         )
+        authority_task = asyncio.create_task(self._fetch_authority_truths(targets))
+        activity_task = asyncio.create_task(self._activity())
+        recent_task = asyncio.create_task(self._recent_invocations())
+        widgets_task = asyncio.create_task(self.widgets.snapshot())
+        # The tasks are already scheduled together; awaiting their typed handles
+        # one by one retains precise result types without serializing execution.
+        service_states = await service_states_task
+        probed = await probed_task
+        local_sync_observations = await local_sync_task
+        authority_sync = await authority_task
+        activity = await activity_task
+        recent = await recent_task
+        widgets = await widgets_task
         authority_statuses, authority_issues = authority_sync
-        activity, recent, widgets = await asyncio.gather(
-            self._activity(), self._recent_invocations(), self.widgets.snapshot()
-        )
         errors = await self.runtime.recent_errors(8)
         generated_at = datetime.now(UTC)
         current_authorities: dict[str, VerifiedAuthorityStatus] = {}

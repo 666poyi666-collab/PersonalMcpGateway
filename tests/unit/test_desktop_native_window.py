@@ -184,6 +184,76 @@ class _DesktopUser32:
         return True
 
 
+class _LifecycleUser32:
+    def __init__(self) -> None:
+        self.shows: list[tuple[int, int]] = []
+        self.positions: list[tuple[int, int, int, int, int, int, int]] = []
+        self.ShowWindow = _FakeCall(self._show_window)
+        self.SetWindowPos = _FakeCall(self._set_window_pos)
+
+    def _show_window(self, hwnd: object, command: object) -> bool:
+        self.shows.append((int(cast(int, hwnd)), int(cast(int, command))))
+        # Win32 returns the previous visibility, so False is valid on first show.
+        return False
+
+    def _set_window_pos(
+        self,
+        hwnd: object,
+        insert_after: object,
+        left: object,
+        top: object,
+        width: object,
+        height: object,
+        flags: object,
+    ) -> bool:
+        self.positions.append(
+            (
+                int(cast(int, hwnd)),
+                int(cast(int, insert_after)),
+                int(cast(int, left)),
+                int(cast(int, top)),
+                int(cast(int, width)),
+                int(cast(int, height)),
+                int(cast(int, flags)),
+            )
+        )
+        return True
+
+
+class _ResizeStyleUser32:
+    def __init__(self) -> None:
+        self.style = 0x16010000
+        self.refreshes: list[int] = []
+        self.GetWindowLongPtrW = _FakeCall(self._get_window_long)
+        self.GetWindowLongW = self.GetWindowLongPtrW
+        self.SetWindowLongPtrW = _FakeCall(self._set_window_long)
+        self.SetWindowLongW = self.SetWindowLongPtrW
+        self.SetWindowPos = _FakeCall(self._set_window_pos)
+
+    def _get_window_long(self, _hwnd: object, index: object) -> int:
+        assert int(cast(int, index)) == native_window.GWL_STYLE
+        return self.style
+
+    def _set_window_long(self, _hwnd: object, index: object, style: object) -> int:
+        assert int(cast(int, index)) == native_window.GWL_STYLE
+        previous = self.style
+        self.style = int(cast(int, style))
+        return previous
+
+    def _set_window_pos(
+        self,
+        _hwnd: object,
+        _insert_after: object,
+        _left: object,
+        _top: object,
+        _width: object,
+        _height: object,
+        flags: object,
+    ) -> bool:
+        self.refreshes.append(int(cast(int, flags)))
+        return True
+
+
 def test_resize_hit_test_covers_every_edge_and_corner() -> None:
     rect = (100, 200, 500, 600)
     assert resize_hit_test(rect, (101, 201), 10) == HTTOPLEFT
@@ -215,8 +285,75 @@ def test_native_resize_requires_a_real_window_handle() -> None:
     assert begin_window_resize(object(), "se") is False
     assert begin_window_resize(object(), "not-an-edge") is False
     assert enable_transparent_background(object()) is False
+    assert native_window.show_window_without_activation(object()) is False
+    assert native_window.set_window_geometry(object(), 0, 0, 400, 300) is False
+    assert native_window.set_window_activation(object(), True) is False
     assert set_desktop_widget_mode(object(), True) is False
     assert set_desktop_window_mode(object(), True) is False
+
+
+def test_existing_resize_hook_repairs_thickframe_after_winforms_style_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = _ResizeStyleUser32()
+
+    def fake_native_handle(_window: Any) -> int:
+        return 901
+
+    def fake_windll(name: str, *, use_last_error: bool) -> _ResizeStyleUser32:
+        assert name == "user32"
+        assert use_last_error is True
+        return user32
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+    monkeypatch.setitem(
+        native_window._resize_hooks,  # pyright: ignore[reportPrivateUsage]
+        901,
+        (object(), object(), object()),
+    )
+
+    assert user32.style & native_window.WS_THICKFRAME == 0
+    assert install_frameless_resize(object()) is True
+    assert user32.style & native_window.WS_THICKFRAME
+    assert user32.refreshes == [native_window.SWP_REFRESH_FRAME]
+
+    # Once repaired, another idempotent install does not disturb the frame.
+    assert install_frameless_resize(object()) is True
+    assert user32.refreshes == [native_window.SWP_REFRESH_FRAME]
+
+
+def test_forced_resize_style_refreshes_an_existing_thickframe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = _ResizeStyleUser32()
+    user32.style |= native_window.WS_THICKFRAME
+
+    def fake_windll(name: str, *, use_last_error: bool) -> _ResizeStyleUser32:
+        assert name == "user32"
+        assert use_last_error is True
+        return user32
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+    ensure_resize_style = cast(
+        Callable[..., bool],
+        native_window._ensure_resize_style,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert ensure_resize_style(901, force_refresh=True) is True
+    assert user32.refreshes == [native_window.SWP_REFRESH_FRAME]
 
 
 def test_transparent_background_extends_the_dwm_frame(
@@ -266,6 +403,38 @@ def test_transparent_background_falls_back_when_dwm_rejects_it(
     )
 
     assert enable_transparent_background(object()) is False
+
+
+def test_native_lifecycle_shows_without_activation_and_geometry_never_shows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = _LifecycleUser32()
+
+    def fake_native_handle(_window: Any) -> int:
+        return 777
+
+    def fake_windll(_name: str, *, use_last_error: bool) -> _LifecycleUser32:
+        assert use_last_error is True
+        return user32
+
+    monkeypatch.setattr(native_window.os, "name", "nt")
+    monkeypatch.setattr(native_window, "native_handle", fake_native_handle)
+    monkeypatch.setattr(
+        native_window.ctypes,
+        "WinDLL",
+        fake_windll,
+        raising=False,
+    )
+
+    assert native_window.show_window_without_activation(object()) is True
+    assert user32.shows == [(777, native_window.SW_SHOWNOACTIVATE)]
+
+    assert native_window.set_window_geometry(object(), -50, 25, 640, 360) is True
+    assert user32.positions == [
+        (777, 0, -50, 25, 640, 360, native_window.SWP_PROGRAMMATIC_GEOMETRY)
+    ]
+    flags = user32.positions[0][-1]
+    assert flags & native_window.SWP_SHOWWINDOW == 0
 
 
 def test_desktop_mode_adds_and_restores_native_window_styles(

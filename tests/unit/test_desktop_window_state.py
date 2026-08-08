@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from personal_mcp_gateway.desktop.window_state import (
     WindowState,
     load_state,
     normalize_card_layout,
+    normalize_card_visibility,
     normalize_hidden_cards,
     normalize_project_layout,
     save_state,
@@ -45,9 +47,15 @@ def test_missing_file_falls_back_to_defaults(tmp_path: Path) -> None:
     loaded = load_state(tmp_path / "absent.json")
     assert loaded.size() == FULL_SIZE
     assert loaded.compact is False
-    assert loaded.desktop_mode is False
     assert loaded.project_layout_version == PROJECT_LAYOUT_VERSION
     assert loaded.card_layout_version == CARD_LAYOUT_VERSION
+    assert loaded.card_visibility == {
+        "foxlink": False,
+        "watch": False,
+        "journal": False,
+        "personal": False,
+        "bzsjk": False,
+    }
     assert loaded.theme == "light"
 
 
@@ -73,24 +81,75 @@ def test_undersized_and_invalid_fields_are_clamped(tmp_path: Path) -> None:
     assert loaded.theme == "light"
 
 
-def test_desktop_mode_wins_over_conflicting_saved_window_modes(tmp_path: Path) -> None:
+def test_legacy_desktop_mode_and_hidden_cards_migrate_to_independent_visibility(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "desktop-mode.json"
     target.write_text(
-        '{"compact":true,"on_top":true,"desktop_mode":true}',
+        '{"compact":true,"on_top":true,"desktop_mode":true,'
+        '"hidden_cards":["journal","bad","journal"]}',
         encoding="utf-8",
     )
 
     loaded = load_state(target)
 
-    assert loaded.desktop_mode is True
-    assert loaded.compact is False
-    assert loaded.on_top is False
+    assert loaded.compact is True
+    assert loaded.on_top is True
+    assert loaded.card_visibility == {
+        "foxlink": True,
+        "watch": True,
+        "journal": False,
+        "personal": True,
+        "bzsjk": True,
+    }
+
+
+def test_legacy_disabled_desktop_mode_migrates_to_all_cards_hidden(tmp_path: Path) -> None:
+    target = tmp_path / "disabled-desktop-mode.json"
+    target.write_text(
+        '{"desktop_mode":false,"hidden_cards":[]}',
+        encoding="utf-8",
+    )
+
+    loaded = load_state(target)
+
+    assert not any(loaded.card_visibility.values())
 
 
 def test_save_reports_failure_instead_of_raising(tmp_path: Path) -> None:
     blocker = tmp_path / "blocker"
     blocker.write_text("not a directory", encoding="utf-8")
     assert save_state(WindowState(), blocker / "nested" / "state.json") is False
+
+
+def test_concurrent_saves_are_serialized_and_use_unique_temporary_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "window-state.json"
+    temporary_names: list[str] = []
+    original_replace = Path.replace
+
+    def record_replace(source: Path, destination: Path) -> Path:
+        if destination == target:
+            temporary_names.append(source.name)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(Path, "replace", record_replace)
+    states = [WindowState(x=index) for index in range(24)]
+
+    def persist(state: WindowState) -> bool:
+        return save_state(state, target)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(persist, states))
+
+    assert all(results)
+    assert len(temporary_names) == len(states)
+    assert len(set(temporary_names)) == len(states)
+    assert all(name.startswith(".window-state.json.") for name in temporary_names)
+    assert not list(tmp_path.glob("*.tmp"))
+    assert load_state(target).x in range(len(states))
 
 
 def test_state_dir_honours_an_explicit_home(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,13 +241,28 @@ def test_card_layout_round_trips_separately_from_board_layout(tmp_path: Path) ->
     assert loaded.card_layout == saved.card_layout
 
 
-def test_hidden_cards_are_known_deduplicated_and_persisted(tmp_path: Path) -> None:
+def test_card_visibility_is_complete_normalized_and_persisted(tmp_path: Path) -> None:
     assert normalize_hidden_cards(["journal", "bad", "journal", 4, "watch"]) == [
         "journal",
         "watch",
     ]
+    assert normalize_card_visibility({"journal": True, "watch": False, "bad": True}) == {
+        "foxlink": False,
+        "watch": False,
+        "journal": True,
+        "personal": False,
+        "bzsjk": False,
+    }
     target = tmp_path / "hidden-cards.json"
-    saved = WindowState(hidden_cards=["journal", "watch"])
+    saved = WindowState(
+        card_visibility={
+            "foxlink": True,
+            "watch": False,
+            "journal": True,
+            "personal": False,
+            "bzsjk": False,
+        }
+    )
 
     assert save_state(saved, target) is True
-    assert load_state(target).hidden_cards == ["journal", "watch"]
+    assert load_state(target).card_visibility == saved.card_visibility

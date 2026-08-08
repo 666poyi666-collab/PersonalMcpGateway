@@ -143,33 +143,18 @@ def build_tray_icon(controller: DesktopController, actions: dict[str, Any]) -> A
             for project_id, label in card_labels.items()
         ),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("显示全部磁贴", wrap("show_all_cards")),
-        pystray.MenuItem("恢复默认位置与大小", wrap("reset_cards")),
+        pystray.MenuItem("显示全部卡片", wrap("show_all_cards")),
+        pystray.MenuItem("隐藏全部卡片", wrap("hide_all_cards")),
+        pystray.MenuItem("恢复卡片默认位置与大小", wrap("reset_cards")),
     )
 
     menu = pystray.Menu(
-        pystray.MenuItem("显示看板", wrap("show"), default=True),
-        pystray.MenuItem(
-            "固定到桌面",
-            wrap("desktop"),
-            checked=lambda _i: controller.state.desktop_mode,
-        ),
-        pystray.MenuItem(
-            "紧凑模式",
-            wrap("compact"),
-            checked=lambda _i: controller.state.compact,
-            enabled=cast(Any, lambda _i: not controller.state.desktop_mode),
-        ),
-        pystray.MenuItem(
-            "窗口置顶",
-            wrap("on_top"),
-            checked=lambda _i: controller.state.on_top,
-            enabled=cast(Any, lambda _i: not controller.state.desktop_mode),
-        ),
-        pystray.MenuItem("桌面磁贴", card_menu),
+        pystray.MenuItem("打开管理面板", wrap("show_management"), default=True),
+        pystray.MenuItem("显示全部桌面卡片", wrap("show_all_cards")),
+        pystray.MenuItem("隐藏全部桌面卡片", wrap("hide_all_cards")),
+        pystray.MenuItem("单独开关卡片", card_menu),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("打开网页版", wrap("web")),
-        pystray.MenuItem("立即刷新", wrap("refresh")),
+        pystray.MenuItem("刷新状态", wrap("refresh")),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("退出", wrap("quit")),
     )
@@ -244,28 +229,103 @@ def create_window(
 def enable_native_resize(window: Any) -> bool:
     from personal_mcp_gateway.desktop.native_window import install_frameless_resize
 
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    if getattr(native, "InvokeRequired", False):
+        action_type = __import__("System").Action
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(install_frameless_resize(window))))
+        return bool(result and result[0])
     return install_frameless_resize(window)
 
 
 def enable_native_transparency(window: Any) -> bool:
     from personal_mcp_gateway.desktop.native_window import enable_transparent_background
 
-    if not enable_transparent_background(window):
+    native = getattr(window, "native", None)
+    if native is None:
         return False
-    try:
-        color = __import__("System.Drawing", fromlist=["Color"]).Color
 
-        native = window.native
-        # A black WinForms backing brush is the transparent key for the extended
-        # DWM glass surface. WebView2 content remains fully color-accurate; only
-        # pixels left transparent by the page reveal windows behind the board.
-        native.browser.webview.DefaultBackgroundColor = color.Transparent
-        native.BackColor = color.Black
-    except Exception:
-        # pywebview's own background remains readable if a non-WinForms host or
-        # an unusual WebView2 build cannot expose these native properties.
+    def apply_transparency() -> bool:
+        if not enable_transparent_background(window):
+            return False
+        try:
+            color = __import__("System.Drawing", fromlist=["Color"]).Color
+
+            # A black WinForms backing brush is the transparent key for the
+            # extended DWM glass surface. WebView2 content remains color-accurate.
+            native.browser.webview.DefaultBackgroundColor = color.Transparent
+            native.BackColor = color.Black
+        except Exception:
+            return False
+        return True
+
+    if getattr(native, "InvokeRequired", False):
+        action_type = __import__("System").Action
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(apply_transparency())))
+        return bool(result and result[0])
+    return apply_transparency()
+
+
+def show_native_window_without_activation(window: Any) -> bool:
+    """Show a realized window through Win32 without focusing it."""
+    from personal_mcp_gateway.desktop.native_window import show_window_without_activation
+
+    native = getattr(window, "native", None)
+    if native is None:
         return False
-    return True
+    if native.InvokeRequired:
+        action_type = __import__("System").Action
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(show_window_without_activation(window))))
+        return bool(result and result[0])
+    return show_window_without_activation(window)
+
+
+def set_native_window_geometry(
+    window: Any,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> bool:
+    """Set native bounds without activating or making a hidden window visible."""
+    from personal_mcp_gateway.desktop.native_window import set_window_geometry
+
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+
+    def apply_geometry() -> bool:
+        return set_window_geometry(window, x, y, width, height)
+
+    if native.InvokeRequired:
+        action_type = __import__("System").Action
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(apply_geometry())))
+        return bool(result and result[0])
+    return apply_geometry()
+
+
+def set_native_window_activation(window: Any, enabled: bool) -> bool:
+    """Allow or prevent foreground activation without showing the window."""
+    from personal_mcp_gateway.desktop.native_window import set_window_activation
+
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+
+    def apply_activation() -> bool:
+        return set_window_activation(window, enabled)
+
+    if native.InvokeRequired:
+        action_type = __import__("System").Action
+        result: list[bool] = []
+        native.Invoke(action_type(lambda: result.append(apply_activation())))
+        return bool(result and result[0])
+    return apply_activation()
 
 
 def begin_native_resize(window: Any, edge: str) -> bool:

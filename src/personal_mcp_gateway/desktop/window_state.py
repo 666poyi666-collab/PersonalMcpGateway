@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+import tempfile
+import threading
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -35,6 +37,13 @@ DEFAULT_CARD_LAYOUT: dict[str, dict[str, int]] = {
     "bzsjk": {"x": 700, "y": 382, "w": 360, "h": 330, "order": 4},
 }
 CARD_IDS = frozenset(DEFAULT_CARD_LAYOUT)
+_state_save_lock = threading.RLock()
+
+
+def _hidden_card_visibility() -> dict[str, bool]:
+    """Default to a quiet desktop until the user explicitly shows a card."""
+
+    return {card_id: False for card_id in DEFAULT_CARD_LAYOUT}
 
 
 def state_dir() -> Path:
@@ -60,11 +69,12 @@ class WindowState:
     # The operator prefers a light board; dark stays one titlebar click away.
     theme: str = "light"
     project_layout_version: int = PROJECT_LAYOUT_VERSION
-    desktop_mode: bool = False
     project_layout: dict[str, dict[str, int]] | None = None
     card_layout_version: int = CARD_LAYOUT_VERSION
     card_layout: dict[str, dict[str, int]] | None = None
-    hidden_cards: list[str] | None = None
+    # Each native card is an independent surface.  Visibility must not be tied
+    # to whether the management window happens to be open.
+    card_visibility: dict[str, bool] = field(default_factory=_hidden_card_visibility)
 
     def size(self) -> tuple[int, int]:
         return (self.width, self.height)
@@ -181,6 +191,19 @@ def normalize_hidden_cards(value: object) -> list[str]:
     return result
 
 
+def normalize_card_visibility(value: object) -> dict[str, bool]:
+    """Return a complete, stable visibility map for all known desktop cards."""
+
+    result = _hidden_card_visibility()
+    if not isinstance(value, dict):
+        return result
+    entries = cast(dict[object, object], value)
+    for raw_id, raw_visible in entries.items():
+        if isinstance(raw_id, str) and raw_id in CARD_IDS:
+            result[raw_id] = bool(raw_visible)
+    return result
+
+
 def load_state(path: Path | None = None) -> WindowState:
     """Read persisted state, falling back to defaults on any corruption."""
     target = path or state_path()
@@ -202,35 +225,65 @@ def load_state(path: Path | None = None) -> WindowState:
         if not layout
         else max(1, min(PROJECT_LAYOUT_VERSION, raw_layout_version or 1))
     )
-    desktop_mode = bool(data.get("desktop_mode", False))
+    raw_card_visibility = data.get("card_visibility")
+    if isinstance(raw_card_visibility, dict):
+        card_visibility = normalize_card_visibility(
+            cast(dict[object, object], raw_card_visibility)
+        )
+    else:
+        # One release stored one global desktop_mode bit plus a hidden-card
+        # list.  Migrate that representation once without changing what was
+        # actually visible on the user's desktop.
+        legacy_enabled = bool(data.get("desktop_mode", False))
+        legacy_hidden = set(normalize_hidden_cards(data.get("hidden_cards")))
+        card_visibility = {
+            card_id: legacy_enabled and card_id not in legacy_hidden
+            for card_id in DEFAULT_CARD_LAYOUT
+        }
     return WindowState(
         x=_coerce_int(data.get("x"), None),
         y=_coerce_int(data.get("y"), None),
         width=max(width, MIN_SIZE[0]),
         height=max(height, MIN_SIZE[1]),
-        compact=bool(data.get("compact", False)) and not desktop_mode,
-        on_top=bool(data.get("on_top", False)) and not desktop_mode,
+        compact=bool(data.get("compact", False)),
+        on_top=bool(data.get("on_top", False)),
         theme=theme if theme in {"dark", "light"} else "light",
         project_layout_version=layout_version,
-        desktop_mode=desktop_mode,
         project_layout=layout,
         card_layout_version=CARD_LAYOUT_VERSION,
         card_layout=card_layout or None,
-        hidden_cards=normalize_hidden_cards(data.get("hidden_cards")) or None,
+        card_visibility=card_visibility,
     )
 
 
 def save_state(state: WindowState, path: Path | None = None) -> bool:
     """Persist state atomically; a failure here must never break the app."""
     target = path or state_path()
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(asdict(state), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary.replace(target)
-    except OSError:
-        return False
+    with _state_save_lock:
+        temporary: Path | None = None
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(asdict(state), stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(target)
+            temporary = None
+        except OSError:
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
     return True

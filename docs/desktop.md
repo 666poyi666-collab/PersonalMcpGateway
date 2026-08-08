@@ -1,11 +1,13 @@
 # Desktop Board
 
-Poyi Control Center is a native Windows application, not a browser tab: one management WebView2
-window, five independent frameless desktop-card windows and a system tray icon that keeps reporting
-status after the windows are hidden. It shows the same
-data as the web dashboard — the independently deployed Personal Gateway, Watch MCP, Foxlink MCP and
-Journal MCP, each MCP readiness endpoint, each Secure MCP Tunnel, 24-hour activity, success rate and
-the state-change timeline.
+Poyi Control Center is a native Windows application, not a browser tab. It has three independent
+surfaces: one management WebView2 window, five frameless desktop-card windows and a system tray icon.
+The management window opens and closes without changing any card. Each card has its own visibility,
+position and size, and the tray remains available when every window is hidden.
+
+The ordinary management view is deliberately simple: one overall state, five named card switches
+and the five cards' useful data. Detailed 24-hour activity and exceptions live under **运行记录**;
+the browser dashboard remains the full technical monitoring surface.
 
 The renderer makes no network calls of its own. Every request runs in Python and reaches the page
 through the `pywebview` bridge, so the document keeps a local origin and needs no cross-origin
@@ -19,7 +21,7 @@ needs lives in the signed-in user's profile:
 ```text
 %LOCALAPPDATA%\Poyi\PersonalMcpDesktop\runtime   private Python 3.12 virtual environment
 %LOCALAPPDATA%\Poyi\PersonalMcpDesktop\webview   WebView2 profile
-%LOCALAPPDATA%\Poyi\PersonalMcpDesktop\window-state.json   window and project-tile layout
+%LOCALAPPDATA%\Poyi\PersonalMcpDesktop\window-state.json   management and card window state
 ```
 
 The board is a viewer of the gateway, not a component of it. It holds no secrets, opens no listener
@@ -43,14 +45,11 @@ Options for `install-desktop.ps1`:
 Re-running the installer is the upgrade path. It stops any instance running out of its own runtime
 first — matched on the executable path, so other Python processes are left alone.
 
-Every shortcut targets `runtime\Scripts\PoyiControlCenter.exe`. Desktop and Start Menu launches use
-`--activate`: if the board is already running in the tray they restore the configured cards, and if
-all five cards were individually hidden they make all five visible again. The Startup shortcut uses
-`--background`, so signing in preserves intentional per-card visibility without forcing hidden cards
-back onto the desktop. Activation is delivered to the running controller; it never directly reveals
-the hidden management window. While Desktop mode is active that window starts hidden and stays hidden
-even if an individual card fails to initialize, so the obsolete shared canvas cannot stack behind the
-independent cards. The installer creates the launcher
+Every shortcut targets `runtime\Scripts\PoyiControlCenter.exe`. An explicit Desktop or Start Menu
+launch always opens the management window and leaves all five card switches unchanged. The Startup
+shortcut uses `--background`: it leaves management hidden and restores each card from its own saved
+visibility. Starting a second copy signals the running instance to open management instead of
+creating duplicate windows. The installer creates the launcher
 from the real Windows GUI-subsystem interpreter instead of uv's virtual-environment trampoline, so
 starting from Desktop, Start Menu, or Startup neither opens nor depends on PowerShell or a console
 Python process.
@@ -86,12 +85,9 @@ and neither says anything about whether the window renders. Sizing from the rest
 what makes that work: a minimized window reports its on-screen rectangle as a small off-screen stub,
 which would otherwise be indistinguishable from the tray backend's message window.
 
-Desktop mode is stricter: the management window must be `hidden-to-tray`. A visible management
-window would recreate the obsolete shared canvas behind the independent cards, so verification
-rejects that state even when every individual card window is otherwise healthy.
-Because that form starts hidden, its ordinary-window resize hook has not run; the management resize
-probe is therefore skipped in Desktop mode and remains mandatory whenever the management window is
-the active view.
+An explicit verification launch must make the management window visible even when some or all cards
+are already on the desktop. The verifier then checks that the frameless management window still
+resizes correctly. Card visibility is not changed merely to run this probe.
 
 An unreachable gateway is recorded as `gatewayReachable: false` and does not fail verification. The
 board is designed to render a "no link" state, so that is a thing it reports, not a thing that makes
@@ -103,21 +99,17 @@ Pass `-SkipLaunchCheck` on a machine with no interactive desktop.
 
 | Control | Behaviour |
 | --- | --- |
-| Refresh | Bypasses the shared probe cache. |
-| Camera | Captures the board through Win32 `PrintWindow` without activating or controlling it, then saves a PNG under `Pictures\Poyi Control Center`. |
-| Tiles | Enters a freeform pixel canvas. Drag any tile surface horizontally or vertically, or drag any edge/corner to resize continuously. The workspace fills the window and expands in both directions; hold the middle mouse button and drag to pan without visible scrollbars. Alignment guides appear near viewport and peer-tile edges; changes save automatically. |
+| 显示/隐藏桌面卡片 | The titlebar button shows all five cards when none are visible, or hides all visible cards. It never closes management. |
+| 桌面卡片 panel | Five named switches control FocusLink, 步序, 拾光日记, 服务中心 and 不做手机控 separately. `全部显示` and `全部隐藏` are available beside them, so every hidden card can be recovered without using the tray. |
+| Refresh | Requests a fresh snapshot without freezing the window; overlapping refreshes are coalesced. |
+| Minimize / Close | Minimize affects only management. Close hides only management to the tray; the cards keep their current visibility. |
 | Window edges | Drag any edge or corner to resize the whole frameless window. A 120 Hz Win32 tracker applies pointer bounds directly, without low-pass lag or a post-release settle animation, even when Windows is configured to show only an outline while resizing. |
-| Theme | Switches light and dark; light is the default. Both are validated against their own surface, not flipped. |
-| Pin | Keeps the window above other windows (`WS_EX_TOPMOST`). |
-| Desktop | Hides the management board and shows five independent taskbar-free native card windows. Each card can move, resize, overlap, cross monitors, hide and restore without reflowing any peer. There is no monitor-sized transparent host: pixels outside each card belong directly to the desktop or the application underneath. |
-| Desktop cards | Drag the card header or the faint `::` grip to move only that card. Hover the grip to reveal S/M/L size presets, per-card reset and per-card hide. Drag any native edge or the marked bottom-right corner for arbitrary continuous sizing. Position, size and hidden state persist per project; no shared grid, board padding or automatic peer movement is involved. |
-| Compact | Shrinks to a narrow status panel that fits beside other work. |
-| Close | Hides to the tray; double-click the Desktop shortcut to bring the cards back. The poll loop and tray icon keep running. |
-| Tray menu | Show, desktop mode, compact, pin, open the web dashboard, refresh and quit. The Desktop cards submenu has a checked visibility switch for every card, Show all cards and Restore default positions and sizes, so a hidden card is always recoverable. |
+| Desktop cards | Drag a card header or `::` grip to move only that card. Its explicit toolbar opens management, selects 小/中/大, restores that card's geometry, or closes only that card. Drag any native edge or the marked bottom-right corner for arbitrary sizing. There is no shared transparent host: pixels outside a card belong to the desktop or the application underneath. |
+| Connection warning | When fresh data cannot be read, the last valid data remains visible. `重试` is the ordinary action; `尝试自动修复` appears only in this problem context. |
+| Tray menu | `打开管理面板` is the default action. The menu also shows or hides all cards, provides a checked switch for each card, restores default card geometry, refreshes status and exits the process. |
 
-Management-window size, position, theme, desktop mode, compact mode, pin state, board layout and
-each desktop card's independent screen geometry and visibility persist across restarts. Brief probe failures keep
-the last valid board visible and show a restrained recovery
+Management-window size and position plus each desktop card's independent screen geometry and
+visibility persist across restarts. Brief probe failures keep the last valid board visible and show a restrained recovery
 banner until the next successful poll instead of flashing a full-screen disconnect state.
 
 Status is encoded by shape as well as hue — circle for healthy, triangle for degraded, diamond for
@@ -125,12 +117,13 @@ offline, square for no link — on the dashboard dots and on the tray icon alike
 are only about four ΔE apart under deuteranopia, and the tray is the one status surface still
 visible once the window is hidden, so it must not be the least readable one.
 
-A second launch is refused with a message pointing at the tray. The guard is a `Local\` named
-mutex, so a different desktop session gets its own window instead of being locked out.
+A second launch is redirected to the running instance and opens its management panel. The guard is a
+`Local\` named mutex, so a different desktop session gets its own window instead of being locked out.
 
-The board ends with the extensible widget area (扩展面板), shared with the web dashboard:
-schedules, project git freshness, notes, or any loopback data source, declared in
-`board-widgets.yaml` in the gateway data directory. See [Board widgets](board-widgets.md).
+Project-bound widgets declared in `board-widgets.yaml` supply the FocusLink, 步序, 拾光日记 and
+不做手机控 card data. General-purpose notes, schedules and custom widgets remain available in the
+browser dashboard's **扩展面板** rather than adding another unexplained desktop tab. See
+[Board widgets](board-widgets.md).
 
 ## Remove
 

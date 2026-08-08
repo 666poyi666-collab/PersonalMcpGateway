@@ -567,14 +567,21 @@
     if (refreshInFlight) return;
     refreshInFlight = true;
     $("refreshNow").classList.add("loading");
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), 7000);
     try {
-      const response = await fetch(`/admin/dashboard-data${force ? "?force=1" : ""}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const response = await fetch(`/admin/dashboard-data${force ? "?force=1" : ""}`, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
       if (!response.ok) throw new Error("dashboard unavailable");
       applySnapshot(await response.json());
     } catch (_) {
       $("syncState").classList.add("offline"); $("syncState").querySelector("b").textContent = "连接中断";
       text($("footerState"), "RECONNECTING");
     } finally {
+      window.clearTimeout(deadline);
       refreshInFlight = false;
       $("refreshNow").classList.remove("loading");
       clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, document.hidden ? 15000 : 4000);

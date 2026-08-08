@@ -51,12 +51,16 @@ _READ_TOOL = re.compile(r"(^|_)(get|list|summarize|search|read|status|health|cap
 # How long one widget's result stays good. The dashboard snapshot itself caches
 # for 3 seconds; these only need to keep the slow providers off that hot path.
 _TTL_SECONDS = {"text": 3600.0, "agenda": 15.0, "projects": 60.0, "remote": 0.0, "mcp": 30.0}
+_MCP_TOOL_TTL_SECONDS = {
+    "foxlink_get_current_session": 4.0,
+    "watch_get_status": 4.0,
+    "watch_get_current_plan": 15.0,
+}
 
 _PROVIDER_TIMEOUT = 4.0
-# MCP widgets aggregate real project data (a workout summary walks the phone's
-# whole history over LAN), so they get a longer leash; their 30s TTL keeps the
-# occasional slow round off the snapshot hot path.
-_MCP_TIMEOUT = 9.0
+# A dashboard observation must never hold the whole control center behind one
+# offline phone. Providers that need longer should expose a cached summary.
+_MCP_TIMEOUT = 3.0
 _REMOTE_TIMEOUT = 2.5
 _GIT_TIMEOUT = 3.0
 _MAX_REPOS = 12
@@ -276,7 +280,16 @@ class WidgetHub:
             payload = self._fail(config, "获取超时")
         except Exception:  # one bad widget must never take the board down
             payload = self._fail(config, "模块运行失败")
-        ttl = _TTL_SECONDS.get(config.type, 0.0)
+        tool = config.options.get("tool") if config.type == "mcp" else None
+        ttl = (
+            _MCP_TOOL_TTL_SECONDS.get(tool, _TTL_SECONDS["mcp"])
+            if isinstance(tool, str)
+            else _TTL_SECONDS.get(config.type, 0.0)
+        )
+        if not payload.get("ok", False):
+            # A disconnected device should stay local to its card and must not
+            # start a multi-second retry on every dashboard poll.
+            ttl = max(ttl, 15.0)
         self._cache[config.id] = (time.monotonic() + ttl, fingerprint, payload)
         return payload
 
@@ -440,14 +453,24 @@ class WidgetHub:
                 "WATCH_TIMEOUT": "手表响应超时 · 等待连接恢复后自动重试",
             }
             if code in recovery_messages:
-                return self._ok(
+                result = self._ok(
                     config,
                     "text",
-                    {"body": recovery_messages[code]},
+                    {
+                        "body": recovery_messages[code],
+                        "availability": "unavailable",
+                        "errorCode": code,
+                    },
                 )
+                result["availability"] = "unavailable"
+                result["sampledAt"] = datetime.now(UTC).isoformat()
+                return result
             return self._fail(config, "工具执行返回错误")
         kind, data = _present_mcp_payload(tool, payload)
-        return self._ok(config, kind, data)
+        result = self._ok(config, kind, data)
+        result["availability"] = "available"
+        result["sampledAt"] = datetime.now(UTC).isoformat()
+        return result
 
     async def _provide_remote(self, config: WidgetConfig) -> dict[str, Any]:
         url = config.options.get("url")
@@ -569,6 +592,14 @@ def _fmt_km(meters: object) -> str:
     return f"{value / 1000:.2f} km" if value >= 1000 else f"{value:.0f} m"
 
 
+def _fmt_epoch_relative(milliseconds: object) -> str | None:
+    try:
+        moment = datetime.fromtimestamp(float(cast(Any, milliseconds)) / 1000, UTC)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    return _relative_zh(moment)
+
+
 _MOOD_GLYPHS = {1: "低落", 2: "一般", 3: "平稳", 4: "不错", 5: "很好"}
 
 
@@ -581,14 +612,101 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
     never reaches a board that hangs on a wall.
     """
     data = _unwrap_envelope(payload)
+    if tool == "foxlink_get_current_session":
+        state = str(data.get("state") or "idle").strip().lower()
+        title = str(data.get("currentTaskTitle") or "").strip()
+        source = str(data.get("currentTaskSource") or "").strip()
+        state_label = {
+            "running": "正在专注",
+            "paused": "专注已暂停",
+            "idle": "当前无专注",
+            "stopped": "当前无专注",
+        }.get(state, "专注状态待确认")
+        note_parts: list[str] = []
+        if title:
+            note_parts.append(f"已专注 {_fmt_hours(data.get('activeElapsedMs', 0))}")
+        if source:
+            note_parts.append(source)
+        last_tick = _fmt_epoch_relative(data.get("lastTick"))
+        if last_tick:
+            note_parts.append(f"更新 {last_tick}")
+        return "stat", {
+            "value": _clip(title or state_label, 120),
+            "label": state_label,
+            "note": " · ".join(note_parts) or "等待下一次专注",
+            "sessionState": state,
+        }
     if tool == "foxlink_get_today_summary":
         sessions = data.get("sessionCount", 0)
         note = f"{sessions} 次会话 · 暂停 {_fmt_hours(data.get('pauseElapsedMs', 0))}"
+        source_date = str(data.get("date") or "").strip()
+        is_today = source_date == datetime.now().date().isoformat()
         return "stat", {
             "value": _fmt_hours(data.get("activeElapsedMs", 0)),
-            "label": f"有效专注 · {data.get('date', '')}",
+            "label": (
+                f"今日有效专注 · {source_date}"
+                if is_today
+                else f"旧数据 · 截至 {source_date or '未知日期'}"
+            ),
             "note": note,
+            "sourceDate": source_date or None,
+            "isToday": is_today,
         }
+    if tool == "watch_get_status":
+        connection_raw = data.get("connection")
+        phone_raw = data.get("phone")
+        connection = (
+            cast(dict[str, Any], connection_raw) if isinstance(connection_raw, dict) else {}
+        )
+        phone = cast(dict[str, Any], phone_raw) if isinstance(phone_raw, dict) else {}
+        watch_status_raw = connection.get("watchStatus")
+        watch_status = (
+            cast(dict[str, Any], watch_status_raw)
+            if isinstance(watch_status_raw, dict)
+            else {}
+        )
+        link_raw = phone.get("watchConnection")
+        link = cast(dict[str, Any], link_raw) if isinstance(link_raw, dict) else {}
+        phone_state = str(connection.get("phone") or "unknown").lower()
+        watch_state = str(connection.get("watch") or "unknown").lower()
+        transport = str(
+            watch_status.get("transport")
+            or link.get("primaryTransport")
+            or link.get("bulkTransport")
+            or "—"
+        )
+        ble_state = str(link.get("connectionState") or "unknown").upper()
+        pairs = [
+            {"label": "手机", "value": "在线" if phone_state == "online" else "离线"},
+            {"label": "手表", "value": "在线" if watch_state == "online" else "离线"},
+            {"label": "有效通道", "value": _clip(transport, 30)},
+            {"label": "BLE", "value": ble_state},
+        ]
+        reason = str(link.get("lastDisconnectReason") or "").strip()
+        if ble_state != "CONNECTED" and reason:
+            pairs.append({"label": "BLE 原因", "value": _clip(reason, 40)})
+        if bool(link.get("lanAvailable")):
+            pairs.append({"label": "LAN 回退", "value": "可用"})
+        return "keyvalue", {
+            "pairs": pairs,
+            "watchOnline": watch_state == "online",
+            "phoneOnline": phone_state == "online",
+            "bleConnected": ble_state == "CONNECTED",
+        }
+    if tool == "watch_get_current_plan":
+        name = str(data.get("name") or "").strip()
+        group = str(data.get("group") or "").strip()
+        stages_raw = data.get("stages")
+        stages = cast(list[Any], stages_raw) if isinstance(stages_raw, list) else []
+        label = " · ".join(part for part in (group, name) if part) or "暂无当前计划"
+        pairs = [
+            {"label": "当前计划", "value": _clip(label, 60)},
+            {"label": "阶段数", "value": str(len(stages))},
+        ]
+        requirement = str(data.get("requirement") or "").strip()
+        if requirement:
+            pairs.append({"label": "要求", "value": _clip(requirement, 80)})
+        return "keyvalue", {"pairs": pairs, "hasPlan": bool(name or group)}
     if tool == "watch_summarize_workouts":
         latest = data.get("latest")
         latest_dict = cast(dict[str, Any], latest) if isinstance(latest, dict) else {}
@@ -659,7 +777,14 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
                         "state": None,
                     }
                 )
-        return "list", {"items": items, "empty": "还没有日记"}
+        today = datetime.now().date().isoformat()
+        latest_date = str(items[0].get("value") or "") if items else ""
+        return "list", {
+            "items": items,
+            "empty": "还没有日记",
+            "todayWritten": any(str(item.get("value") or "") == today for item in items),
+            "latestEntryDate": latest_date or None,
+        }
     # Unknown read tool: surface its scalar fields honestly rather than raw JSON.
     pairs = [
         {"label": _clip(key, 40), "value": _clip(value, 80)}

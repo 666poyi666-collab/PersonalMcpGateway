@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -97,7 +98,16 @@ async def test_admin_endpoints_authorization_and_bundle(tmp_path: Path) -> None:
         cached = (await client.get("/admin/dashboard-data")).json()
         assert cached["generatedAt"] == snapshot["generatedAt"]
         forced = (await client.get("/admin/dashboard-data?force=1")).json()
-        assert forced["generatedAt"] != snapshot["generatedAt"]
+        # A manual refresh is single-flight and returns the last complete view
+        # immediately instead of holding the HTTP request behind a slow widget.
+        assert forced["generatedAt"] == snapshot["generatedAt"]
+        refreshed = forced
+        for _attempt in range(20):
+            await asyncio.sleep(0.01)
+            refreshed = (await client.get("/admin/dashboard-data")).json()
+            if refreshed["generatedAt"] != snapshot["generatedAt"]:
+                break
+        assert refreshed["generatedAt"] != snapshot["generatedAt"]
         stylesheet = await client.get("/admin/assets/dashboard.css")
         script = await client.get("/admin/assets/dashboard.js")
         profile_script = await client.get("/admin/assets/dashboard-profile.js")

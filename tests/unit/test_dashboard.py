@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from datetime import UTC, datetime, timedelta
@@ -35,6 +36,39 @@ def build_monitor(tmp_path: Path) -> DashboardMonitor:
     settings = Settings(data_dir=tmp_path)
     runtime = GatewayRuntime(settings, Database(settings.database_path), ModuleRegistry())
     return DashboardMonitor(runtime)
+
+
+@pytest.mark.asyncio
+async def test_expired_snapshot_returns_cache_and_shares_one_background_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monitor = build_monitor(tmp_path)
+    old = {"generatedAt": "old"}
+    fresh = {"generatedAt": "fresh"}
+    monitor._cache = old  # pyright: ignore[reportPrivateUsage]
+    monitor._cached_at = 0.0  # pyright: ignore[reportPrivateUsage]
+    release = asyncio.Event()
+    calls = 0
+
+    async def build() -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return fresh
+
+    monkeypatch.setattr(monitor, "_build_snapshot", build)
+
+    assert await monitor.snapshot() is old
+    assert await monitor.snapshot(force=True) is old
+    await asyncio.sleep(0)
+    assert calls == 1
+
+    release.set()
+    task = monitor._refresh_task  # pyright: ignore[reportPrivateUsage]
+    assert task is not None
+    await task
+    assert await monitor.snapshot() is fresh
 
 
 def _base64url(value: bytes) -> str:

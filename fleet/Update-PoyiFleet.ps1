@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 $fleetSource = $PSScriptRoot
 $repoRoot = Split-Path -Parent $fleetSource
 $gatewayInstall = "$env:ProgramFiles\Poyi\PersonalMcpGateway"
+$gatewayData = "$env:ProgramData\Poyi\PersonalMcpGateway"
 $watchdogInstall = "$env:ProgramFiles\Poyi\FleetWatchdog"
 $diagDir = 'C:\开发\mcp开发\_diag'
 
@@ -155,6 +156,9 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Failed to re-stamp service runtime ACLs.' }
         Assert-ServiceRuntimeReadAccess $gatewayInstall 'NT SERVICE\PoyiPersonalMcpGateway'
         Write-Host '  service read ACLs re-stamped on the install tree.'
+        Copy-VerifiedFile (Join-Path $repoRoot 'dashboard\board-widgets.poyi.yaml') `
+            (Join-Path $gatewayData 'board-widgets.yaml')
+        Write-Host '  dashboard widget contract deployed.'
     } finally {
         Remove-Item -LiteralPath $buildDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -192,6 +196,10 @@ try {
         (Join-Path $watchdogInstall 'cloud_sync.py')
     & sc.exe stop PoyiFleetWatchdog | Out-Null
     Wait-ServiceStatus 'PoyiFleetWatchdog' 'Stopped' 30 | Out-Null
+    & sc.exe config PoyiFleetWatchdog start= delayed-auto | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to enable watchdog delayed auto-start.'
+    }
     & sc.exe start PoyiFleetWatchdog | Out-Null
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1056) {
         throw 'PoyiFleetWatchdog failed to start after update.'

@@ -56,6 +56,9 @@ def test_watchdog_repair_is_scoped_and_cannot_bypass_restart_budget() -> None:
 
     assert "-Filter 'repair-*.json'" in watchdog
     assert r"^repair-([A-Za-z0-9_-]{1,32})\.json$" in watchdog
+    assert "Get-ValidRepairRequests" in watchdog
+    assert "Test-RepairWakePending" in watchdog
+    assert "Get-ChildItem -LiteralPath $script:TriggerDir -File" not in watchdog
     assert "restart-state.json" in watchdog
     assert "Save-RestartState" in watchdog
     assert "Write-Output $line" not in watchdog
@@ -94,6 +97,20 @@ def test_all_install_paths_cap_restart_loops_and_verify_live_readiness() -> None
     assert "http://127.0.0.1:8877/readyz" in fleet_updater
     assert "Copy-VerifiedFile" in fleet_updater
     assert "Installed file hash mismatch" in fleet_updater
+    assert "dashboard\\board-widgets.poyi.yaml" in fleet_updater
+    assert "board-widgets.yaml" in fleet_updater
+
+
+def test_watchdog_install_and_update_restore_delayed_auto_start() -> None:
+    root = Path(__file__).parents[2]
+    scripts = [
+        (root / "fleet" / "Install-PoyiFleet.ps1").read_text(encoding="utf-8"),
+        (root / "fleet" / "Update-PoyiFleet.ps1").read_text(encoding="utf-8"),
+    ]
+
+    for script in scripts:
+        assert "sc.exe config PoyiFleetWatchdog start= delayed-auto" in script
+        assert "Failed to enable watchdog delayed auto-start." in script
 
 
 def test_sensitive_install_acls_fail_closed_per_operation() -> None:

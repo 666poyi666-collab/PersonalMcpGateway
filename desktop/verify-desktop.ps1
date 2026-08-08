@@ -59,6 +59,10 @@ public static class PoyiWindowProbe
     [DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint attach, uint attachTo, bool value);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")]
     private static extern bool SetWindowPos(
         IntPtr hWnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")]
@@ -205,6 +209,7 @@ public static class PoyiWindowProbe
     {
         POINT cursor;
         if (!GetCursorPos(out cursor)) return "failed:cursor-unavailable";
+        IntPtr previousForeground = GetForegroundWindow();
         int width = original.Right - original.Left;
         int height = original.Bottom - original.Top;
         int startX = original.Right - 7;
@@ -215,20 +220,8 @@ public static class PoyiWindowProbe
 
         try
         {
-            BringWindowToTop(hWnd);
-            SetForegroundWindow(hWnd);
+            if (!ActivateForDrag(hWnd)) return "failed:foreground-lock";
             Thread.Sleep(180);
-            if (GetForegroundWindow() != hWnd)
-            {
-                // Foreground-lock rules can reject SetForegroundWindow for a
-                // verifier process. A plain titlebar tap activates the board
-                // without invoking any command or changing its rectangle.
-                SetCursorPos(original.Left + (width / 2), original.Top + 30);
-                mouse_event(LEFT_DOWN, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(30);
-                mouse_event(LEFT_UP, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(180);
-            }
             SetCursorPos(startX, startY);
             Thread.Sleep(120);
             mouse_event(LEFT_DOWN, 0, 0, 0, UIntPtr.Zero);
@@ -274,6 +267,44 @@ public static class PoyiWindowProbe
             SetWindowPos(
                 hWnd, IntPtr.Zero, original.Left, original.Top, width, height, RESTORE_FLAGS);
             SetCursorPos(cursor.X, cursor.Y);
+            if (previousForeground != IntPtr.Zero && previousForeground != hWnd)
+                ActivateForDrag(previousForeground);
+        }
+    }
+
+    private static bool ActivateForDrag(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return false;
+        uint processId;
+        uint targetThread = GetWindowThreadProcessId(hWnd, out processId);
+        IntPtr foreground = GetForegroundWindow();
+        uint foregroundThread = foreground == IntPtr.Zero
+            ? 0
+            : GetWindowThreadProcessId(foreground, out processId);
+        uint currentThread = GetCurrentThreadId();
+        bool attachedTarget = false;
+        bool attachedForeground = false;
+
+        try
+        {
+            if (targetThread != 0 && targetThread != currentThread)
+                attachedTarget = AttachThreadInput(currentThread, targetThread, true);
+            if (
+                foregroundThread != 0 &&
+                foregroundThread != currentThread &&
+                foregroundThread != targetThread
+            )
+                attachedForeground = AttachThreadInput(currentThread, foregroundThread, true);
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+            return GetForegroundWindow() == hWnd;
+        }
+        finally
+        {
+            if (attachedForeground)
+                AttachThreadInput(currentThread, foregroundThread, false);
+            if (attachedTarget)
+                AttachThreadInput(currentThread, targetThread, false);
         }
     }
 }
@@ -288,15 +319,6 @@ $layout = Get-DesktopLayout -InstallDir $InstallDir
 $python = $layout.Python
 $resultPath = Join-Path $EvidenceDir 'desktop-verification-result.json'
 New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
-$desktopMode = $false
-if (Test-Path -LiteralPath $layout.State) {
-    $savedState = Get-Content -LiteralPath $layout.State -Raw | ConvertFrom-Json
-    $desktopModeProperty = $savedState.PSObject.Properties['desktop_mode']
-    if ($null -ne $desktopModeProperty) {
-        $desktopMode = [bool]$desktopModeProperty.Value
-    }
-}
-
 function Test-Shortcut {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -360,7 +382,11 @@ try {
         $existing = @(Get-DesktopProcess -Runtime $layout.Runtime)
         if ($existing.Count -gt 0) {
             $processId = $existing[0].Id
-            $launch.mode = 'attached-to-running-instance'
+            # A normal explicit launch signals the existing instance to open the
+            # management panel without changing any independent card.
+            Start-Process -FilePath $layout.Launcher -ArgumentList $layout.Arguments `
+                -WorkingDirectory $layout.Root -WindowStyle Hidden | Out-Null
+            $launch.mode = 'activated-running-instance'
         } else {
             $started = Start-Process -FilePath $layout.Launcher -ArgumentList $layout.Arguments `
                 -WorkingDirectory $layout.Root -WindowStyle Hidden -PassThru
@@ -380,7 +406,7 @@ try {
                         break
                     }
                 }
-                if ($null -ne $window) { break }
+                if ($null -ne $window -and -not $window.EndsWith(' hidden-to-tray')) { break }
                 # The single-instance guard is session-wide, so a copy started from
                 # anywhere -- a development checkout included -- makes ours exit at
                 # once. That is a different fault from a window that never paints.
@@ -391,24 +417,14 @@ try {
                 }
                 Start-Sleep -Milliseconds 500
             } until ((Get-Date) -ge $deadline)
-            if ($null -eq $window) {
-                throw "No $($layout.AppName) window appeared within $LaunchTimeoutSeconds seconds."
+            if ($null -eq $window -or $window.EndsWith(' hidden-to-tray')) {
+                throw "The management panel did not become visible within $LaunchTimeoutSeconds seconds."
             }
             $launch.window = $window
-            if ($desktopMode -and -not $window.EndsWith(' hidden-to-tray')) {
-                throw ('Desktop mode exposed the management canvas instead of keeping it hidden: ' +
-                    $window)
-            }
-            if ($desktopMode) {
-                # The management form starts hidden in card mode, so its
-                # before_show resize hook intentionally has not run yet.
-                $launch.resize = 'skipped:hidden-management'
-            } else {
-                $launch.resize = [PoyiWindowProbe]::ResizeContract(
-                    [uint32]$windowProcessId, $layout.AppName)
-                if (-not $launch.resize.StartsWith('passed:')) {
-                    throw "The frameless resize contract failed: $($launch.resize)."
-                }
+            $launch.resize = [PoyiWindowProbe]::ResizeContract(
+                [uint32]$windowProcessId, $layout.AppName)
+            if (-not $launch.resize.StartsWith('passed:')) {
+                throw "The frameless resize contract failed: $($launch.resize)."
             }
         } finally {
             if ($launch.mode -eq 'launched-and-stopped') {

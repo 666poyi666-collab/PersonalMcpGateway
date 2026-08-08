@@ -219,7 +219,9 @@ class GatewayClient:
     """Polls the local admin API and remembers the last good snapshot."""
 
     base_url: str = field(default_factory=admin_base_url)
-    timeout: float = 4.0
+    # Network I/O runs only on the poll worker. This leaves modest headroom over
+    # the dashboard's 3s cold-provider budget without blocking the UI bridge.
+    timeout: float = 5.0
     cache_path: Path | None = None
     clock: Callable[[], float] = time.monotonic
     _failures: int = field(default=0, init=False)
