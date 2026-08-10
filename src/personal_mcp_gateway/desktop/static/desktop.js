@@ -63,6 +63,10 @@ const dom = {
   cardSwitches: el("cardSwitches"),
   btnShowAllCards: el("btnShowAllCards"),
   btnHideAllCards: el("btnHideAllCards"),
+  managerLocalState: el("managerLocalState"),
+  managerLocalHint: el("managerLocalHint"),
+  managerBusinessState: el("managerBusinessState"),
+  managerBusinessHint: el("managerBusinessHint"),
   viewClock: el("viewClock"),
   overviewRail: el("overviewRail"),
   matrixHeading: el("matrixHeading"),
@@ -114,10 +118,11 @@ const PROJECT_STYLE = {
 };
 const SECTION_ORDER = ["foxlink", "watch", "journal", "personal", "bzsjk"];
 const CARD_WIDGET_IDS = {
+  personal: new Set(["personal_system", "personal_sync"]),
   foxlink: new Set(["focus_current", "focus_today"]),
   watch: new Set(["watch_workouts", "watch_sleep", "watch_current_plan", "watch_status"]),
   journal: new Set(["journal_recent", "journal_count"]),
-  bzsjk: new Set(["projects", "focus_today"]),
+  bzsjk: new Set(["bzsjk_project"]),
 };
 const VOLATILE_RENDER_FIELDS = new Set([
   "generatedAt",
@@ -157,6 +162,13 @@ const TILE_SIZE_PRESETS = {
   small: { width: 0.28, height: 0.34 },
   medium: { width: 0.46, height: 0.5 },
   large: { width: 0.7, height: 0.68 },
+};
+const CARD_BASE_SIZES = {
+  foxlink: { width: 320, height: 270 },
+  watch: { width: 430, height: 310 },
+  journal: { width: 360, height: 310 },
+  personal: { width: 650, height: 410 },
+  bzsjk: { width: 360, height: 330 },
 };
 const OFFLINE_MATRIX_TARGETS = SECTION_ORDER.map((id) => {
   const style = PROJECT_STYLE[id];
@@ -661,9 +673,11 @@ function cardRenderProjection(data, cardId) {
   const target = targets.find((item) => item.id === cardId) || null;
   if (cardId === "personal") {
     const gateway = data.gateway || {};
+    const ids = CARD_WIDGET_IDS.personal;
     return {
       target,
       targets,
+      widgets: widgets.filter((widget) => ids.has(widget.id)),
       summary: data.summary,
       gateway: { state: gateway.state, version: gateway.version },
       fleet: data.fleet,
@@ -756,22 +770,18 @@ function render(payload) {
   const online = num(summary.online);
   const total = num(summary.total);
   const widgets = Array.isArray(data.widgets) ? data.widgets : [];
-  const watchTarget = Array.isArray(data.targets)
-    ? data.targets.find((target) => target.id === "watch")
-    : null;
-  const watchNeedsAttention = Boolean(
-    payload.status === "online"
-    && watchTarget
-    && projectDisplayState(watchTarget, widgets) === "offline",
-  );
-  const visibleStatus = watchNeedsAttention ? "degraded" : payload.status;
+  const businessAttention = businessAttentionItems(data, widgets);
+  renderManagementScopes(data, widgets, businessAttention);
+  const visibleStatus = payload.status === "online" && businessAttention.length
+    ? "degraded"
+    : payload.status;
 
   setStatusChrome(
     visibleStatus,
     `${online}/${total}`,
     recoveryVisible
       ? "正在恢复连接"
-      : watchNeedsAttention ? "步序设备未连接" : (payload.statusLabel || ""),
+      : businessAttention[0] || (payload.statusLabel || ""),
   );
   if (recoveryVisible) setRenderText(dom.sbState, "正在恢复连接");
   setRenderText(dom.sbSync, `更新于 ${clockOf(data.generatedAt || payload.fetchedAt)}`);
@@ -786,7 +796,7 @@ function render(payload) {
 
   if (!layoutMode) renderSections(data);
   if (CARD_ID) return;
-  renderStrip(payload, online, total, gateway, summary, data, watchNeedsAttention);
+  renderStrip(payload, online, total, gateway, summary, data, businessAttention);
   renderChart(data.activity && Array.isArray(data.activity.hourly) ? data.activity.hourly : []);
   renderEvents(data);
 }
@@ -817,7 +827,7 @@ function renderGuard(fleet) {
   }
 }
 
-function renderStrip(payload, online, total, gateway, summary, data, watchNeedsAttention) {
+function renderStrip(payload, online, total, gateway, summary, data, businessAttention) {
   setRenderText(dom.heroValue, `${online}/${total}`);
   const titles = {
     online: "所有系统正常运行",
@@ -826,8 +836,10 @@ function renderStrip(payload, online, total, gateway, summary, data, watchNeedsA
   };
   setRenderText(
     dom.heroTitle,
-    watchNeedsAttention
-      ? "本机服务正常，步序设备未连接"
+    payload.status === "online" && businessAttention.length
+      ? businessAttention.length === 1
+        ? `本机服务正常，${businessAttention[0]}`
+        : `本机服务正常，${businessAttention.length} 项数据需注意`
       : (titles[payload.status] || "状态未知"),
   );
   setRenderText(dom.tileCalls, compact(summary.calls24h));
@@ -1326,11 +1338,15 @@ function journalConsole(widgets) {
 }
 
 function bzsjkTargetFromWidgets(widgets) {
-  const projects = widgets.find((item) => item.id === "projects");
-  const items = projects && projects.ok && projects.data && Array.isArray(projects.data.items)
-    ? projects.data.items
-    : [];
-  const projectItem = items.find((item) => String(item.title || "").trim() === "不做手机控");
+  const dedicated = widgets.find((item) => item.id === "bzsjk_project");
+  const legacy = widgets.find((item) => item.id === "projects");
+  const items = [dedicated, legacy].flatMap((widget) => (
+    widget && widget.ok && widget.data && Array.isArray(widget.data.items)
+      ? widget.data.items
+      : []
+  ));
+  const projectItem = items.find((item) => item.repoId === "bzsjk")
+    || items.find((item) => String(item.title || "").trim() === "不做手机控");
   return {
     id: "bzsjk",
     name: "不做手机控",
@@ -1380,6 +1396,244 @@ function bzsjkConsole(target, widgets) {
   return console;
 }
 
+function cardPrimary(label, value, note = "", state = "online") {
+  const primary = make("section", "card-primary");
+  primary.dataset.status = state;
+  const displayValue = value == null || value === "" ? "状态未知" : value;
+  primary.append(make("span", null, label), make("strong", null, displayValue));
+  if (note) primary.append(make("small", null, note));
+  return primary;
+}
+
+function cardMetric(label, value, note = "") {
+  const metric = make("div", "card-metric");
+  const displayValue = value == null || value === "" ? "暂无数据" : value;
+  metric.append(make("span", null, label), make("strong", null, displayValue));
+  if (note) metric.append(make("small", null, note));
+  return metric;
+}
+
+function cardSupport(...metrics) {
+  const support = make("section", "card-support");
+  support.append(...metrics);
+  return support;
+}
+
+function cardDetails(title, rows) {
+  const details = make("section", "card-details");
+  details.append(make("header", null, title));
+  const list = make("div", "card-detail-list");
+  for (const [label, value, state = ""] of rows) {
+    const row = make("div", "card-detail-row");
+    if (state) row.dataset.status = state;
+    const displayValue = value == null || value === "" ? "暂无信息" : value;
+    row.append(make("span", null, label), make("strong", null, displayValue));
+    list.append(row);
+  }
+  details.append(list);
+  return details;
+}
+
+function gatewayConsoleV3(target, data, widgets) {
+  const summary = data.summary || {};
+  const fleet = data.fleet || {};
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const system = widgets.find((widget) => widget.id === "personal_system");
+  const sync = widgets.find((widget) => widget.id === "personal_sync");
+  const systemData = system && system.ok && system.data ? system.data : null;
+  const syncData = sync && sync.ok && sync.data ? sync.data : null;
+  const localServiceCount = targets.filter((item) => item.mcp && item.mcp.ok).length;
+  const totalServices = targets.length;
+  const state = totalServices === 0
+    ? "offline"
+    : localServiceCount === totalServices
+    ? "online"
+    : localServiceCount > 0 ? "degraded" : "offline";
+  const stateText = totalServices === 0
+    ? "尚未发现本机服务"
+    : state === "online" ? "本机服务正常" : state === "degraded" ? "部分服务需注意" : "有服务未运行";
+  const serviceSummary = totalServices === 0
+    ? "尚未读取到服务清单"
+    : `${localServiceCount}/${totalServices} 个服务运行正常`;
+  const guardRunning = Boolean(fleet.watchdog && fleet.watchdog.state === "running");
+  const console = make("div", "gateway-console card-console");
+  console.dataset.dataState = state;
+  console.setAttribute("aria-label", "本机服务状态");
+  console.append(
+    cardPrimary("本机服务", stateText, serviceSummary, state),
+    cardSupport(
+      cardMetric("自动恢复", guardRunning ? "正常" : "需检查", guardRunning ? "持续看护中" : "暂未运行"),
+      cardMetric("24 小时使用", `${compact(summary.calls24h)} 次`, `${compact(summary.failures24h)} 次未成功`),
+      cardMetric("成功率", `${num(summary.successRate, 100).toFixed(1)}%`, "过去 24 小时"),
+    ),
+  );
+  const serviceRows = targets.map((item) => {
+    const style = PROJECT_STYLE[item.id] || {};
+    const serviceOk = Boolean(item.mcp && item.mcp.ok);
+    return [style.display || item.name || item.id, serviceOk ? "运行正常" : "未运行", serviceOk ? "online" : "offline"];
+  });
+  serviceRows.push(["自动恢复", guardRunning ? "运行正常" : "需检查", guardRunning ? "online" : "offline"]);
+  if (systemData) {
+    serviceRows.push([
+      "控制中心",
+      systemData.gatewayState === "online" ? "运行正常" : "正在启动",
+      systemData.gatewayState === "online" ? "online" : "degraded",
+    ]);
+  }
+  if (syncData) {
+    const productCount = num(syncData.productCount);
+    const freshCount = num(syncData.freshCount);
+    const syncCurrent = productCount > 0 && freshCount === productCount;
+    serviceRows.push([
+      "数据连接",
+      productCount ? `${freshCount}/${productCount} 项已确认` : "暂无连接数据",
+      syncCurrent ? "online" : "degraded",
+    ]);
+  }
+  console.append(cardDetails("各项本机服务", serviceRows));
+  return console;
+}
+
+function watchConsoleV3(target, widgets) {
+  const workouts = widgets.find((widget) => widget.id === "watch_workouts");
+  const sleep = widgets.find((widget) => widget.id === "watch_sleep");
+  const currentPlan = widgets.find((widget) => widget.id === "watch_current_plan");
+  const status = widgets.find((widget) => widget.id === "watch_status");
+  const workoutPairs = widgetPairs(workouts);
+  const sleepPairs = widgetPairs(sleep);
+  const planPairs = widgetPairs(currentPlan);
+  const statusUnavailable = Boolean(status && (
+    status.ok === false
+    || status.availability === "unavailable"
+    || (status.data && status.data.availability === "unavailable")
+  ));
+  const watchOnline = statusUnavailable
+    ? false
+    : status && status.ok && status.data
+      ? status.data.watchOnline !== false
+      : target.state === "online";
+  const plan = planPairs.get("当前计划") || "暂无训练计划";
+  const primaryValue = watchOnline ? plan : "设备未连接";
+  const primaryNote = watchOnline ? "当前训练安排" : "请检查手机或手表连接";
+  const state = watchOnline ? "online" : "offline";
+  const console = make("div", "watch-console card-console");
+  console.dataset.dataState = state;
+  console.setAttribute("aria-label", "步序运动与睡眠数据");
+  console.append(cardPrimary(watchOnline ? "当前计划" : "连接状态", primaryValue, primaryNote, state));
+  if (!watchOnline) {
+    console.append(
+      cardSupport(
+        cardMetric("本机服务", target.mcp && target.mcp.ok ? "运行正常" : "需检查"),
+        cardMetric("设备数据", "等待连接", "后台会自动重试"),
+      ),
+      cardDetails("恢复连接", [
+        ["当前情况", "手机或手表未连接", "offline"],
+        ["本机服务", target.mcp && target.mcp.ok ? "运行正常" : "需检查", target.mcp && target.mcp.ok ? "online" : "offline"],
+        ["恢复方式", "打开手机端并检查手表连接"],
+      ]),
+    );
+    return console;
+  }
+  console.append(
+    cardSupport(
+      cardMetric(
+        "累计距离",
+        workoutPairs.get("总距离") || "暂无训练记录",
+        workoutPairs.get("训练次数") ? `${workoutPairs.get("训练次数")} 次训练` : "暂无训练次数",
+      ),
+      cardMetric("睡眠评分", sleepPairs.get("睡眠评分") || "等待睡眠数据", sleepPairs.get("睡眠时长") || "等待更新"),
+    ),
+    cardDetails("训练与恢复", [
+      ["活动时长", workoutPairs.get("累计活动") || "暂无活动记录"],
+      ["平均心率", workoutPairs.get("平均心率") || "暂无心率记录"],
+      ["睡眠时长", sleepPairs.get("睡眠时长") || "等待睡眠数据"],
+      ["心率区间", sleepPairs.get("心率区间") || "暂无心率区间"],
+    ]),
+  );
+  return console;
+}
+
+function focusConsoleV3(widgets) {
+  const current = widgets.find((item) => item.id === "focus_current");
+  const today = widgets.find((item) => item.id === "focus_today");
+  const ready = Boolean(current && current.ok && current.data && current.availability !== "unavailable");
+  const todayReady = Boolean(today && today.ok && today.data);
+  const state = ready ? String(current.data.sessionState || "idle") : "offline";
+  const stateLabel = { running: "正在专注", paused: "专注已暂停", idle: "当前空闲", stopped: "当前空闲" }[state] || "等待数据";
+  const value = ready && current.data.value ? String(current.data.value) : "暂时不可用";
+  const task = ready && (current.data.taskTitle || current.data.label)
+    ? String(current.data.taskTitle || current.data.label)
+    : "等待当前任务";
+  const activeMinutes = ready ? num(current.data.activeMinutes) : 0;
+  const todayLabel = todayReady && today.data.isToday === false
+    ? `截至 ${today.data.sourceDate || "旧数据"}`
+    : "今日累计";
+  const console = make("div", "focus-console card-console");
+  console.dataset.dataState = ready ? "online" : "offline";
+  console.setAttribute("aria-label", "FocusLink 专注状态");
+  console.append(
+    cardPrimary("当前专注", value, stateLabel, ready ? "online" : "offline"),
+    cardSupport(
+      cardMetric("本次已专注", activeMinutes ? `${activeMinutes} 分钟` : "0 分钟", task),
+      cardMetric(todayLabel, todayReady && today.data.value ? String(today.data.value) : "今日数据等待更新"),
+    ),
+    cardDetails("本次专注", [
+      ["状态", stateLabel],
+      ["任务", task],
+      ["提示", ready && current.data.note ? String(current.data.note) : "恢复后会自动更新"],
+    ]),
+  );
+  return console;
+}
+
+function journalConsoleV3(widgets) {
+  const recent = widgets.find((item) => item.id === "journal_recent");
+  const count = widgets.find((item) => item.id === "journal_count");
+  const ready = Boolean(recent && recent.ok && recent.data);
+  const items = ready && Array.isArray(recent.data.items) ? recent.data.items.slice(0, 4) : [];
+  const total = count && count.ok && count.data && count.data.value != null ? String(count.data.value) : "暂无统计";
+  const todayWritten = Boolean(ready && recent.data.todayWritten);
+  const latest = items[0];
+  const console = make("div", "journal-console card-console");
+  console.dataset.dataState = ready ? "online" : "offline";
+  console.setAttribute("aria-label", "拾光日记状态");
+  console.append(
+    cardPrimary("今日日记", ready ? (todayWritten ? "已经写过" : "还没有写") : "暂时不可用", ready ? "今天的记录状态" : "恢复后会自动更新", ready ? "online" : "offline"),
+    cardSupport(
+      cardMetric("日记总数", total),
+      cardMetric("最近一篇", latest ? String(latest.value || latest.subtitle || "已记录") : "暂无记录", latest ? String(latest.title || "未命名记录") : ""),
+    ),
+    cardDetails("最近记录", items.length
+      ? items.map((item) => [String(item.value || "日期未记录"), String(item.title || "未命名记录")])
+      : [["记录", ready ? "还没有日记" : "等待数据"]]),
+  );
+  return console;
+}
+
+function bzsjkConsoleV3(target) {
+  const item = target.projectItem || {};
+  const rawStatus = String(item.value || "等待本机数据");
+  const status = rawStatus === "工作区干净"
+    ? "状态正常"
+    : rawStatus.includes("未提交") ? "有待整理的更新" : rawStatus;
+  const console = make("div", "bz-console card-console");
+  console.dataset.dataState = "local";
+  console.setAttribute("aria-label", "不做手机控本地监督状态");
+  console.append(
+    cardPrimary("项目状态", status, "来自本机 Git 工作区", "local"),
+    cardSupport(
+      cardMetric("工作区", rawStatus),
+      cardMetric("当前分支", String(item.branch || "未读取")),
+    ),
+    cardDetails("本地项目", [
+      ["最近提交", item.lastCommitAt ? dateTimeOf(item.lastCommitAt) : "未读取"],
+      ["数据来源", "本机 Git 只读"],
+      ["提交说明", String(item.subtitle || "暂无提交信息")],
+    ]),
+  );
+  return console;
+}
+
 function projectCore(target, widgets, data) {
   const core = make("div", "proj-core");
   let label = "当前状态";
@@ -1418,6 +1672,18 @@ function projectCore(target, widgets, data) {
 }
 
 function projectDisplayState(target, widgets) {
+  if (target.id === "bzsjk") return "local";
+  if (target.id === "personal") return target.mcp && target.mcp.ok ? "online" : "offline";
+  if (target.id === "foxlink") {
+    const current = widgets.find((widget) => widget.id === "focus_current");
+    if (current && current.ok && current.availability !== "unavailable") return "online";
+    return target.state === "offline" ? "offline" : "degraded";
+  }
+  if (target.id === "journal") {
+    const recent = widgets.find((widget) => widget.id === "journal_recent");
+    if (recent && recent.ok && recent.data) return "online";
+    return target.state === "offline" ? "offline" : "degraded";
+  }
   if (target.id !== "watch") return target.state || "offline";
   const status = widgets.find((widget) => widget.id === "watch_status");
   const unavailable = Boolean(status && (
@@ -1435,19 +1701,19 @@ function sectionDataCards(target, widgets, data) {
   const style = PROJECT_STYLE[target.id];
   const cards = [];
   if (target.id === "personal") {
-    return [gatewayConsole(target, data)];
+    return [gatewayConsoleV3(target, data, widgets)];
   }
   if (target.id === "watch") {
-    return [watchConsole(target, widgets)];
+    return [watchConsoleV3(target, widgets)];
   }
   if (target.id === "foxlink") {
-    return [focusConsole(widgets)];
+    return [focusConsoleV3(widgets)];
   }
   if (target.id === "journal") {
-    return [journalConsole(widgets)];
+    return [journalConsoleV3(widgets)];
   }
   if (target.id === "bzsjk") {
-    return [bzsjkConsole(target, widgets)];
+    return [bzsjkConsoleV3(target)];
   }
   const mine = widgets.filter((w) => style.groups.includes(w.group || ""));
   for (const widget of mine) {
@@ -1499,15 +1765,16 @@ function sectionTail(target, data) {
 function projectSectionSignature(target, index, widgets, data) {
   const style = PROJECT_STYLE[target.id] || { groups: [] };
   const widgetIds = {
+    personal: new Set(["personal_system", "personal_sync"]),
     foxlink: new Set(["focus_current", "focus_today"]),
     watch: new Set(["watch_workouts", "watch_sleep", "watch_current_plan", "watch_status"]),
     journal: new Set(["journal_recent", "journal_count"]),
-    bzsjk: new Set(["projects", "focus_today"]),
+    bzsjk: new Set(["bzsjk_project"]),
   };
   const ids = widgetIds[target.id] || new Set();
-  const relevantWidgets = target.id === "personal"
-    ? []
-    : widgets.filter((widget) => ids.has(widget.id) || style.groups.includes(widget.group || ""));
+  const relevantWidgets = widgets.filter(
+    (widget) => ids.has(widget.id) || style.groups.includes(widget.group || ""),
+  );
   const targetEvents = Array.isArray(data.events)
     ? data.events.filter((event) => event.target === target.id)
     : [];
@@ -1979,6 +2246,79 @@ function renderExtensionWidgets(widgets) {
 
 /* ---------- view state ---------- */
 
+function businessAttentionItems(data, widgets) {
+  const issues = [];
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const watchTarget = targets.find((target) => target.id === "watch");
+  if (watchTarget && projectDisplayState(watchTarget, widgets) === "offline") {
+    issues.push("步序设备未连接");
+  }
+
+  const currentFocus = widgets.find((widget) => widget.id === "focus_current");
+  const todayFocus = widgets.find((widget) => widget.id === "focus_today");
+  if (!currentFocus || !currentFocus.ok || currentFocus.availability === "unavailable") {
+    issues.push("专注数据等待更新");
+  } else if (!todayFocus || !todayFocus.ok) {
+    issues.push("今日专注等待更新");
+  } else if (todayFocus.data && todayFocus.data.isToday === false) {
+    issues.push(`今日专注截至 ${todayFocus.data.sourceDate || "旧数据"}`);
+  }
+
+  const journal = widgets.find((widget) => widget.id === "journal_recent");
+  if (!journal || !journal.ok || journal.availability === "unavailable") {
+    issues.push("日记数据等待更新");
+  }
+
+  const personalSync = widgets.find((widget) => widget.id === "personal_sync");
+  if (personalSync && (!personalSync.ok || personalSync.availability === "unavailable")) {
+    issues.push("数据连接等待更新");
+  } else if (personalSync && personalSync.data) {
+    const productCount = num(personalSync.data.productCount);
+    const freshCount = num(personalSync.data.freshCount);
+    if (personalSync.data.freshness === "stale" || (productCount > 0 && freshCount < productCount)) {
+      issues.push("数据连接有待确认");
+    }
+  }
+
+  const localProject = widgets.find((widget) => widget.id === "bzsjk_project");
+  if (localProject && !localProject.ok) issues.push("本地项目状态等待更新");
+  return issues;
+}
+
+function renderManagementScopes(data, widgets, businessAttention = businessAttentionItems(data, widgets)) {
+  if (!dom.managerLocalState || !dom.managerBusinessState) return;
+  const summary = data.summary || {};
+  const fleet = data.fleet || {};
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const total = targets.length;
+  const online = targets.filter((target) => target.mcp && target.mcp.ok).length;
+  const localHealthy = total > 0 && online === total;
+  const guardRunning = Boolean(fleet.watchdog && fleet.watchdog.state === "running");
+  const localState = localHealthy && guardRunning ? "online" : localHealthy ? "degraded" : "offline";
+  dom.managerLocalState.parentElement.dataset.status = localState;
+  setRenderText(
+    dom.managerLocalState,
+    localState === "online" ? "本机服务正常" : localState === "degraded" ? "服务正常，自动恢复需检查" : "有本机服务需处理",
+  );
+  setRenderText(
+    dom.managerLocalHint,
+    `${online}/${total} 个项目服务可用 · 自动恢复${guardRunning ? "正常" : "需检查"}`,
+  );
+
+  const businessState = businessAttention.length ? "degraded" : "online";
+  dom.managerBusinessState.parentElement.dataset.status = businessState;
+  setRenderText(
+    dom.managerBusinessState,
+    businessAttention.length ? `${businessAttention.length} 项数据需注意` : "业务数据已更新",
+  );
+  setRenderText(
+    dom.managerBusinessHint,
+    businessAttention.length
+      ? businessAttention.slice(0, 3).join(" · ")
+      : "专注、设备、日记和本地项目均可读取",
+  );
+}
+
 function renderCardVisibility(visibility, visibleCardCount) {
   const total = SECTION_ORDER.length;
   const visible = Math.max(0, Math.min(total, visibleCardCount));
@@ -2135,20 +2475,34 @@ function rectOfTile(tile) {
   };
 }
 
+function contentClassForTile(projectId, width, height) {
+  const base = CARD_ID ? CARD_BASE_SIZES[projectId] : null;
+  if (base) {
+    const scale = Math.min(width / base.width, height / base.height);
+    if (scale < 0.84) return "small";
+    if (scale < 1.18) return "medium";
+    return "large";
+  }
+  const area = width * height;
+  if (width < 260 || height < 190 || area < 60000) return "small";
+  if (width < 500 || height < 310 || area < 180000) return "medium";
+  return "large";
+}
+
 function setTileDensity(tile, width, height) {
   const area = width * height;
-  const summaryOnly = (width < 185 && height < 165)
-    || (projectViewportWidth < 500 && height < 165 && width < 450)
-    || area < 24000;
+  const contentClass = contentClassForTile(tile.dataset.projectId, width, height);
+  const summaryOnly = contentClass === "small";
   const micro = (width < 145 && height < 125) || area < 15500;
   const widthClass = width < 280 ? "small" : width < 480 ? "medium" : "large";
   const heightClass = height < 150 ? "short" : height < 225 ? "medium" : "tall";
   const narrow = width < 390;
-  const densityKey = `${widthClass}:${heightClass}:${narrow ? 1 : 0}:${summaryOnly ? 1 : 0}:${micro ? 1 : 0}`;
+  const densityKey = `${contentClass}:${widthClass}:${heightClass}:${narrow ? 1 : 0}:${micro ? 1 : 0}`;
   const densityChanged = Boolean(tile.dataset.densityKey && tile.dataset.densityKey !== densityKey);
   tile.dataset.densityKey = densityKey;
   tile.dataset.widthClass = widthClass;
   tile.dataset.heightClass = heightClass;
+  tile.dataset.contentClass = contentClass;
   tile.classList.toggle("tile-narrow", narrow);
   tile.classList.toggle("tile-summary", summaryOnly);
   tile.classList.toggle("tile-tiny", summaryOnly);

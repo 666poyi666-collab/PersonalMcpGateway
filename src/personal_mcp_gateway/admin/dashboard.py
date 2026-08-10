@@ -904,6 +904,7 @@ class DashboardMonitor:
         states = [str(target["state"]) for target in target_states]
         self._record_state_changes(target_states)
         return {
+            "dataContractVersion": 2,
             "generatedAt": generated_at.isoformat(),
             "refreshIntervalSeconds": 4,
             "probeDurationMs": round((time.perf_counter() - probe_started) * 1000),

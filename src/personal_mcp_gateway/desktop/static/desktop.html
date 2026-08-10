@@ -69,12 +69,24 @@
               <button type="button" id="btnHideAllCards">全部隐藏</button>
             </div>
           </header>
+          <div class="manager-scopes" aria-label="状态范围说明">
+            <div class="manager-scope manager-scope-local">
+              <span>本机服务</span>
+              <strong id="managerLocalState">正在检查</strong>
+              <small id="managerLocalHint">这里显示程序和自动恢复是否正常</small>
+            </div>
+            <div class="manager-scope manager-scope-business">
+              <span>设备与业务数据</span>
+              <strong id="managerBusinessState">正在读取</strong>
+              <small id="managerBusinessHint">这里显示专注、手表、日记等实际数据</small>
+            </div>
+          </div>
           <div class="card-switches" id="cardSwitches" aria-label="逐张开关桌面卡片">
-            <button type="button" class="card-switch" data-card-toggle="foxlink" aria-pressed="false"><span>FocusLink</span><b>隐藏</b></button>
-            <button type="button" class="card-switch" data-card-toggle="watch" aria-pressed="false"><span>步序</span><b>隐藏</b></button>
-            <button type="button" class="card-switch" data-card-toggle="journal" aria-pressed="false"><span>拾光日记</span><b>隐藏</b></button>
-            <button type="button" class="card-switch" data-card-toggle="personal" aria-pressed="false"><span>服务中心</span><b>隐藏</b></button>
-            <button type="button" class="card-switch" data-card-toggle="bzsjk" aria-pressed="false"><span>不做手机控</span><b>隐藏</b></button>
+            <button type="button" class="card-switch" data-card-toggle="personal" data-scope="local" aria-pressed="false"><span><strong>服务中心</strong><small>本机服务</small></span><b>隐藏</b></button>
+            <button type="button" class="card-switch" data-card-toggle="foxlink" data-scope="business" aria-pressed="false"><span><strong>FocusLink</strong><small>专注计时</small></span><b>隐藏</b></button>
+            <button type="button" class="card-switch" data-card-toggle="watch" data-scope="device" aria-pressed="false"><span><strong>步序</strong><small>运动与睡眠</small></span><b>隐藏</b></button>
+            <button type="button" class="card-switch" data-card-toggle="journal" data-scope="business" aria-pressed="false"><span><strong>拾光日记</strong><small>今日记录</small></span><b>隐藏</b></button>
+            <button type="button" class="card-switch" data-card-toggle="bzsjk" data-scope="business" aria-pressed="false"><span><strong>不做手机控</strong><small>本地监督</small></span><b>隐藏</b></button>
           </div>
         </section>
         <section class="overview-rail" id="overviewRail" aria-label="全局运行状态">

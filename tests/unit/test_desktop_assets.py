@@ -278,6 +278,11 @@ def test_polling_is_single_flight_and_volatile_diagnostics_do_not_rebuild_cards(
     assert "generatedAt" not in key_function
     assert "latencyMs" not in key_function
     assert "function cardRenderProjection" in script
+    personal_projection = script.split('if (cardId === "personal") {', 1)[1].split("\n  }", 1)[0]
+    assert "const ids = CARD_WIDGET_IDS.personal;" in personal_projection
+    assert "widgets: widgets.filter((widget) => ids.has(widget.id))" in personal_projection
+    card_widget_ids = script.split("const CARD_WIDGET_IDS", 1)[1].split("};", 1)[0]
+    assert 'personal: new Set(["personal_system", "personal_sync"])' in card_widget_ids
     assert "if (CARD_ID) return;" in script
     assert "function schedulePoll(" in script
     assert 'document.addEventListener("visibilitychange"' in script
@@ -389,6 +394,126 @@ def test_project_cards_prioritize_live_state_and_mark_stale_snapshots() -> None:
     assert "旧数据 · 更新于" in script
     assert 'make("div", "card-stale-note"' in script
     assert "body.card-window .proj > .card-stale-note" in style
+
+
+def test_card_content_density_uses_each_native_card_as_its_own_scale() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    expected_bases = {
+        "foxlink": (320, 270),
+        "watch": (430, 310),
+        "journal": (360, 310),
+        "personal": (650, 410),
+        "bzsjk": (360, 330),
+    }
+    for project_id, (width, height) in expected_bases.items():
+        assert f"{project_id}: {{ width: {width}, height: {height} }}" in script
+
+    assert "function contentClassForTile(projectId, width, height)" in script
+    assert 'if (scale < 0.84) return "small";' in script
+    assert 'if (scale < 1.18) return "medium";' in script
+    assert 'return "large";' in script
+    assert "tile.dataset.contentClass = contentClass;" in script
+    for density in ("small", "medium", "large"):
+        assert f'.proj[data-content-class="{density}"]' in style
+
+
+def test_small_medium_and_large_cards_have_an_explicit_content_priority() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    for helper in ("cardPrimary", "cardMetric", "cardSupport", "cardDetails"):
+        assert f"function {helper}(" in script
+    assert '.proj[data-content-class="small"] .card-support' in style
+    assert '.proj[data-content-class="small"] .card-details { display: none; }' in style
+    assert '.proj[data-content-class="medium"] .card-details { display: none; }' in style
+    assert '.proj[data-content-class="medium"] .card-metric:nth-child(n+3)' in style
+    assert '.proj[data-content-class="large"] .card-primary > strong' in style
+    assert "grid-template-rows: minmax(0, 1fr);" in style
+    assert "overflow-wrap: anywhere;" in style
+
+
+def test_each_card_v3_reads_its_real_business_widgets_in_plain_language() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+
+    contracts = (
+        ("gatewayConsoleV3", '"本机服务"', '"自动恢复"'),
+        ("watchConsoleV3", '"当前计划"', '"累计距离"'),
+        ("focusConsoleV3", '"当前专注"', '"今日累计"'),
+        ("journalConsoleV3", '"今日日记"', '"最近记录"'),
+        ("bzsjkConsoleV3", '"项目状态"', '"本机 Git 只读"'),
+    )
+    for function_name, primary, detail in contracts:
+        assert f"function {function_name}(" in script
+        block = script.split(f"function {function_name}(", 1)[1].split("\n}", 1)[0]
+        assert primary in block
+        assert detail in block
+        assert "cardPrimary(" in block
+        assert "cardSupport(" in block
+        assert "cardDetails(" in block
+        for technical_label in ('"端口', '"检查耗时', '"安全连接', '"BLE'):
+            assert technical_label not in block
+
+    assert "return [gatewayConsoleV3(target, data, widgets)];" in script
+    assert "return [watchConsoleV3(target, widgets)];" in script
+    assert "return [focusConsoleV3(widgets)];" in script
+    assert "return [journalConsoleV3(widgets)];" in script
+    assert "return [bzsjkConsoleV3(target)];" in script
+    bzsjk_block = script.split("function bzsjkConsoleV3(", 1)[1].split("\n}", 1)[0]
+    assert "focus_today" not in bzsjk_block
+    assert 'item.branch || "未读取"' in bzsjk_block
+    assert 'new Set(["personal_system", "personal_sync"])' in script
+    assert 'new Set(["bzsjk_project"])' in script
+
+
+def test_card_v3_empty_states_are_plain_language_without_dash_placeholders() -> None:
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    v3 = script.split("function cardPrimary(", 1)[1].split("function projectCore(", 1)[0]
+
+    assert "—" not in v3
+    for message in (
+        "状态未知",
+        "暂无数据",
+        "暂无信息",
+        "尚未发现本机服务",
+        "尚未读取到服务清单",
+        "暂无训练记录",
+        "等待睡眠数据",
+        "今日数据等待更新",
+        "暂无统计",
+        "日期未记录",
+    ):
+        assert message in v3
+    assert "0/0 个服务运行正常" not in v3
+
+
+def test_management_panel_separates_local_health_from_device_and_business_data() -> None:
+    markup = (STATIC_ROOT / "desktop.html").read_text(encoding="utf-8")
+    script = (STATIC_ROOT / "desktop.js").read_text(encoding="utf-8")
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    for node in (
+        "managerLocalState",
+        "managerLocalHint",
+        "managerBusinessState",
+        "managerBusinessHint",
+    ):
+        assert f'id="{node}"' in markup
+    assert "本机服务" in markup
+    assert "设备与业务数据" in markup
+    assert 'data-scope="local"' in markup
+    assert 'data-scope="device"' in markup
+    assert 'data-scope="business"' in markup
+    assert "function businessAttentionItems(data, widgets)" in script
+    assert "function renderManagementScopes(data, widgets, businessAttention" in script
+    assert 'issues.push("步序设备未连接")' in script
+    assert "今日专注截至" in script
+    assert "数据连接有待确认" in script
+    assert "renderManagementScopes(data, widgets, businessAttention);" in script
+    assert ".manager-scopes" in style
+    assert '.manager-scope[data-status="online"]' in style
+    assert '.manager-scope[data-status="offline"]' in style
 
 
 def test_every_status_maps_to_a_distinct_tray_colour() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -136,8 +137,15 @@ widgets:
     assert items[0]["value"] == "1 处未提交"
     assert items[0]["subtitle"].startswith("main · ")
     assert "first commit" in items[0]["subtitle"]
+    assert items[0]["repoId"] == "demo_project"
+    assert items[0]["branch"] == "main"
+    assert items[0]["dirtyCount"] == 1
+    assert items[0]["lastCommitAt"] is not None
     assert items[1]["subtitle"] == "不是 Git 仓库"
+    assert items[1]["branch"] is None
     assert items[2]["subtitle"] == "路径不存在"
+    assert widgets[0]["availability"] == "available"
+    assert widgets[0]["freshness"] == "current"
 
 
 async def test_projects_without_repos_hints_at_the_docs(tmp_path: Path) -> None:
@@ -350,12 +358,168 @@ widgets:
     )
 
     widget = (await build_hub(tmp_path).snapshot())[0]
-    assert widget["ok"] is True
+    assert widget["ok"] is False
     assert widget["kind"] == "text"
+    assert widget["availability"] == "unavailable"
+    assert widget["freshness"] == "unknown"
+    assert widget["errorCode"] == code
     assert expected in widget["data"]["body"]
 
 
+async def test_mcp_timeout_is_a_bounded_unavailable_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def stalled(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        await asyncio.sleep(60)
+        return {}
+
+    monkeypatch.setattr(widget_module, "_MCP_TIMEOUT", 0.001)
+    monkeypatch.setattr(widget_module, "_call_mcp_tool", stalled)
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: watch
+    type: mcp
+    title: 训练汇总
+    options: {url: "http://127.0.0.1:8768/mcp", tool: watch_summarize_workouts}
+""",
+    )
+
+    widget = (await build_hub(tmp_path).snapshot())[0]
+    assert widget["ok"] is False
+    assert widget["availability"] == "unavailable"
+    assert widget["errorCode"] == "PROVIDER_TIMEOUT"
+    assert widget["data"]["state"] == "unavailable"
+
+
+async def test_wrapped_source_error_never_becomes_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unavailable(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        return {"ok": False, "error": {"code": "DATA_NOT_READY", "message": "raw detail"}}
+
+    monkeypatch.setattr(widget_module, "_call_mcp_tool", unavailable)
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: source
+    type: mcp
+    title: 来源
+    options: {url: "http://127.0.0.1:8770/mcp", tool: foxlink_get_status}
+""",
+    )
+
+    widget = (await build_hub(tmp_path).snapshot())[0]
+    assert widget["ok"] is False
+    assert widget["availability"] == "unavailable"
+    assert widget["errorCode"] == "DATA_NOT_READY"
+    assert "raw detail" not in str(widget)
+
+
+async def test_source_date_marks_old_today_summary_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def old_summary(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "data": {
+                "date": "2026-01-01",
+                "sessionCount": 3,
+                "activeElapsedMs": 60_000,
+                "pauseElapsedMs": 0,
+            },
+        }
+
+    monkeypatch.setattr(widget_module, "_call_mcp_tool", old_summary)
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: focus_today
+    type: mcp
+    title: 今日专注
+    options: {url: "http://127.0.0.1:8770/mcp", tool: foxlink_get_today_summary}
+""",
+    )
+
+    widget = (await build_hub(tmp_path).snapshot())[0]
+    assert widget["ok"] is True
+    assert widget["availability"] == "stale"
+    assert widget["freshness"] == "stale"
+    assert widget["data"]["isToday"] is False
+
+
+async def test_personal_overview_is_an_allowed_read_only_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def overview(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "data": {"products": [{"productId": "watch", "freshness": "unknown"}]},
+        }
+
+    monkeypatch.setattr(widget_module, "_call_mcp_tool", overview)
+    write_config(
+        tmp_path,
+        """
+widgets:
+  - id: personal_sync
+    type: mcp
+    title: 数据连接
+    options: {url: "http://127.0.0.1:8760/mcp", tool: personal_cloud_sync_overview}
+""",
+    )
+
+    widget = (await build_hub(tmp_path).snapshot())[0]
+    assert widget["ok"] is True
+    assert widget["availability"] == "stale"
+    assert widget["data"]["productCount"] == 1
+
+
 def test_mcp_presenters_shape_the_real_payloads() -> None:
+    kind, data = _present_mcp_payload(
+        "personal_system_status",
+        {
+            "ok": True,
+            "data": {
+                "gateway": {"state": "online", "version": "1.2.3", "uptimeSeconds": 93},
+                "modules": {
+                    "watch": {"state": "online", "secret": "drop-me"},
+                    "journal": {"state": "offline", "secret": "drop-me"},
+                },
+            },
+        },
+    )
+    assert kind == "stat"
+    assert data["gatewayState"] == "online"
+    assert data["moduleCount"] == 2
+    assert data["onlineModuleCount"] == 1
+    assert data["uptimeSeconds"] == 93
+    assert "drop-me" not in str(data)
+
+    kind, data = _present_mcp_payload(
+        "personal_cloud_sync_overview",
+        {
+            "ok": True,
+            "data": {
+                "products": [
+                    {"productId": "watch", "freshness": "fresh", "private": "drop-me"},
+                    {"productId": "foxlink", "freshness": "blocked"},
+                    {"productId": "journal", "freshness": "unknown"},
+                ]
+            },
+        },
+    )
+    assert kind == "keyvalue"
+    assert data["productCount"] == 3
+    assert data["freshCount"] == 1
+    assert data["blockedCount"] == 1
+    assert data["unknownCount"] == 1
+    assert data["freshness"] == "stale"
+    assert "drop-me" not in str(data)
+
     kind, data = _present_mcp_payload(
         "foxlink_get_current_session",
         {
@@ -379,6 +543,8 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     assert "secret-session-id" not in str(data)
     assert "secret-segment-id" not in str(data)
     assert "secret-task-id" not in str(data)
+    assert data["activeMinutes"] == 65
+    assert data["taskTitle"] == "复习立体几何"
 
     kind, data = _present_mcp_payload(
         "foxlink_get_today_summary",
@@ -396,6 +562,8 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     assert data["value"] == "2 小时 52 分"
     assert "3 次会话" in data["note"]
     assert data["isToday"] is False
+    assert data["freshness"] == "stale"
+    assert data["activeMinutes"] == 172
 
     kind, data = _present_mcp_payload(
         "watch_get_current_plan",
@@ -409,6 +577,8 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     assert kind == "keyvalue"
     pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
     assert pairs == {"当前计划": "减肥 · day1", "阶段数": "2"}
+    assert data["planName"] == "day1"
+    assert data["stageCount"] == 2
     assert "must-not-leak" not in str(data)
 
     kind, data = _present_mcp_payload(
@@ -433,10 +603,11 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     assert kind == "keyvalue"
     pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
     assert pairs["手表"] == "在线"
-    assert pairs["BLE"] == "DISCONNECTED"
-    assert pairs["BLE 原因"] == "gatt_147"
-    assert pairs["LAN 回退"] == "可用"
+    assert pairs["连接方式"] == "自动选择"
+    assert "gatt_147" not in str(data)
     assert data["watchOnline"] is True
+    assert data["phoneState"] == "online"
+    assert data["bleState"] == "disconnected"
     assert "must-not-leak" not in str(data)
     assert "also-secret" not in str(data)
 
@@ -455,6 +626,8 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     assert pairs["训练次数"] == "11"
     assert pairs["总距离"] == "2.67 km"
     assert pairs["最近计划"] == "减肥 · day1"
+    assert data["workoutCount"] == 11
+    assert data["activeMinutes"] == 129
 
     kind, data = _present_mcp_payload(
         "watch_get_latest_sleep",
@@ -471,6 +644,9 @@ def test_mcp_presenters_shape_the_real_payloads() -> None:
     pairs = {pair["label"]: pair["value"] for pair in data["pairs"]}
     assert pairs["睡眠时长"] == "5 小时 15 分"
     assert pairs["心率区间"] == "55-69 bpm"
+    assert data["hasRecord"] is True
+    assert data["totalMinutes"] == 315
+    assert data["sleepScore"] == 69
 
 
 def test_journal_presenter_never_leaks_diary_body_text() -> None:
@@ -496,10 +672,13 @@ def test_journal_presenter_never_leaks_diary_body_text() -> None:
     item = data["items"][0]
     assert item["title"] == "复盘"
     assert item["value"] == today
-    assert item["subtitle"] == "平稳 · 生活"
+    assert item["subtitle"] == "平稳"
+    assert item["mood"] == "平稳"
+    assert item["hasImage"] is False
     assert data["todayWritten"] is True
     assert data["latestEntryDate"] == today
     assert "私密正文" not in str(data)
+    assert "生活" not in str(data)
 
 
 def test_unknown_read_tool_falls_back_to_scalar_keyvalue() -> None:
@@ -514,6 +693,14 @@ def test_unknown_read_tool_falls_back_to_scalar_keyvalue() -> None:
     kind, data = _present_mcp_payload("something_get_odd", {"alpha": 1, "beta": "two"})
     assert kind == "keyvalue"
     assert {pair["label"] for pair in data["pairs"]} == {"alpha", "beta"}
+
+    kind, data = _present_mcp_payload(
+        "something_get_nested",
+        {"private": {"body": "must-not-leak", "deviceId": "also-secret"}},
+    )
+    assert kind == "text"
+    assert "must-not-leak" not in str(data)
+    assert "also-secret" not in str(data)
 
 
 async def test_results_are_cached_until_the_config_changes(

@@ -1,6 +1,26 @@
 # 本机实际部署的看板数据卡（部署到 %ProgramData%\Poyi\PersonalMcpGateway\board-widgets.yaml）。
 # 每张 mcp 卡调用的就是 ChatGPT 用的同一批只读工具；改文件即生效，无需重启。
 widgets:
+  - id: personal_system
+    type: mcp
+    title: 控制中心
+    group: Poyi Control Center
+    flavor: neutral
+    accent: "#2B5C95"
+    options:
+      url: http://127.0.0.1:8760/mcp
+      tool: personal_system_status
+
+  - id: personal_sync
+    type: mcp
+    title: 数据连接
+    group: Poyi Control Center
+    flavor: neutral
+    accent: "#2B5C95"
+    options:
+      url: http://127.0.0.1:8760/mcp
+      tool: personal_cloud_sync_overview
+
   - id: focus_current
     type: mcp
     title: 当前专注
@@ -91,4 +111,14 @@ widgets:
         - C:\开发\mcp开发\journal-cloud-mcp
         - C:\开发\手表开发
         - C:\开发\日记复盘
+        - C:\开发\不做手机控
+
+  - id: bzsjk_project
+    type: projects
+    title: 本地版本
+    group: 不做手机控
+    flavor: neutral
+    accent: "#C63D2F"
+    options:
+      repos:
         - C:\开发\不做手机控

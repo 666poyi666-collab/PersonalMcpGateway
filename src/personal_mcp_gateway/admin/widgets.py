@@ -46,7 +46,9 @@ WIDGET_FLAVORS = frozenset({"neutral", "instrument", "paper", "sport"})
 # The board is observational: an mcp widget may call a tool only when its name
 # carries a read verb. Everything else -- start/stop/set/append and friends --
 # is refused before a connection is even opened.
-_READ_TOOL = re.compile(r"(^|_)(get|list|summarize|search|read|status|health|capabilities)(_|$)")
+_READ_TOOL = re.compile(
+    r"(^|_)(get|list|summarize|search|read|status|health|capabilities|overview)(_|$)"
+)
 
 # How long one widget's result stays good. The dashboard snapshot itself caches
 # for 3 seconds; these only need to keep the slow providers off that hot path.
@@ -55,6 +57,8 @@ _MCP_TOOL_TTL_SECONDS = {
     "foxlink_get_current_session": 4.0,
     "watch_get_status": 4.0,
     "watch_get_current_plan": 15.0,
+    "personal_system_status": 4.0,
+    "personal_cloud_sync_overview": 15.0,
 }
 
 _PROVIDER_TIMEOUT = 4.0
@@ -126,6 +130,21 @@ class BoardConfig(BaseModel):
 def _clip(value: object, limit: int = _CLIP) -> str:
     text = str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _repo_id(path: Path) -> str:
+    name = path.name.casefold()
+    known = {
+        "personalmcpgateway": "personal",
+        "journal-cloud-mcp": "journal_cloud",
+        "手表开发": "watch_app",
+        "日记复盘": "journal_app",
+        "不做手机控": "bzsjk",
+    }
+    if name in known:
+        return known[name]
+    normalized = re.sub(r"[^a-z0-9]+", "_", name).strip("_")
+    return normalized or "project"
 
 
 def _relative_zh(moment: datetime) -> str:
@@ -277,7 +296,14 @@ class WidgetHub:
                 else:
                     payload = await self._provide_remote(config)
         except TimeoutError:
-            payload = self._fail(config, "获取超时")
+            if config.type == "mcp":
+                payload = self._mcp_unavailable(
+                    config,
+                    "数据暂时不可用 · 后台会自动重试",
+                    "PROVIDER_TIMEOUT",
+                )
+            else:
+                payload = self._fail(config, "获取超时")
         except Exception:  # one bad widget must never take the board down
             payload = self._fail(config, "模块运行失败")
         tool = config.options.get("tool") if config.type == "mcp" else None
@@ -290,6 +316,10 @@ class WidgetHub:
             # A disconnected device should stay local to its card and must not
             # start a multi-second retry on every dashboard poll.
             ttl = max(ttl, 15.0)
+        elif config.type == "projects":
+            payload["availability"] = "available"
+            payload["freshness"] = "current"
+            payload["sampledAt"] = datetime.now(UTC).isoformat()
         self._cache[config.id] = (time.monotonic() + ttl, fingerprint, payload)
         return payload
 
@@ -309,6 +339,29 @@ class WidgetHub:
 
     def _fail(self, config: WidgetConfig, message: str) -> dict[str, Any]:
         return {**self._base(config), "kind": "text", "ok": False, "error": message}
+
+    def _mcp_unavailable(
+        self,
+        config: WidgetConfig,
+        message: str,
+        error_code: str,
+    ) -> dict[str, Any]:
+        """Return a truthful business-data failure without raw MCP diagnostics."""
+        return {
+            **self._base(config),
+            "kind": "text",
+            "ok": False,
+            "availability": "unavailable",
+            "freshness": "unknown",
+            "error": message,
+            "errorCode": error_code,
+            "data": {
+                "body": message,
+                "state": "unavailable",
+                "reason": error_code,
+            },
+            "sampledAt": datetime.now(UTC).isoformat(),
+        }
 
     # ---- providers ---------------------------------------------------
     def _provide_text(self, config: WidgetConfig) -> dict[str, Any]:
@@ -379,10 +432,14 @@ class WidgetHub:
 
     def _scan_repo(self, path: Path) -> dict[str, Any]:
         item: dict[str, Any] = {
+            "repoId": _repo_id(path),
             "title": path.name or str(path),
             "subtitle": None,
             "value": None,
             "state": None,
+            "branch": None,
+            "dirtyCount": None,
+            "lastCommitAt": None,
         }
         if not path.is_dir():
             item["subtitle"] = "路径不存在"
@@ -403,6 +460,8 @@ class WidgetHub:
             return item
         dirty = _git(path, "status", "--porcelain")
         changed = len(dirty.splitlines()) if dirty else 0
+        item["branch"] = branch
+        item["dirtyCount"] = changed
         item["value"] = f"{changed} 处未提交" if changed else "工作区干净"
         head = _git(path, "log", "-1", "--format=%ct\t%s")
         if head is None:
@@ -414,6 +473,7 @@ class WidgetHub:
         except (OverflowError, ValueError):
             item["subtitle"] = _clip(f"{branch} · {subject}")
             return item
+        item["lastCommitAt"] = committed.isoformat()
         item["subtitle"] = _clip(f"{branch} · {_relative_zh(committed)} · {subject}")
         return item
 
@@ -439,9 +499,13 @@ class WidgetHub:
         try:
             payload = await _call_mcp_tool(url, tool, args)
         except Exception:
-            return self._fail(config, "MCP 服务无法访问或响应超时")
+            return self._mcp_unavailable(
+                config,
+                "本机数据服务暂时无法访问",
+                "MCP_UNREACHABLE",
+            )
         if payload is None:
-            return self._fail(config, "工具没有返回可解析的数据")
+            return self._mcp_unavailable(config, "数据源没有返回可用摘要", "NO_DATA")
         if payload.get("isError"):
             error = payload.get("error")
             error_dict = cast(dict[str, Any], error) if isinstance(error, dict) else {}
@@ -453,22 +517,18 @@ class WidgetHub:
                 "WATCH_TIMEOUT": "手表响应超时 · 等待连接恢复后自动重试",
             }
             if code in recovery_messages:
-                result = self._ok(
-                    config,
-                    "text",
-                    {
-                        "body": recovery_messages[code],
-                        "availability": "unavailable",
-                        "errorCode": code,
-                    },
-                )
-                result["availability"] = "unavailable"
-                result["sampledAt"] = datetime.now(UTC).isoformat()
-                return result
-            return self._fail(config, "工具执行返回错误")
+                return self._mcp_unavailable(config, recovery_messages[code], code)
+            return self._mcp_unavailable(config, "数据源暂时不可用", code or "TOOL_ERROR")
+        if payload.get("ok") is False:
+            error = payload.get("error")
+            error_dict = cast(dict[str, Any], error) if isinstance(error, dict) else {}
+            code = str(error_dict.get("code") or "SOURCE_UNAVAILABLE")
+            return self._mcp_unavailable(config, "数据源暂时不可用", code)
         kind, data = _present_mcp_payload(tool, payload)
         result = self._ok(config, kind, data)
-        result["availability"] = "available"
+        freshness = str(data.get("freshness") or "current")
+        result["availability"] = "stale" if freshness == "stale" else "available"
+        result["freshness"] = freshness
         result["sampledAt"] = datetime.now(UTC).isoformat()
         return result
 
@@ -600,6 +660,13 @@ def _fmt_epoch_relative(milliseconds: object) -> str | None:
     return _relative_zh(moment)
 
 
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(cast(Any, value)))
+    except (TypeError, ValueError):
+        return default
+
+
 _MOOD_GLYPHS = {1: "低落", 2: "一般", 3: "平稳", 4: "不错", 5: "很好"}
 
 
@@ -612,6 +679,61 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
     never reaches a board that hangs on a wall.
     """
     data = _unwrap_envelope(payload)
+    if tool == "personal_system_status":
+        gateway_raw = data.get("gateway")
+        gateway = cast(dict[str, Any], gateway_raw) if isinstance(gateway_raw, dict) else {}
+        modules_raw = data.get("modules")
+        modules = cast(dict[str, Any], modules_raw) if isinstance(modules_raw, dict) else {}
+        online = 0
+        for module_raw in modules.values():
+            if not isinstance(module_raw, dict):
+                continue
+            module = cast(dict[str, Any], module_raw)
+            if str(module.get("state") or "").lower() == "online":
+                online += 1
+        module_count = len(modules)
+        state = str(gateway.get("state") or "unknown").lower()
+        uptime_seconds = _as_int(gateway.get("uptimeSeconds"))
+        return "stat", {
+            "value": "运行中" if state == "online" else "正在启动",
+            "label": "控制中心",
+            "note": f"已运行 {_fmt_hours(uptime_seconds * 1000)}",
+            "gatewayState": state,
+            "version": str(gateway.get("version") or "") or None,
+            "uptimeSeconds": uptime_seconds,
+            "moduleCount": module_count,
+            "onlineModuleCount": online,
+            "freshness": "current",
+        }
+    if tool == "personal_cloud_sync_overview":
+        products_raw = data.get("products")
+        products = cast(list[Any], products_raw) if isinstance(products_raw, list) else []
+        states: list[str] = []
+        for product_raw in products:
+            if not isinstance(product_raw, dict):
+                continue
+            product = cast(dict[str, Any], product_raw)
+            states.append(str(product.get("freshness") or "unknown"))
+        fresh = states.count("fresh")
+        blocked = states.count("blocked")
+        stale = states.count("stale")
+        unknown = len(states) - fresh - blocked - stale
+        overall = "current" if products and fresh == len(products) else "stale"
+        pairs = [
+            {"label": "已确认", "value": str(fresh)},
+            {"label": "待处理", "value": str(blocked)},
+            {"label": "旧快照", "value": str(stale)},
+            {"label": "待确认", "value": str(unknown)},
+        ]
+        return "keyvalue", {
+            "pairs": pairs,
+            "productCount": len(products),
+            "freshCount": fresh,
+            "blockedCount": blocked,
+            "staleCount": stale,
+            "unknownCount": unknown,
+            "freshness": overall,
+        }
     if tool == "foxlink_get_current_session":
         state = str(data.get("state") or "idle").strip().lower()
         title = str(data.get("currentTaskTitle") or "").strip()
@@ -635,6 +757,11 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
             "label": state_label,
             "note": " · ".join(note_parts) or "等待下一次专注",
             "sessionState": state,
+            "taskTitle": title or None,
+            "taskSource": source or None,
+            "activeMinutes": _as_int(data.get("activeElapsedMs")) // 60000,
+            "pauseMinutes": _as_int(data.get("pauseElapsedMs")) // 60000,
+            "freshness": "current",
         }
     if tool == "foxlink_get_today_summary":
         sessions = data.get("sessionCount", 0)
@@ -651,6 +778,10 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
             "note": note,
             "sourceDate": source_date or None,
             "isToday": is_today,
+            "sessionCount": _as_int(sessions),
+            "activeMinutes": _as_int(data.get("activeElapsedMs")) // 60000,
+            "pauseMinutes": _as_int(data.get("pauseElapsedMs")) // 60000,
+            "freshness": "current" if is_today else "stale",
         }
     if tool == "watch_get_status":
         connection_raw = data.get("connection")
@@ -676,22 +807,27 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
             or "—"
         )
         ble_state = str(link.get("connectionState") or "unknown").upper()
+        transport_label = {
+            "ble": "蓝牙",
+            "lan": "局域网",
+            "multi": "自动选择",
+            "—": "未连接",
+        }.get(transport.lower(), "已连接")
         pairs = [
             {"label": "手机", "value": "在线" if phone_state == "online" else "离线"},
             {"label": "手表", "value": "在线" if watch_state == "online" else "离线"},
-            {"label": "有效通道", "value": _clip(transport, 30)},
-            {"label": "BLE", "value": ble_state},
+            {"label": "连接方式", "value": transport_label},
         ]
-        reason = str(link.get("lastDisconnectReason") or "").strip()
-        if ble_state != "CONNECTED" and reason:
-            pairs.append({"label": "BLE 原因", "value": _clip(reason, 40)})
-        if bool(link.get("lanAvailable")):
-            pairs.append({"label": "LAN 回退", "value": "可用"})
         return "keyvalue", {
             "pairs": pairs,
             "watchOnline": watch_state == "online",
             "phoneOnline": phone_state == "online",
             "bleConnected": ble_state == "CONNECTED",
+            "phoneState": phone_state,
+            "watchState": watch_state,
+            "transport": transport if transport != "—" else None,
+            "bleState": ble_state.lower(),
+            "freshness": "current",
         }
     if tool == "watch_get_current_plan":
         name = str(data.get("name") or "").strip()
@@ -706,7 +842,16 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
         requirement = str(data.get("requirement") or "").strip()
         if requirement:
             pairs.append({"label": "要求", "value": _clip(requirement, 80)})
-        return "keyvalue", {"pairs": pairs, "hasPlan": bool(name or group)}
+        return "keyvalue", {
+            "pairs": pairs,
+            "hasPlan": bool(name or group),
+            "planName": name or None,
+            "planGroup": group or None,
+            "planLabel": label,
+            "stageCount": len(stages),
+            "requirement": requirement or None,
+            "freshness": "current",
+        }
     if tool == "watch_summarize_workouts":
         latest = data.get("latest")
         latest_dict = cast(dict[str, Any], latest) if isinstance(latest, dict) else {}
@@ -721,12 +866,25 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
         if plan:
             label = f"{plan_group} · {plan}" if plan_group else plan
             pairs.append({"label": "最近计划", "value": _clip(label, 40)})
-        return "keyvalue", {"pairs": pairs}
+        return "keyvalue", {
+            "pairs": pairs,
+            "workoutCount": _as_int(data.get("workoutCount")),
+            "totalDistanceMeters": _as_int(data.get("totalDistanceMeters")),
+            "activeMinutes": _as_int(data.get("totalActiveDurationMs")) // 60000,
+            "averageHeartRate": _as_int(data.get("averageHeartRate")),
+            "latestPlanName": plan or None,
+            "latestPlanGroup": plan_group or None,
+            "freshness": "current",
+        }
     if tool == "watch_get_latest_sleep":
         record = data.get("record")
         record_dict = cast(dict[str, Any], record) if isinstance(record, dict) else {}
         if not record_dict:
-            return "text", {"body": "暂无睡眠记录"}
+            return "text", {
+                "body": "暂无睡眠记录",
+                "hasRecord": False,
+                "freshness": "current",
+            }
         minutes = int(record_dict.get("totalDurationMinutes", 0) or 0)
         heart = record_dict.get("heartRateRangeBpm")
         heart_dict = cast(dict[str, Any], heart) if isinstance(heart, dict) else {}
@@ -737,7 +895,15 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
         if heart_dict:
             low, high = heart_dict.get("minimum", "—"), heart_dict.get("maximum", "—")
             pairs.append({"label": "心率区间", "value": f"{low}-{high} bpm"})
-        return "keyvalue", {"pairs": pairs}
+        return "keyvalue", {
+            "pairs": pairs,
+            "hasRecord": True,
+            "totalMinutes": minutes,
+            "sleepScore": _as_int(record_dict.get("sleepScore")),
+            "heartRateMinimum": _as_int(heart_dict.get("minimum")) if heart_dict else None,
+            "heartRateMaximum": _as_int(heart_dict.get("maximum")) if heart_dict else None,
+            "freshness": "current",
+        }
     if tool == "journal_get_status":
         updated = str(data.get("latestUpdatedAt") or "")
         note = None
@@ -751,6 +917,9 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
             "value": str(data.get("entryCount", 0)),
             "label": "日记总数",
             "note": note,
+            "entryCount": _as_int(data.get("entryCount")),
+            "latestUpdatedAt": updated or None,
+            "freshness": "current",
         }
     if tool == "journal_list_recent":
         items_raw = data.get("items")
@@ -762,19 +931,14 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
                 entry_dict = cast(dict[str, Any], entry)
                 mood = entry_dict.get("mood")
                 mood_label = _MOOD_GLYPHS.get(mood) if isinstance(mood, int) else None
-                tags_raw = entry_dict.get("tags")
-                tags = (
-                    "、".join(str(tag) for tag in cast(list[Any], tags_raw)[:3])
-                    if isinstance(tags_raw, list) and tags_raw
-                    else None
-                )
-                subtitle_parts = [part for part in (mood_label, tags) if part]
                 items.append(
                     {
                         "title": _clip(str(entry_dict.get("title") or "(无标题)"), 60),
-                        "subtitle": " · ".join(subtitle_parts) or None,
+                        "subtitle": mood_label,
                         "value": str(entry_dict.get("date") or ""),
                         "state": None,
+                        "mood": mood_label,
+                        "hasImage": bool(entry_dict.get("hasImage")),
                     }
                 )
         today = datetime.now().date().isoformat()
@@ -784,6 +948,7 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
             "empty": "还没有日记",
             "todayWritten": any(str(item.get("value") or "") == today for item in items),
             "latestEntryDate": latest_date or None,
+            "freshness": "current",
         }
     # Unknown read tool: surface its scalar fields honestly rather than raw JSON.
     pairs = [
@@ -793,7 +958,10 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
     ][:8]
     if pairs:
         return "keyvalue", {"pairs": pairs}
-    return "text", {"body": _clip(json.dumps(data, ensure_ascii=False), 400)}
+    return "text", {
+        "body": "这个数据源还没有适合卡片展示的摘要",
+        "freshness": "unknown",
+    }
 
 
 def _git(path: Path, *args: str) -> str | None:

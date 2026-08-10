@@ -86,6 +86,7 @@ async def test_admin_endpoints_authorization_and_bundle(tmp_path: Path) -> None:
         dashboard = await client.get("/admin/dashboard-data")
         assert dashboard.status_code == 200
         snapshot = dashboard.json()
+        assert snapshot["dataContractVersion"] == 2
         assert snapshot["refreshIntervalSeconds"] == 4
         assert snapshot["summary"]["total"] == 4
         assert snapshot["targets"][0]["id"] == "personal"
