@@ -446,9 +446,7 @@ def test_card_visibility_does_not_lock_management_compact_or_on_top() -> None:
     controller = _controller()
     window = FakeWindow()
     controller.window = window
-    controller.card_windows = {
-        project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS
-    }
+    controller.card_windows = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
     controller.state.compact = True
     controller.state.on_top = True
     controller.state.width = window.width
@@ -537,9 +535,7 @@ def test_card_move_and_resize_persist_without_touching_board_layout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     controller = _controller()
-    controller.state.project_layout = {
-        "watch": {"x": 0, "y": 0, "w": 500, "h": 500, "order": 0}
-    }
+    controller.state.project_layout = {"watch": {"x": 0, "y": 0, "w": 500, "h": 500, "order": 0}}
     card = FakeCardWindow()
     monkeypatch.setattr(
         controller,
@@ -577,6 +573,7 @@ def test_startup_replay_retries_persisted_card_visibility_without_blocking_ui(
 ) -> None:
     controller = _controller()
     calls: list[bool] = []
+
     def no_wait(_delay: float | None = None) -> bool:
         return False
 
@@ -661,8 +658,7 @@ def test_all_cards_can_be_shown_and_hidden_without_touching_management() -> None
         for card in cards.values()
     )
     assert all(
-        "show" not in card.actions and "restore" not in card.actions
-        for card in cards.values()
+        "show" not in card.actions and "restore" not in card.actions for card in cards.values()
     )
 
     disabled = api.set_all_cards_visible(False)["view"]
@@ -734,9 +730,7 @@ def test_a_card_visibility_failure_still_leaves_management_untouched(
 
 def test_one_card_can_be_hidden_and_restored_without_touching_its_peers() -> None:
     controller = _controller()
-    controller.state.card_visibility = {
-        project_id: True for project_id in CARD_PROJECT_IDS
-    }
+    controller.state.card_visibility = {project_id: True for project_id in CARD_PROJECT_IDS}
     cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
     controller.card_windows = cards
 
@@ -761,9 +755,7 @@ def test_one_card_can_be_hidden_and_restored_without_touching_its_peers() -> Non
 def test_shortcut_activation_opens_management_without_restoring_hidden_cards() -> None:
     controller = _controller()
     controller.window = FakeWindow()
-    controller.state.card_visibility = {
-        project_id: False for project_id in CARD_PROJECT_IDS
-    }
+    controller.state.card_visibility = {project_id: False for project_id in CARD_PROJECT_IDS}
     cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
     controller.card_windows = cards
 
@@ -865,9 +857,7 @@ def test_card_bridge_exposes_hide_size_and_reset_controls(
 
 def test_card_hide_to_tray_hides_only_its_own_window() -> None:
     controller = _controller()
-    controller.state.card_visibility = {
-        project_id: True for project_id in CARD_PROJECT_IDS
-    }
+    controller.state.card_visibility = {project_id: True for project_id in CARD_PROJECT_IDS}
     cards = {project_id: FakeCardWindow() for project_id in CARD_PROJECT_IDS}
     controller.card_windows = cards
 

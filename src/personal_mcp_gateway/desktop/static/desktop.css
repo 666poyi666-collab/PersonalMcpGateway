@@ -1127,7 +1127,7 @@ html[data-theme="dark"] .system-panel {
 }
 
 .matrix-heading { padding-inline: 8px; }
-.matrix-heading h2 { letter-spacing: -.02em; }
+.matrix-heading h2 { letter-spacing: 0; }
 
 .proj {
   border-width: 1px;
@@ -1229,7 +1229,7 @@ body.window-resizing .proj {
   background: rgb(255 255 255 / 52%);
 }
 
-.fl-reading strong { letter-spacing: -.045em; }
+.fl-reading strong { letter-spacing: 0; }
 .fl-ribbon { background: linear-gradient(90deg, rgb(0 122 85 / 9%), rgb(122 73 205 / 8%)); }
 
 /* Watch: titanium recovery instrument, retaining lime as a signal rather than
@@ -1552,7 +1552,7 @@ body.card-window .proj > .card-window-controls {
   align-items: center;
   gap: 2px;
   height: 30px;
-  max-width: 72px;
+  max-width: 70px;
   padding: 3px;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 14%);
@@ -1571,7 +1571,7 @@ body.card-window .proj > .card-window-controls {
 body.card-window .proj:hover > .card-window-controls,
 body.card-window .proj:focus-within > .card-window-controls {
   background: rgb(18 24 28 / 94%);
-  max-width: 270px;
+  max-width: min(203px, calc(100% - 14px));
   border-color: rgb(255 255 255 / 25%);
   box-shadow: 0 6px 18px rgb(0 0 0 / 18%);
   opacity: 1;
@@ -1581,9 +1581,9 @@ body.card-window .proj:focus-within > .card-window-controls {
 
 body.card-window .card-window-controls > button,
 body.card-window .card-window-move {
-  width: 25px;
+  width: 23px;
   height: 23px;
-  flex: 0 0 25px;
+  flex: 0 0 23px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -1599,9 +1599,9 @@ body.card-window .card-window-move {
 body.card-window .card-window-manage,
 body.card-window .card-window-hide {
   width: auto;
-  min-width: 38px;
+  min-width: 34px;
   flex-basis: auto;
-  padding-inline: 7px;
+  padding-inline: 5px;
   font-family: var(--sans);
 }
 
@@ -1621,6 +1621,41 @@ body.card-window .card-window-move:hover {
 
 body.card-window .card-window-controls > button:active { transform: scale(.9); }
 body.card-window .card-window-hide:hover { background: rgb(220 66 66 / 30%); }
+
+/* A 220px native card is only 110 CSS px at 200% DPI. Keep the two escape
+   actions permanently visible, then reveal the size choices as a second row. */
+@container (max-width: 210px) {
+  body.card-window .proj > .card-window-controls {
+    width: 70px;
+    max-width: 70px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+  }
+
+  body.card-window .proj:hover > .card-window-controls,
+  body.card-window .proj:focus-within > .card-window-controls {
+    width: 70px;
+    max-width: 70px;
+    height: 56px;
+  }
+
+  body.card-window .card-window-manage,
+  body.card-window .card-window-hide {
+    min-width: 29px;
+    flex-basis: 29px;
+    padding-inline: 4px;
+  }
+
+  body.card-window .card-window-manage { order: 1; }
+  body.card-window .card-window-hide { order: 2; }
+  body.card-window .card-window-move,
+  body.card-window .card-window-reset { display: none; }
+  body.card-window .card-window-size {
+    width: 19px;
+    flex-basis: 19px;
+    order: 3;
+  }
+}
 
 body.card-window .proj > .card-window-resize-corner {
   position: absolute;

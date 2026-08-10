@@ -595,9 +595,22 @@ let clockTimer = null;
 let pollGeneration = 0;
 let pullInFlight = null;
 let forcePullQueued = false;
+const BRIDGE_POLL_TIMEOUT_MS = 8000;
 
 function api() {
   return window.pywebview && window.pywebview.api ? window.pywebview.api : null;
+}
+
+function bridgePollWithTimeout(operation) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(
+      () => reject(new Error("desktop bridge poll timed out")),
+      BRIDGE_POLL_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([Promise.resolve().then(operation), timeout])
+    .finally(() => window.clearTimeout(timeoutId));
 }
 
 function pull(force = false) {
@@ -619,7 +632,9 @@ function pull(force = false) {
         const shouldForce = forcePullQueued;
         forcePullQueued = false;
         try {
-          const payload = shouldForce ? await bridge.refresh() : await bridge.snapshot();
+          const payload = await bridgePollWithTimeout(
+            () => shouldForce ? bridge.refresh() : bridge.snapshot(),
+          );
           if (payload) render(payload);
         } catch (error) {
           console.warn("snapshot failed", error);
@@ -2478,7 +2493,14 @@ function rectOfTile(tile) {
 function contentClassForTile(projectId, width, height) {
   const base = CARD_ID ? CARD_BASE_SIZES[projectId] : null;
   if (base) {
-    const scale = Math.min(width / base.width, height / base.height);
+    // Native card presets are physical HWND pixels, while WebView layout sizes
+    // are CSS pixels. Normalize only card windows so 150%/200% DPI does not
+    // silently demote medium and large presets by one content tier.
+    const deviceScale = Math.max(1, num(window.devicePixelRatio, 1));
+    const scale = Math.min(
+      width * deviceScale / base.width,
+      height * deviceScale / base.height,
+    );
     if (scale < 0.84) return "small";
     if (scale < 1.18) return "medium";
     return "large";

@@ -84,8 +84,7 @@ def test_all_install_paths_cap_restart_loops_and_verify_live_readiness() -> None
         assert "Set-BoundedFailureActions" in script
     for service in service_xmls:
         actions = [
-            (item.attrib["action"], item.attrib["delay"])
-            for item in service.findall("onfailure")
+            (item.attrib["action"], item.attrib["delay"]) for item in service.findall("onfailure")
         ]
         assert actions == [
             ("restart", "5 sec"),

@@ -414,9 +414,7 @@ class DesktopController:
 
         enabled = bool(visible)
         with self._card_state_lock:
-            self.state.card_visibility = {
-                project_id: enabled for project_id in CARD_PROJECT_IDS
-            }
+            self.state.card_visibility = {project_id: enabled for project_id in CARD_PROJECT_IDS}
             save_state(self.state)
         if enabled:
             return self.show_card_windows()
@@ -663,12 +661,7 @@ class DesktopApi:
         from personal_mcp_gateway.desktop import shell
 
         window = self._controller.window
-        return {
-            "ok": (
-                window is not None
-                and shell.begin_native_resize(window, edge)
-            )
-        }
+        return {"ok": (window is not None and shell.begin_native_resize(window, edge))}
 
     def minimize(self) -> None:
         window = self._controller.window

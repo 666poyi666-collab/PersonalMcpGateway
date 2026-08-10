@@ -227,9 +227,7 @@ def load_state(path: Path | None = None) -> WindowState:
     )
     raw_card_visibility = data.get("card_visibility")
     if isinstance(raw_card_visibility, dict):
-        card_visibility = normalize_card_visibility(
-            cast(dict[object, object], raw_card_visibility)
-        )
+        card_visibility = normalize_card_visibility(cast(dict[object, object], raw_card_visibility))
     else:
         # One release stored one global desktop_mode bit plus a hidden-card
         # list.  Migrate that representation once without changing what was

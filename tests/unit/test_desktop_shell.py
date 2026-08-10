@@ -305,6 +305,7 @@ def test_tray_menu_can_restore_each_independently_hidden_card(
 
     fake_pystray = SimpleNamespace(Menu=Menu, MenuItem=MenuItem, Icon=Icon)
     monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
+
     def is_visible(project_id: str) -> bool:
         return project_id != "journal"
 

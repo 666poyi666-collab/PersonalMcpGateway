@@ -272,12 +272,18 @@ def test_window_regions_are_bounded_and_scaled_for_gdi() -> None:
         [{"x": 10.4, "y": 20.2, "width": 300.3, "height": 140.8, "radius": 12}],
         1.5,
     ) == [(16, 30, 466, 241, 36)]
-    assert normalize_window_regions(
-        [{"x": "bad", "y": 0, "width": 20, "height": 20}],
-    ) == []
-    assert normalize_window_regions(
-        [{"x": 0, "y": 0, "width": 0, "height": 20}],
-    ) == []
+    assert (
+        normalize_window_regions(
+            [{"x": "bad", "y": 0, "width": 20, "height": 20}],
+        )
+        == []
+    )
+    assert (
+        normalize_window_regions(
+            [{"x": 0, "y": 0, "width": 0, "height": 20}],
+        )
+        == []
+    )
 
 
 def test_native_resize_requires_a_real_window_handle() -> None:

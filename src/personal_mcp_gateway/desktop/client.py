@@ -230,9 +230,7 @@ class GatewayClient:
     _next_attempt_at: float = field(default=0.0, init=False)
     _last_snapshot: DesktopSnapshot | None = field(default=None, init=False)
     _state_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-    _request_lock: threading.Lock = field(
-        default_factory=threading.Lock, init=False, repr=False
-    )
+    _request_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._last_good = _load_last_good(self.cache_path)
@@ -301,9 +299,7 @@ class GatewayClient:
         now = datetime.now(UTC).isoformat()
         with self._state_lock:
             if not force and self.clock() < self._next_attempt_at:
-                snapshot = self._snapshot_for_failure(
-                    now, self._last_error or "RetryBackoff"
-                )
+                snapshot = self._snapshot_for_failure(now, self._last_error or "RetryBackoff")
                 self._last_snapshot = snapshot
                 return snapshot
         url = f"{self.base_url}/admin/dashboard-data"

@@ -237,7 +237,7 @@ def test_widget_mode_is_transparent_from_first_paint_and_keeps_only_tiles() -> N
     style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
 
     assert '<body class="booting" data-view="overview">' in markup
-    assert 'const cardMode = CARD_ID ? true : Boolean(view.cardMode);' in script
+    assert "const cardMode = CARD_ID ? true : Boolean(view.cardMode);" in script
     assert 'dom.body.classList.toggle("desktop-mode", cardMode);' in script
     assert "html,\nbody,\n#stage,\n.board,\n.view-panel,\n.overview-deck,\n.project-grid" in style
     assert "body.desktop-mode #stage { background: transparent; }" in style
@@ -256,9 +256,9 @@ def test_management_panel_can_switch_each_desktop_card_directly() -> None:
         assert f'data-card-toggle="{card_id}"' in markup
     assert "view.cardVisibility" in script
     assert "view.visibleCardCount" in script
-    assert 'bridge.set_card_visible(button.dataset.cardToggle, next)' in script
+    assert "bridge.set_card_visible(button.dataset.cardToggle, next)" in script
     assert "bridge.set_all_cards_visible(Boolean(visible))" in script
-    assert ".card-switch[aria-pressed=\"true\"]" in style
+    assert '.card-switch[aria-pressed="true"]' in style
     assert "body.card-window .card-manager" in style
 
 
@@ -267,9 +267,23 @@ def test_polling_is_single_flight_and_volatile_diagnostics_do_not_rebuild_cards(
 
     assert "let pullInFlight = null;" in script
     assert "let forcePullQueued = false;" in script
+    assert "const BRIDGE_POLL_TIMEOUT_MS = 8000;" in script
+    assert "function bridgePollWithTimeout(operation)" in script
+    assert "Promise.race([Promise.resolve().then(operation), timeout])" in script
+    assert "finally(() => window.clearTimeout(timeoutId))" in script
+    assert "const payload = await bridgePollWithTimeout(" in script
     assert "if (pullInFlight) return pullInFlight;" in script
     assert "pullInFlight = null;" in script
     assert "void pull(true);" in script
+    pull_block = script.split("function pull(force = false) {", 1)[1].split(
+        "/* ---------- rendering ---------- */", 1
+    )[0]
+    assert pull_block.index("forcePullQueued = true;") < pull_block.index(
+        "if (pullInFlight) return pullInFlight;"
+    )
+    assert "do {" in pull_block
+    assert "} while (forcePullQueued);" in pull_block
+    assert pull_block.count("bridgePollWithTimeout(") == 1
     volatile_block = script.split("const VOLATILE_RENDER_FIELDS", 1)[1].split("]);", 1)[0]
     for field in ("generatedAt", "latencyMs", "checkedAt", "sampledAt", "uptimeSeconds"):
         assert f'"{field}"' in volatile_block
@@ -297,7 +311,7 @@ def test_tile_editor_offers_responsive_size_presets_without_losing_manual_handle
 
     assert "const TILE_SIZE_PRESETS" in script
     assert 'make("div", "tile-edit-toolbar")' in script
-    assert 'button.dataset.tilePreset = preset;' in script
+    assert "button.dataset.tilePreset = preset;" in script
     assert "function applyTileSizePreset(tile, presetName)" in script
     assert 'event.target.closest(".tile-edit-toolbar")' in script
     assert 'dom.projectSections.addEventListener("click"' in script
@@ -338,18 +352,19 @@ def test_card_controls_expose_management_size_reset_and_current_card_close() -> 
 
     assert 'make("div", "card-window-controls")' in script
     assert '"card-window-move pywebview-drag-region"' in script
-    assert 'button.dataset.cardSize = preset;' in script
+    assert "button.dataset.cardSize = preset;" in script
     assert 'manage.dataset.cardAction = "manage";' in script
     assert 'reset.dataset.cardAction = "reset";' in script
     assert 'hide.dataset.cardAction = "hide";' in script
     assert "bridge.open_management()" in script
-    assert 'bridge.set_size(cardControl.dataset.cardSize)' in script
+    assert "bridge.set_size(cardControl.dataset.cardSize)" in script
     assert "bridge.reset_geometry()" in script
     assert "bridge.hide_card()" in script
     assert 'make("button", "card-window-hide", "关闭")' in script
     assert "body.card-window .proj > .card-window-controls" in style
     assert "body.card-window .proj > .card-window-resize-corner" in style
-    assert "max-width: 72px;" in style and "max-width: 270px;" in style
+    assert "max-width: 70px;" in style
+    assert "max-width: min(203px, calc(100% - 14px));" in style
     assert "queueDesktopRegionSync(420);" in script
 
 
@@ -411,6 +426,10 @@ def test_card_content_density_uses_each_native_card_as_its_own_scale() -> None:
         assert f"{project_id}: {{ width: {width}, height: {height} }}" in script
 
     assert "function contentClassForTile(projectId, width, height)" in script
+    assert "const base = CARD_ID ? CARD_BASE_SIZES[projectId] : null;" in script
+    assert "const deviceScale = Math.max(1, num(window.devicePixelRatio, 1));" in script
+    assert "width * deviceScale / base.width" in script
+    assert "height * deviceScale / base.height" in script
     assert 'if (scale < 0.84) return "small";' in script
     assert 'if (scale < 1.18) return "medium";' in script
     assert 'return "large";' in script
@@ -432,6 +451,52 @@ def test_small_medium_and_large_cards_have_an_explicit_content_priority() -> Non
     assert '.proj[data-content-class="large"] .card-primary > strong' in style
     assert "grid-template-rows: minmax(0, 1fr);" in style
     assert "overflow-wrap: anywhere;" in style
+
+
+def test_narrow_card_controls_fit_and_chinese_values_can_wrap() -> None:
+    style = (STATIC_ROOT / "desktop.css").read_text(encoding="utf-8")
+
+    controls = style.split("body.card-window .proj:hover > .card-window-controls,", 1)[1].split(
+        "}", 1
+    )[0]
+    assert "max-width: min(203px, calc(100% - 14px));" in controls
+    buttons = style.split("body.card-window .card-window-controls > button,", 1)[1].split("}", 1)[0]
+    assert "width: 23px;" in buttons
+    assert "flex: 0 0 23px;" in buttons
+    assert "overflow-wrap: anywhere;" in style
+    assert "letter-spacing: -" not in style
+    dpi_controls = style.split("@container (max-width: 210px) {", 1)[1].split(
+        "body.card-window .card-window-controls > button,", 1
+    )[0]
+    assert "body.card-window .card-window-manage { order: 1; }" in dpi_controls
+    assert "body.card-window .card-window-hide { order: 2; }" in dpi_controls
+    assert "height: 56px;" in dpi_controls
+    assert "body.card-window .card-window-move," in dpi_controls
+    assert "body.card-window .card-window-reset { display: none; }" in dpi_controls
+    assert "width: 19px;" in dpi_controls
+    assert "flex-basis: 19px;" in dpi_controls
+    assert style.index("@container (max-width: 210px) {") > style.index(
+        "body.card-window .card-window-hide:hover"
+    )
+
+
+def test_native_card_density_and_compact_controls_are_dpi_invariant() -> None:
+    def density(scale: float) -> str:
+        if scale < 0.84:
+            return "small"
+        if scale < 1.18:
+            return "medium"
+        return "large"
+
+    for dpi in (1.0, 1.25, 1.5, 2.0):
+        for native_scale, expected in ((0.72, "small"), (1.0, "medium"), (1.35, "large")):
+            css_scale = native_scale / dpi
+            assert density(css_scale * dpi) == expected
+        assert 220 / dpi - 14 >= 70
+
+    # 70px border-box leaves 62px: both compact rows fit without clipping.
+    assert 29 + 2 + 29 <= 62
+    assert 19 * 3 + 2 * 2 <= 62
 
 
 def test_each_card_v3_reads_its_real_business_widgets_in_plain_language() -> None:

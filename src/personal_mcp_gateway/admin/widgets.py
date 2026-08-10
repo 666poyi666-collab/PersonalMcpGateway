@@ -792,9 +792,7 @@ def _present_mcp_payload(tool: str, payload: dict[str, Any]) -> tuple[str, dict[
         phone = cast(dict[str, Any], phone_raw) if isinstance(phone_raw, dict) else {}
         watch_status_raw = connection.get("watchStatus")
         watch_status = (
-            cast(dict[str, Any], watch_status_raw)
-            if isinstance(watch_status_raw, dict)
-            else {}
+            cast(dict[str, Any], watch_status_raw) if isinstance(watch_status_raw, dict) else {}
         )
         link_raw = phone.get("watchConnection")
         link = cast(dict[str, Any], link_raw) if isinstance(link_raw, dict) else {}
